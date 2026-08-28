@@ -1,0 +1,8 @@
+{
+  "name": "cerebro",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}
