@@ -91,12 +91,20 @@ clusters (
 document_clusters ( document_id, cluster_id, distance )
 
 ingest_jobs (
-  id, document_id, state, attempt,
+  id, document_id, user_id,      -- denormalized for flat RLS, avoids a
+                                  -- join-based ownership check; safe
+                                  -- because ownership never transfers
+  state, attempt,
   checkpoint jsonb, last_error
 )
 
+chat_sessions (                  -- was missing from the original spec;
+  id, user_id, created_at        -- required by chat_messages.session_id
+)                                 -- and by POST /chat/sessions
+
 chat_messages (
-  id, session_id, role, content,
+  id, session_id, user_id,       -- denormalized, same reasoning as ingest_jobs
+  role, content,
   retrieved_chunk_ids uuid[],   -- ground truth for graph replay
   trace_id
 )
@@ -104,6 +112,22 @@ chat_messages (
 
 Indexes: HNSW on `chunks.embedding` (`halfvec_cosine_ops`), GIN on
 `content_tsv`, btree on every `user_id` column.
+
+### Storage path convention (decided Stage 0.3)
+
+`storage.objects` has no `document_id` column to join through, so bucket
+RLS is a path-prefix check, not a table lookup. Every object's path starts
+with the owning user's id:
+
+```
+originals/{user_id}/{document_id}/original.{ext}
+indexed/{user_id}/{document_id}/indexed.{ext}
+```
+
+`documents.storage_path` / `documents.original_storage_path` store these
+paths. Never construct a storage path any other way — a policy relying on
+`(storage.foldername(name))[1] = auth.uid()::text` silently grants access
+to anything that doesn't follow this prefix.
 
 `schema_version` on `documents` exists so chunking strategy can change
 without silently reprocessing (and invalidating) sealed content that a
@@ -173,7 +197,7 @@ passed by inspection alone.
 ### 5b. Manual review items — never auto-passed
 
 - **public-db-key** — confirm only the Supabase anon key is client-exposed; service role key exists only in Railway env, never shipped to the browser.
-- **row-level-security** — every table above has an RLS policy scoping to `auth.uid() = user_id`; verify by attempting a cross-user read in a test, not by reading the policy text.
+- **row-level-security** — every table above has an RLS policy scoping to `auth.uid() = user_id`. `ingest_jobs` and `chat_messages` carry a denormalized `user_id` specifically so this stays a flat check instead of a join through `document_id`/`session_id` — verify by attempting a cross-user read *and* a cross-user insert-with-tampered-`user_id` in a test, not by reading the policy text. Verified live for Phase 0/1 tables as of Stage 0.2.
 - **encrypt-sensitive-data** — applies specifically to `sealed_chunks`: confirm ciphertext at rest, confirm the derived key is never written to any table or log.
 - **server-side-auth** — every mutating route re-checks ownership server-side; the client's claimed `user_id` is never trusted.
 - **record-access** — a user requesting another user's `document_id` must get a 404, not a 403 (403 leaks existence).
