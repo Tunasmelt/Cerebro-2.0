@@ -83,7 +83,7 @@ failure.
 
 ### Phase 0 Gate
 All stages 0.1–0.7 pass their tests, **and** you confirm live:
-- [ ] You can hit the deployed Railway URL from the deployed Vercel URL
+- [ ] You can hit the deployed Render URL from the deployed Vercel URL
       while logged in and get a real 200, not a CORS or auth error.
 - [ ] You attempted an unauthenticated request against a protected route
       yourself and saw it rejected.
@@ -100,7 +100,7 @@ rejected cleanly above that.
 **Tests:**
 - Upload under cap succeeds, file appears in `originals`.
 - Upload over cap is rejected at the Next.js proxy — confirm via network
-  inspection that it never reaches Railway.
+  inspection that it never reaches Render.
 - Disallowed mime type rejected with a clean error, not a 500.
 
 ### Stage 1.2 — Normalize pipeline

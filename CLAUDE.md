@@ -17,12 +17,21 @@ searchable, content does not, until unlocked).
 
 ## Non-negotiable constraints
 
-- **Railway free/hobby tier: 512MB runtime RAM** for the FastAPI service.
-  This governs library choices (no torch, no local embedding models, no
-  heavy transitive deps) and processing patterns (streaming I/O, draft-mode
-  image decode, concurrency=1 on the ingest worker). See
-  `architecture-and-security.md` §Memory Governance before adding any
-  dependency that touches PDFs or images.
+- **Render free tier: 512MB RAM, 0.1 CPU, no card required.** This is
+  where the FastAPI service actually runs (switched from Render, whose
+  free trial expired mid-build). Free tier sleeps after 15 minutes idle
+  — expect 30-60s cold starts on the first request after idle time.
+  Fine during Phase 0-2 build-out; budget the $7/month Starter plan
+  before any live demo where cold start would be visible to someone
+  other than you. Background/worker processes outside the request cycle
+  are not covered by the free tier — our ingest pipeline runs in-process
+  within the web service specifically so it stays inside this tier;
+  don't split it into a separate worker without revisiting this.
+  This RAM ceiling still governs library choices (no torch, no local
+  embedding models, no heavy transitive deps) and processing patterns
+  (streaming I/O, draft-mode image decode, concurrency=1 on the ingest
+  worker). See `architecture-and-security.md` §Memory Governance before
+  adding any dependency that touches PDFs or images.
 - **Supabase free tier**: ~500MB Postgres, ~1GB storage. Two separate
   storage buckets exist on purpose — `indexed` (normalized, what retrieval
   reads) and `originals` (untouched uploads, retrieval never reads this).
@@ -38,7 +47,7 @@ searchable, content does not, until unlocked).
 
 ## Stack
 
-Next.js 15 (Vercel) → FastAPI (Railway) → Supabase (Postgres + pgvector +
+Next.js 15 (Vercel) → FastAPI (Render) → Supabase (Postgres + pgvector +
 storage + auth). Embeddings/generation/rerank are hosted API calls only
 (Voyage or Cohere embed, a hosted reranker, Gemini for generation).
 Observability: Langfuse tracing on every retrieval span, RAGAS as a CI

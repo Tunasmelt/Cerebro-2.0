@@ -19,7 +19,7 @@ doesn't exist yet.
 | Google Gemini | Generation, vision captioning | https://ai.google.dev/gemini-api/docs |
 | Langfuse | Tracing, spans, cost/latency observability | https://langfuse.com/docs |
 | RAGAS | Faithfulness / relevancy / context-precision eval | https://docs.ragas.io |
-| Railway | Deploy, resource limits, env config | https://docs.railway.com |
+| Render | Deploy, resource limits, env config | https://render.com/docs |
 | Vercel | Next.js hosting, edge functions | https://vercel.com/docs |
 | Next.js | App router, route handlers (BFF proxy layer) | https://nextjs.org/docs |
 | FastAPI | Route/middleware patterns | https://fastapi.tiangolo.com |
@@ -115,7 +115,7 @@ POST   /playground/run             Body: edited assembly. Runs it as-is,
 
 ```
 GET    /health                     No auth. Returns 200 + build sha.
-                                    Used for Railway health checks and
+                                    Used for Render health checks and
                                     keep-warm pings.
 ```
 

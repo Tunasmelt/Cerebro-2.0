@@ -9,7 +9,7 @@ Browser (Next.js UI, graph, chat)
 Next.js route handlers (Vercel)      ← BFF proxy, edge rate limit, upload size-cap
         │
         ▼
-FastAPI (Railway, single uvicorn worker, async)
+FastAPI (Render, single uvicorn worker, async)
    ├─ ingest/      upload → normalize → extract → chunk
    ├─ embed/       provider adapter (Voyage/Cohere)
    ├─ retrieve/    hybrid + RRF + rerank (forked from Docify)
@@ -27,7 +27,7 @@ Supabase
 Hosted APIs: Voyage/Cohere embed + rerank, Gemini generate, Langfuse
 ```
 
-`ingest/` is written as if it will eventually run as its own Railway
+`ingest/` is written as if it will eventually run as its own Render
 service — no FastAPI request/response objects imported, operates purely
 on a job id plus storage/DB clients — so splitting it onto a second
 service later, if ingest load ever competes with chat SSE for RAM, is a
@@ -113,22 +113,6 @@ chat_messages (
 Indexes: HNSW on `chunks.embedding` (`halfvec_cosine_ops`), GIN on
 `content_tsv`, btree on every `user_id` column.
 
-### Storage path convention (decided Stage 0.3)
-
-`storage.objects` has no `document_id` column to join through, so bucket
-RLS is a path-prefix check, not a table lookup. Every object's path starts
-with the owning user's id:
-
-```
-originals/{user_id}/{document_id}/original.{ext}
-indexed/{user_id}/{document_id}/indexed.{ext}
-```
-
-`documents.storage_path` / `documents.original_storage_path` store these
-paths. Never construct a storage path any other way — a policy relying on
-`(storage.foldername(name))[1] = auth.uid()::text` silently grants access
-to anything that doesn't follow this prefix.
-
 `schema_version` on `documents` exists so chunking strategy can change
 without silently reprocessing (and invalidating) sealed content that a
 user hasn't unlocked recently.
@@ -139,11 +123,11 @@ user hasn't unlocked recently.
 
 Compression reduces file size at rest; it does not by itself bound
 runtime memory. These four guardrails are what actually protect the
-Railway RAM ceiling, and none of them is optional:
+Render RAM ceiling, and none of them is optional:
 
 | Guardrail | Mechanism | Failure mode it prevents |
 |---|---|---|
-| Upload size cap | Rejected at the Next.js proxy, 50MB | Oversized file never reaches Railway at all |
+| Upload size cap | Rejected at the Next.js proxy, 50MB | Oversized file never reaches Render at all |
 | Streaming I/O | Chunked read/write to Supabase storage | Full-file-in-memory reads |
 | Ingest concurrency = 1 | Single-file queue, no parallel processing | Two large decodes stacking in RAM simultaneously |
 | Dependency hygiene | Pinned `pikepdf`/`Pillow`; never install `unstructured` or similar with full extras | Silent transitive torch/onnx pulling in hundreds of MB |
@@ -182,7 +166,7 @@ passed by inspection alone.
 
 | Check | Status target for this project |
 |---|---|
-| hidden-keys | No provider keys in source; all via Railway/Vercel env vars |
+| hidden-keys | No provider keys in source; all via Render/Vercel env vars |
 | git-secrets | `.env*` git-ignored, never committed |
 | session-cookies | Supabase auth cookies `httpOnly`, `secure`, `sameSite` |
 | password-hashing | Delegated entirely to Supabase Auth — never hand-rolled |
@@ -191,12 +175,12 @@ passed by inspection alone.
 | input-validation | Pydantic models on every FastAPI route |
 | file-uploads | Type allowlist + 50MB size limit enforced at the proxy, re-checked server-side |
 | security-headers | CSP, X-Frame-Options, HSTS set via Next.js middleware |
-| https-enforced | Passes by default — Vercel + Railway both terminate TLS |
+| https-enforced | Passes by default — Vercel + Render both terminate TLS |
 | dependency-scan | `pip-audit` + `npm audit` in CI, fails build on high/critical CVEs |
 
 ### 5b. Manual review items — never auto-passed
 
-- **public-db-key** — confirm only the Supabase anon key is client-exposed; service role key exists only in Railway env, never shipped to the browser.
+- **public-db-key** — confirm only the Supabase anon key is client-exposed; service role key exists only in Render env, never shipped to the browser.
 - **row-level-security** — every table above has an RLS policy scoping to `auth.uid() = user_id`. `ingest_jobs` and `chat_messages` carry a denormalized `user_id` specifically so this stays a flat check instead of a join through `document_id`/`session_id` — verify by attempting a cross-user read *and* a cross-user insert-with-tampered-`user_id` in a test, not by reading the policy text. Verified live for Phase 0/1 tables as of Stage 0.2.
 - **encrypt-sensitive-data** — applies specifically to `sealed_chunks`: confirm ciphertext at rest, confirm the derived key is never written to any table or log.
 - **server-side-auth** — every mutating route re-checks ownership server-side; the client's claimed `user_id` is never trusted.
