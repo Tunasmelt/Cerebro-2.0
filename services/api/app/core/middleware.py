@@ -32,4 +32,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         request.state.user = claims
+        # Downstream Supabase Storage/PostgREST calls use this token directly
+        # instead of a service-role key, so RLS enforces the same ownership
+        # rules the API layer already checked — no extra secret needed.
+        request.state.user_jwt = token
         return await call_next(request)
