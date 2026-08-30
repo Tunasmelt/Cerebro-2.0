@@ -31,7 +31,11 @@ from typing import Any, Protocol
 import httpx
 from fastapi import HTTPException
 
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB — Supabase Free plan's global cap
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 52,428,800 bytes — Supabase Free
+# plan's hard global ceiling, binary MiB not decimal MB, empirically
+# pinned to the exact byte (52428800 succeeds, 52428801 fails with
+# EntityTooLarge). No headroom; raising this needs a Pro plan upgrade.
+# Must match supabase/migrations/0004_originals_bucket_limits.sql exactly.
 
 ALLOWED_MIME_TYPES = {
     "text/plain": "txt",

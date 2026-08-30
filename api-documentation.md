@@ -56,8 +56,10 @@ POST   /documents/upload-init      Body: filename, mime, size_bytes.
                                     through this API — the browser
                                     uploads directly to Supabase Storage
                                     with the returned URL (Vercel/Render
-                                    both have body limits well under our
-                                    50MB cap, so this can't be a proxy).
+                                    both have body limits well under the
+                                    50MB cap — itself Supabase Free's
+                                    platform ceiling, not a design choice
+                                    — so this can't be a proxy).
 POST   /documents/{id}/upload-confirm  No body. Server verifies the
                                     object actually exists in storage
                                     (existence + size via Supabase admin
