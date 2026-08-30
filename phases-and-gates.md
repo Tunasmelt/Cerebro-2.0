@@ -95,13 +95,23 @@ All stages 0.1–0.7 pass their tests, **and** you confirm live:
 ## Phase 1 — Multimodal RAG core
 
 ### Stage 1.1 — Upload & storage split
-**Exit criteria:** Files upload to `originals`, size-capped at 50MB,
-rejected cleanly above that.
+**Exit criteria:** Files upload to `originals` via the signed-URL
+direct-to-storage flow (architecture-and-security.md §1 "Ingest pipeline"),
+size-capped at 50MB, rejected cleanly above that. Revised from the
+original proxy-through-Vercel design — Vercel hard-caps function request
+bodies well under 50MB, discovered when Stage 1.1 was actually deployed
+and tested live, not caught by any local test.
 **Tests:**
-- Upload under cap succeeds, file appears in `originals`.
-- Upload over cap is rejected at the Next.js proxy — confirm via network
-  inspection that it never reaches Render.
+- Upload under cap succeeds (authorize → PUT to signed URL → confirm),
+  file appears in `originals`, `documents`/`ingest_jobs` rows reflect it.
+- Upload over cap is rejected — confirm via network inspection that
+  Render never receives the file bytes at any point (the new flow makes
+  this structural: Render only ever sees small JSON calls for this
+  endpoint, never the file itself).
 - Disallowed mime type rejected with a clean error, not a 500.
+- Confirm endpoint verifies the object actually exists in storage
+  (existence + size) before advancing the job past `uploading` — a
+  confirm call with no real upload behind it must not be trusted.
 
 ### Stage 1.2 — Normalize pipeline
 **Exit criteria:** PDFs pass through pikepdf structural optimization;
@@ -149,7 +159,30 @@ returns relevant chunks for a query, forked from Docify's pipeline.
 - A query with no relevant content returns an empty/low-confidence
   result, not a forced top-k.
 
-### Stage 1.6 — Chat & SSE
+### Stage 1.6 — Sign-in & sign-up UI
+**Exit criteria:** Real Supabase Auth-backed sign-in/sign-up pages exist
+(per the Auth mockup in ui-design-prompts.md), session persists client-side,
+and that session's JWT is what actually authenticates requests to
+services/api — not a separate token obtained some other way. This stage
+was missing from the original plan entirely (every prior stage tested
+auth via directly-minted JWTs); added deliberately here rather than
+discovered as a gap during Stage 1.7's chat UI work, since chat needs a
+real logged-in user to mean anything.
+**Tests:**
+- Sign-up with a new email/password creates a real Supabase Auth user and
+  lands in an authenticated session.
+- Sign-in with valid credentials succeeds; invalid credentials show an
+  inline error (per the mockup's error state), not a crash or a silent
+  no-op.
+- After signing in through the UI, a real protected API call succeeds
+  using that session's token — proves the login flow produces a working
+  `Authorization` header, not just a cosmetic "logged in" state.
+- Sign-out clears the session; a subsequent protected call fails.
+- No "forgot passphrase" concept anywhere on this screen (per the
+  mockup's explicit note — conflating account password with sealed-file
+  passphrase would be a real product bug, not a copy nitpick).
+
+### Stage 1.7 — Chat & SSE
 **Exit criteria:** SSE stream emits `retrieval` (real chunk/document
 IDs) before any `token` event, then tokens, then `citation` events, then
 `done`.
@@ -159,7 +192,7 @@ IDs) before any `token` event, then tokens, then `citation` events, then
 - Citation chips in a response resolve to real chunks — no citation
   pointing at a chunk ID that wasn't actually retrieved.
 
-### Stage 1.7 — Observability & evals
+### Stage 1.8 — Observability & evals
 **Exit criteria:** Langfuse traces every turn with the full span tree;
 RAGAS baseline stored and enforced as a CI gate.
 **Tests:**
@@ -169,7 +202,7 @@ RAGAS baseline stored and enforced as a CI gate.
   by more than the agreed tolerance.
 
 ### Phase 1 Gate
-All stages 1.1–1.7 pass their tests, **and** you confirm live:
+All stages 1.1–1.8 pass their tests, **and** you confirm live:
 - [ ] You uploaded a real document of your own, asked a real question
       about it, and the answer was correct with working citations.
 - [ ] You uploaded a real photo, asked about its contents, and got a
