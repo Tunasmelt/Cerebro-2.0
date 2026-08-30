@@ -3,8 +3,13 @@ import os
 from fastapi import FastAPI, Request
 
 from app.core.middleware import AuthMiddleware
+from app.core.rate_limit_middleware import RateLimitMiddleware
 
 app = FastAPI()
+# Starlette runs middleware in reverse add-order on the way in, so the
+# middleware added last runs first. AuthMiddleware must run before
+# RateLimitMiddleware (it needs request.state.user), hence this order.
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuthMiddleware)
 
 
