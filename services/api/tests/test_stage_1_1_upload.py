@@ -219,3 +219,15 @@ def test_upload_endpoints_require_auth(client):
     assert (
         client.post("/api/v1/documents/doc-1/upload-confirm").status_code == 401
     )
+
+
+def test_max_upload_bytes_is_binary_mib_not_decimal_mb():
+    # Empirically pinned against the real Supabase bucket (see conversation
+    # record): 52,428,800 bytes succeeds, 52,428,801 fails with
+    # EntityTooLarge. Supabase's Free plan ceiling is binary MiB, not
+    # decimal MB (50_000_000) — a unit mismatch here fails silently right
+    # at the boundary since both numbers "look like 50MB". This must also
+    # match supabase/migrations/0004_originals_bucket_limits.sql exactly.
+    assert MAX_UPLOAD_BYTES == 52_428_800
+    assert MAX_UPLOAD_BYTES == 50 * 1024 * 1024
+    assert MAX_UPLOAD_BYTES != 50_000_000

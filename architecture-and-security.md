@@ -36,9 +36,19 @@ deploy config change rather than a rewrite.
 ### Ingest pipeline (detail)
 
 Upload is a signed-URL direct-to-storage flow, not a proxy-through-Vercel
-flow — Vercel hard-caps function request bodies well under the
-documented 50MB, so the file bytes never pass through Next.js or Render
-at all:
+flow — Vercel hard-caps function request bodies well under the upload
+cap, so the file bytes never pass through Next.js or Render at all.
+
+**The 50MB (52,428,800 bytes) cap is not a design choice — it's
+Supabase's Free plan hard ceiling on the project's global storage file
+size limit, with zero headroom above it.** Confirmed against current
+docs (Free plan cannot exceed 50MB; Pro and up goes to 500GB) and
+empirically pinned to the exact byte: a 52,428,800-byte upload succeeds,
+52,428,801 bytes fails with `EntityTooLarge`. That's **binary MiB**
+(50 × 1024²), not decimal MB (50,000,000 bytes) — verified by testing
+50,000,001 bytes, which succeeds (well under the real ceiling). The only
+way to raise this limit is a Supabase Pro plan upgrade; it cannot be
+configured around on Free.
 
 ```
 1. Browser requests upload authorization (small JSON, no file bytes)
@@ -63,11 +73,15 @@ at all:
    → extract → chunk → embed
 ```
 
-Size limit enforcement is Supabase Storage's own bucket-level file size
-config, not the client-side check — the client check is UX only (fail
-fast before upload starts), never the security boundary. Confirm the
-bucket config is actually set to 50MB against current Supabase docs
-before relying on it.
+Size limit enforcement is Supabase Storage's own bucket-level
+`file_size_limit` config (`supabase/migrations/0004_originals_bucket_limits.sql`,
+set to 52428800 — the binary-MiB value, matching what's actually
+enforced), not the client-side check — the client check is UX only (fail
+fast before upload starts), never the security boundary. Any code
+computing this cap (client-side pre-check, `upload-init`'s fast-feedback
+check, the bucket config itself) must use `50 * 1024 * 1024`, not
+`50_000_000` — a unit mismatch here fails silently right at the boundary
+since both numbers "look like 50MB."
 
 Stalled `uploading` jobs (signed URL issued, upload never confirmed)
 need an expiry sweep — same resumable-job pattern as any other ingest
@@ -152,7 +166,7 @@ Render RAM ceiling, and none of them is optional:
 
 | Guardrail | Mechanism | Failure mode it prevents |
 |---|---|---|
-| Upload size cap | Rejected at the Next.js proxy, 50MB | Oversized file never reaches Render at all |
+| Upload size cap | Rejected by Supabase Storage's bucket config, 50MB (52,428,800 bytes — Supabase Free plan's hard ceiling, not our choice, no headroom) | Oversized file never reaches Render at all — it never even reaches Vercel |
 | Streaming I/O | Chunked read/write to Supabase storage | Full-file-in-memory reads |
 | Ingest concurrency = 1 | Single-file queue, no parallel processing | Two large decodes stacking in RAM simultaneously |
 | Dependency hygiene | Pinned `pikepdf`/`Pillow`; never install `unstructured` or similar with full extras | Silent transitive torch/onnx pulling in hundreds of MB |
