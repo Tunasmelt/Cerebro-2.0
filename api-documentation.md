@@ -43,11 +43,34 @@ user — see architecture doc for the current limits table.
 ### Documents
 
 ```
-POST   /documents                  Upload a file (multipart). Returns
-                                    document id + ingest_job id immediately;
-                                    processing is async.
+POST   /documents/upload-init      Body: filename, mime, size_bytes.
+                                    Creates the documents row (status=
+                                    uploading) and ingest_jobs row BEFORE
+                                    any signed URL exists — never the
+                                    reverse, or a failed upload orphans a
+                                    row with nothing behind it. Returns
+                                    document id + a short-lived Supabase
+                                    signed upload URL scoped to
+                                    originals/{user_id}/{document_id}/
+                                    original.{ext}. File bytes never pass
+                                    through this API — the browser
+                                    uploads directly to Supabase Storage
+                                    with the returned URL (Vercel/Render
+                                    both have body limits well under our
+                                    50MB cap, so this can't be a proxy).
+POST   /documents/{id}/upload-confirm  No body. Server verifies the
+                                    object actually exists in storage
+                                    (existence + size via Supabase admin
+                                    API) before advancing the job past
+                                    uploading — the client's claim of
+                                    completion is never trusted alone.
 GET    /documents                  List, cursor-paginated. Filterable by
-                                    status (processing|ready|failed|sealed).
+                                    status (processing|ready|failed|
+                                    sealed) — "uploading" is an
+                                    ingest_jobs.state value, not a
+                                    documents.status value; a document is
+                                    "processing" for its entire ingest
+                                    pipeline, uploading included.
 GET    /documents/{id}             Metadata + status.
 GET    /documents/{id}/download    Signed URL to the normalized (indexed)
                                     file. Sealed documents require a valid
@@ -60,6 +83,12 @@ POST   /documents/{id}/seal        Body: passphrase. Moves chunks into
 POST   /documents/{id}/unseal      Body: passphrase. Issues a session-
                                     scoped unlock claim (15 min).
 ```
+
+Size enforcement lives at Supabase Storage's bucket-level file size
+config, not in this API — any client-side or `upload-init` size check
+is UX-only, verified against the actual bytes at `upload-confirm`, and
+`uploading` rows that never confirm need an expiry sweep like any other
+stalled ingest job.
 
 ### Ingest jobs
 

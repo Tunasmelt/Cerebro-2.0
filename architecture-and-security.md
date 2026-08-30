@@ -35,18 +35,43 @@ deploy config change rather than a rewrite.
 
 ### Ingest pipeline (detail)
 
+Upload is a signed-URL direct-to-storage flow, not a proxy-through-Vercel
+flow — Vercel hard-caps function request bodies well under the
+documented 50MB, so the file bytes never pass through Next.js or Render
+at all:
+
 ```
-upload → size-cap check (50MB) → original bucket (untouched)
-       → normalize:
-           PDFs:   pikepdf structural optimization (lossless)
-                   + optional page-image downsample (visually lossless,
-                     150 DPI text pages / 200 DPI image-heavy pages)
-           images: Pillow .draft()-mode decode → resize → WebP re-encode
-                   (visually lossless, q85-90)
-                   oversized images tiled before downstream processing
-       → indexed bucket
-       → extract → chunk → embed
+1. Browser requests upload authorization (small JSON, no file bytes)
+2. Server creates `documents` row (status=uploading) + `ingest_jobs` row
+   (state=uploading) FIRST — before any signed URL exists, so there is
+   never a storage object without a tracked row
+3. Server returns a short-lived Supabase signed upload URL scoped to
+   originals/{user_id}/{document_id}/original.{ext}
+4. Browser uploads bytes directly to Supabase Storage via that URL
+5. Browser calls a confirm endpoint; server verifies the object actually
+   exists in storage (existence + size, via Supabase admin API) before
+   advancing ingest_jobs past `uploading` — never trust the client's
+   "done" signal alone
+6. → normalize:
+       PDFs:   pikepdf structural optimization (lossless)
+               + optional page-image downsample (visually lossless,
+                 150 DPI text pages / 200 DPI image-heavy pages)
+       images: Pillow .draft()-mode decode → resize → WebP re-encode
+               (visually lossless, q85-90)
+               oversized images tiled before downstream processing
+   → indexed bucket
+   → extract → chunk → embed
 ```
+
+Size limit enforcement is Supabase Storage's own bucket-level file size
+config, not the client-side check — the client check is UX only (fail
+fast before upload starts), never the security boundary. Confirm the
+bucket config is actually set to 50MB against current Supabase docs
+before relying on it.
+
+Stalled `uploading` jobs (signed URL issued, upload never confirmed)
+need an expiry sweep — same resumable-job pattern as any other ingest
+stage, not new machinery.
 
 ---
 
@@ -154,6 +179,14 @@ is traceable to a specific document, not a guess.
 | Graph fetch | 60 req/min |
 | General API | 100 req/min |
 
+**Constraint this depends on:** the limiter is in-process/in-memory, not
+Redis-backed. That's only correct under single-instance deployment —
+true on Render's free tier by default, not guaranteed under any paid
+tier with autoscaling. Before ever running more than one instance, this
+must move to a shared store (Redis, or Supabase itself) or the limiter
+silently becomes N× more permissive than this table states, with no
+error to catch it.
+
 ---
 
 ## 5. Security review
@@ -173,7 +206,7 @@ passed by inspection alone.
 | bot-protection | N/A at this stage — no public unauthenticated forms |
 | sql-injection | All queries parameterized via Supabase client / asyncpg; no string-interpolated SQL |
 | input-validation | Pydantic models on every FastAPI route |
-| file-uploads | Type allowlist + 50MB size limit enforced at the proxy, re-checked server-side |
+| file-uploads | Type allowlist + 50MB size limit enforced at Supabase Storage's bucket-level config — the client-side check is UX-only, never the enforcement boundary |
 | security-headers | CSP, X-Frame-Options, HSTS set via Next.js middleware |
 | https-enforced | Passes by default — Vercel + Render both terminate TLS |
 | dependency-scan | `pip-audit` + `npm audit` in CI, fails build on high/critical CVEs |
