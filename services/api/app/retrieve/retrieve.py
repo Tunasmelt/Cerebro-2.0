@@ -32,6 +32,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from app.core.tracing import get_tracer
 from app.ingest.embed import get_embed_client
 
 RRF_K = 60  # standard constant from the original RRF paper, not tunable
@@ -204,42 +205,74 @@ def set_retrieve_storage(storage: RetrieveStorage) -> None:
 
 
 async def retrieve(*, user_jwt: str, query: str) -> list[RetrievedChunk]:
+    """Five of Stage 1.8's six expected spans live here — embed_query,
+    vector_search, fts_search, rrf_fuse, rerank — one per real step in
+    this pipeline, in call order (the sixth, generate, is in
+    chat/generate.py, since retrieve() has no generation of its own).
+    Each span nests under whatever trace chat/stream.py's root span
+    opened, via Langfuse's automatic OpenTelemetry context propagation —
+    retrieve() doesn't need to know a trace exists at all. Safe when no
+    trace is active (e.g. every existing unit test, none of which set
+    Langfuse env vars): get_tracer() returns a client whose span context
+    managers are no-ops in that case, confirmed live (Stage 1.8
+    conversation record) — never raises, never changes retrieve()'s
+    actual return value."""
     storage = get_retrieve_storage()
     embed_client = get_embed_client()
     rerank_client = get_rerank_client()
+    tracer = get_tracer()
 
-    query_embedding = await embed_client.embed_text(query)
+    with tracer.start_as_current_observation(
+        as_type="span", name="embed_query", input={"query": query}
+    ) as span:
+        query_embedding = await embed_client.embed_text(query)
+        span.update(output={"dimensions": len(query_embedding)})
 
     # Vector search is scoped to documents embedded by the same provider
     # as the query itself (always the primary client — see embed.py's
     # module docstring for why fallback doesn't apply at query time).
     # A document that fell back to Voyage/Cohere lives in a different
     # vector space and must not be compared against this query vector.
-    vector_results = await storage.vector_search(
-        user_jwt=user_jwt,
-        query_embedding=query_embedding,
-        match_count=VECTOR_CANDIDATES,
-        primary_provider=embed_client.provider,
-    )
-    fts_results = await storage.fts_search(
-        user_jwt=user_jwt, query_text=query, match_count=FTS_CANDIDATES
-    )
+    with tracer.start_as_current_observation(
+        as_type="span", name="vector_search", input={"match_count": VECTOR_CANDIDATES}
+    ) as span:
+        vector_results = await storage.vector_search(
+            user_jwt=user_jwt,
+            query_embedding=query_embedding,
+            match_count=VECTOR_CANDIDATES,
+            primary_provider=embed_client.provider,
+        )
+        span.update(output={"result_count": len(vector_results)})
+
+    with tracer.start_as_current_observation(
+        as_type="span", name="fts_search", input={"match_count": FTS_CANDIDATES}
+    ) as span:
+        fts_results = await storage.fts_search(
+            user_jwt=user_jwt, query_text=query, match_count=FTS_CANDIDATES
+        )
+        span.update(output={"result_count": len(fts_results)})
 
     by_id: dict[str, dict[str, Any]] = {r["id"]: r for r in vector_results}
     by_id.update({r["id"]: r for r in fts_results})
 
-    fused_ids = rrf_fuse(
-        [r["id"] for r in vector_results], [r["id"] for r in fts_results]
-    )[:RERANK_TOP_N]
+    with tracer.start_as_current_observation(as_type="span", name="rrf_fuse") as span:
+        fused_ids = rrf_fuse(
+            [r["id"] for r in vector_results], [r["id"] for r in fts_results]
+        )[:RERANK_TOP_N]
+        span.update(output={"fused_ids": fused_ids})
     if not fused_ids:
         return []
 
     candidates = [by_id[chunk_id] for chunk_id in fused_ids]
-    rerank_results = await rerank_client.rerank(
-        query=query,
-        documents=[c["content"] for c in candidates],
-        top_n=FINAL_TOP_K,
-    )
+    with tracer.start_as_current_observation(
+        as_type="span", name="rerank", input={"query": query, "candidate_count": len(candidates)}
+    ) as span:
+        rerank_results = await rerank_client.rerank(
+            query=query,
+            documents=[c["content"] for c in candidates],
+            top_n=FINAL_TOP_K,
+        )
+        span.update(output={"result_count": len(rerank_results)})
 
     results: list[RetrievedChunk] = []
     for index, score in rerank_results:

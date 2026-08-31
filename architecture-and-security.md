@@ -152,7 +152,10 @@ too narrow a `search_path`.
 Generation uses Gemini's `interactions` REST endpoint (confirmed live
 before implementation — this is a newer step-based SSE surface, not the
 `streamGenerateContent`/`candidates` shape training data would default
-to assuming), model `gemini-3.7-flash`. Only `step.delta` events with
+to assuming), model `gemini-3.5-flash-lite` — not `gemini-3.7-flash`,
+the docs' first-listed default, which real-tested at ~83s to first
+visible text (a mandatory "thought" step regardless of thinking_level)
+vs. `gemini-3.5-flash-lite`'s ~3s on the same prompt. Only `step.delta` events with
 `delta.type == "text"` are consumed; `interaction.created`/`step.start`/
 `step.stop`/`interaction.completed` are ignored — chat/stream.py just
 needs the raw token stream.
@@ -178,6 +181,50 @@ POST /chat/sessions/{id}/stream
 The `retrieval` event is yielded from a fully-awaited `retrieve()` call
 before the generate client is ever touched — the ordering is structural,
 not a race that happens to usually resolve correctly.
+
+### Tracing (detail, Stage 1.8)
+
+`core/tracing.py` wraps the Langfuse Python SDK (`get_client()`,
+confirmed live against a real project before implementation — v4,
+OpenTelemetry-based, context-propagated). `get_tracer()` is safe to call
+unconditionally, with or without real credentials: confirmed live that
+an unconfigured client logs a warning and returns a disabled client
+whose span context managers and `get_current_trace_id()` are no-ops,
+never raising — this is what lets `retrieve()` and `chat/stream.py`
+call it directly with no test seam guard, and why the full test suite
+(which sets no Langfuse env vars) produces no traces rather than
+crashing.
+
+One root `chat_turn` span per turn (opened in `chat/stream.py`) contains
+six real-pipeline spans, each nested directly under it via automatic
+context propagation, no explicit parent-passing needed:
+
+```
+chat_turn
+ ├─ embed_query      (retrieve.py)
+ ├─ vector_search    (retrieve.py)
+ ├─ fts_search       (retrieve.py)
+ ├─ rrf_fuse         (retrieve.py)
+ ├─ rerank           (retrieve.py)
+ └─ generate         (chat/stream.py, as_type="generation")
+```
+
+This exact shape — six spans, flat under the root, in this order — was
+verified live: a real chat_turn trace queried back via Langfuse's API
+showed exactly this tree. The turn's real `trace_id` (`None` when
+tracing is unconfigured) is stored on the assistant's `chat_messages`
+row.
+
+**RAGAS is not wired in.** The current `ragas` PyPI release (confirmed
+on `0.4.2` and `0.4.3`) crashes on `import ragas` itself —
+`ModuleNotFoundError` for `langchain_community.chat_models.vertexai`, a
+path removed from `langchain_community` months ago. This is a confirmed
+open upstream bug (ragas GitHub issues #2741, #2745, #2753) affecting
+every user not specifically using Google VertexAI, not something fixable
+from this side without patching ragas's own source or a fragile
+`sys.modules` stub. Decided to hold the RAGAS CI gate until it's fixed
+upstream rather than build around a broken package — see
+phases-and-gates.md's Stage 1.8 entry.
 
 ---
 
