@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -7,6 +7,7 @@ from app.core.documents_storage import (
     MAX_UPLOAD_BYTES,
     get_documents_storage,
 )
+from app.ingest.normalize import run_normalize_job
 
 router = APIRouter()
 
@@ -49,7 +50,7 @@ async def upload_init(request: Request, body: UploadInitBody):
 
 
 @router.post("/api/v1/documents/{document_id}/upload-confirm")
-async def upload_confirm(request: Request, document_id: str):
+async def upload_confirm(request: Request, document_id: str, background_tasks: BackgroundTasks):
     storage = get_documents_storage()
     try:
         confirmed = await storage.confirm(
@@ -69,6 +70,17 @@ async def upload_confirm(request: Request, document_id: str):
         if exc.detail == "file_too_large":
             return _error("file_too_large", "File exceeds the 50MB upload limit", 413)
         raise
+
+    # Runs in-process, after the response is sent — no separate worker,
+    # per CLAUDE.md ("ingest pipeline runs in-process within the web
+    # service"). Stage 1.2's normalize concurrency=1 lock means a second
+    # confirm's background task queues behind this one rather than
+    # running in parallel.
+    background_tasks.add_task(
+        run_normalize_job,
+        user_jwt=request.state.user_jwt,
+        document_id=document_id,
+    )
 
     return JSONResponse(
         {
