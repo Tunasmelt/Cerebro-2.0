@@ -16,6 +16,12 @@ regardless, there's no DCT-scaled shortcut for non-block-based codecs) →
 resize to a bounded max dimension → WebP re-encode. draft() is the
 mechanism that actually protects RAM for large JPEGs, independent of the
 final compressed size — see architecture-and-security.md §3.
+
+Text: no normalize step is described anywhere in the docs for text/plain
+(the pipeline section only covers PDFs and images) — passed through
+unchanged into `indexed` so retrieval's "only ever reads indexed"
+invariant still holds for every mime type, not just the two with a real
+optimization step.
 """
 import asyncio
 import io
@@ -81,7 +87,7 @@ def normalize_image(content: bytes, mime: str) -> tuple[bytes, str]:
     return out.getvalue(), "image/webp"
 
 
-_EXT_BY_MIME = {"application/pdf": "pdf", "image/webp": "webp"}
+_EXT_BY_MIME = {"application/pdf": "pdf", "image/webp": "webp", "text/plain": "txt"}
 
 
 class NormalizeStorage(Protocol):
@@ -190,7 +196,10 @@ def set_normalize_storage(storage: NormalizeStorage) -> None:
 _normalize_lock = asyncio.Lock()
 
 
-async def run_normalize_job(*, user_jwt: str, document_id: str) -> None:
+async def run_normalize_job(*, user_jwt: str, document_id: str) -> bool:
+    """Returns True if the document was normalized and advanced to
+    `extracting`, False if the job failed (and was marked so). Callers
+    chaining the next pipeline stage should check this before proceeding."""
     storage = get_normalize_storage()
     document = await storage.get_document(user_jwt=user_jwt, document_id=document_id)
     mime = document["mime"]
@@ -204,13 +213,20 @@ async def run_normalize_job(*, user_jwt: str, document_id: str) -> None:
             if mime == "application/pdf":
                 normalized = normalize_pdf(content)
                 out_mime = "application/pdf"
+            elif mime == "text/plain":
+                # No normalize pipeline step exists for plain text (the
+                # architecture doc's normalize section only covers PDFs
+                # and images) — pass the bytes through unchanged so
+                # `indexed` still has a copy, keeping the "retrieval only
+                # ever reads from indexed" invariant true for every mime.
+                normalized, out_mime = content, "text/plain"
             else:
                 normalized, out_mime = normalize_image(content, mime)
         except NormalizeError as exc:
             await storage.mark_failed(
                 user_jwt=user_jwt, document_id=document_id, error_code=exc.code
             )
-            return
+            return False
 
         ext = _EXT_BY_MIME[out_mime]
         indexed_path = await storage.upload_indexed(
@@ -224,3 +240,4 @@ async def run_normalize_job(*, user_jwt: str, document_id: str) -> None:
         await storage.mark_normalized(
             user_jwt=user_jwt, document_id=document_id, storage_path=indexed_path
         )
+        return True
