@@ -220,11 +220,34 @@ architecture-and-security.md's "Chat pipeline" for the full design.
 ### Stage 1.8 — Observability & evals
 **Exit criteria:** Langfuse traces every turn with the full span tree;
 RAGAS baseline stored and enforced as a CI gate.
+
+**Status: split.** Langfuse tracing is done. The RAGAS half is
+deliberately not built — `ragas` (all recent PyPI releases, confirmed
+`0.4.2` and `0.4.3`) crashes on `import ragas` itself with
+`ModuleNotFoundError: No module named
+'langchain_community.chat_models.vertexai'`, a confirmed open upstream
+bug (ragas GitHub issues #2741, #2745, #2753) affecting every user not
+specifically using Google VertexAI — not something fixable from this
+side without patching ragas's own source or a fragile `sys.modules`
+stub hack. Decided in this stage's conversation to hold the RAGAS gate
+until it's fixed upstream, rather than build around a currently-broken
+package. The six-span breakdown below (embed_query, vector_search,
+fts_search, rrf_fuse, rerank, generate) was also undefined in any doc
+before this stage — resolved in conversation as one span per real
+pipeline step, in call order, matching retrieve.py + chat/generate.py
+exactly.
+
 **Tests:**
-- A live chat turn produces a Langfuse trace with all six expected spans
-  present.
+- A live chat turn produces a Langfuse trace with all six expected
+  spans present. ✅ Verified live against a real Langfuse project — a
+  real chat_turn trace queried back via Langfuse's API showed all six
+  spans (embed_query, vector_search, fts_search, rrf_fuse, rerank,
+  generate), each nested directly under the root chat_turn span. Also
+  covered by an automated regression test using a fake tracer (no real
+  Langfuse project needed for CI).
 - CI fails a PR that drops RAGAS faithfulness below the stored baseline
-  by more than the agreed tolerance.
+  by more than the agreed tolerance. **Not built** — blocked on the
+  upstream ragas bug above.
 
 ### Phase 1 Gate
 All stages 1.1–1.8 pass their tests, **and** you confirm live:

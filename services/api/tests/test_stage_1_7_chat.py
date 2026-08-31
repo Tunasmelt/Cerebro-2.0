@@ -78,7 +78,15 @@ class _FakeChatStorage:
         return {"id": session_id}
 
     async def save_message(
-        self, *, user_jwt, session_id, user_id, role, content, retrieved_chunk_ids
+        self,
+        *,
+        user_jwt,
+        session_id,
+        user_id,
+        role,
+        content,
+        retrieved_chunk_ids,
+        trace_id=None,
     ):
         self.messages.append(
             {
@@ -86,6 +94,7 @@ class _FakeChatStorage:
                 "role": role,
                 "content": content,
                 "retrieved_chunk_ids": retrieved_chunk_ids,
+                "trace_id": trace_id,
             }
         )
 

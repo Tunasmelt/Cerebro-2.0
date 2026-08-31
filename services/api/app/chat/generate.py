@@ -45,6 +45,8 @@ class GenerateError(Exception):
 
 
 class GenerateClient(Protocol):
+    model: str  # for the Langfuse "generation" span's model field
+
     def stream_text(self, *, system_instruction: str, input_text: str) -> AsyncIterator[str]:
         """Yields text deltas as they arrive, in order."""
         ...
@@ -73,6 +75,8 @@ def parse_sse_line(line: str) -> str | None:
 
 
 class GeminiGenerateClient:
+    model = GEMINI_MODEL
+
     def __init__(self) -> None:
         self._api_key = os.environ.get("GEMINI_API_KEY", "")
 

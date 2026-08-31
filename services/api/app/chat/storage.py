@@ -33,6 +33,7 @@ class ChatStorage(Protocol):
         role: str,
         content: str,
         retrieved_chunk_ids: list[str],
+        trace_id: str | None = None,
     ) -> None: ...
 
 
@@ -80,18 +81,22 @@ class SupabaseChatStorage:
         role: str,
         content: str,
         retrieved_chunk_ids: list[str],
+        trace_id: str | None = None,
     ) -> None:
+        body = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "role": role,
+            "content": content,
+            "retrieved_chunk_ids": retrieved_chunk_ids,
+        }
+        if trace_id is not None:
+            body["trace_id"] = trace_id
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self._supabase_url}/rest/v1/chat_messages",
                 headers=self._headers(user_jwt),
-                json={
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "role": role,
-                    "content": content,
-                    "retrieved_chunk_ids": retrieved_chunk_ids,
-                },
+                json=body,
             )
         if response.status_code >= 400:
             raise ChatStorageError("message_save_failed", response.text)
