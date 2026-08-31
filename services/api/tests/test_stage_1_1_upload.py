@@ -32,6 +32,7 @@ from app.core.documents_storage import (
     ConfirmedUpload,
     SignedUpload,
 )
+from app.ingest import normalize as normalize_module
 from app.main import app
 
 TEST_ISSUER = "https://test-project.supabase.co/auth/v1"
@@ -74,6 +75,31 @@ class _FakeDocumentsStorage:
         )
 
 
+class _NoOpNormalizeStorage:
+    """upload-confirm fires a background normalize task (Stage 1.2) —
+    this keeps it from making real network calls during Stage 1.1's
+    tests, which only care about the confirm response itself."""
+
+    async def get_document(self, *, user_jwt, document_id):
+        return {
+            "user_id": TEST_SUB,
+            "mime": "text/plain",
+            "original_storage_path": "unused",
+        }
+
+    async def download_original(self, *, user_jwt, path):
+        return b""
+
+    async def upload_indexed(self, **kwargs):
+        return "unused"
+
+    async def mark_normalized(self, **kwargs):
+        pass
+
+    async def mark_failed(self, **kwargs):
+        pass
+
+
 @pytest.fixture
 def keypair():
     private_key = ec.generate_private_key(ec.SECP256R1())
@@ -91,9 +117,11 @@ def _wire_test_seams(keypair, fake_storage, monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://test-project.supabase.co")
     auth_module.set_jwks_client(_StubJWKClient(public_key))
     storage_module.set_documents_storage(fake_storage)
+    normalize_module.set_normalize_storage(_NoOpNormalizeStorage())
     yield
     auth_module.set_jwks_client(None)
     storage_module.set_documents_storage(storage_module.SupabaseDocumentsStorage())
+    normalize_module.set_normalize_storage(normalize_module.SupabaseNormalizeStorage())
 
 
 @pytest.fixture
