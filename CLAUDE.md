@@ -54,7 +54,8 @@ Voyage/Cohere for its broader multimodal span — text/image/audio/video/PDF
 in one shared vector space — plus an explicit free tier; Voyage
 (`voyage-multimodal-3.5`) and Cohere (`embed-v4.0`) remain viable
 documented alternatives if Jina's terms or limits ever stop working) —
-plus a hosted reranker, Gemini for generation. Observability: Langfuse
+plus Cohere for reranking (`rerank-v4.0-pro`, adopted Stage 1.5),
+Gemini for generation. Observability: Langfuse
 tracing on every retrieval span, RAGAS as a CI
 regression gate.
 
@@ -63,8 +64,11 @@ regression gate.
 RAG core → brain graph → sealed tier → kanban/todo/playground. This order
 is load-bearing: the graph renders real vectors, so ingestion must exist
 first; sealing gates artifacts ingestion produces, so it comes after.
-Retrieval core is a deliberate fork of the existing Docify pipeline
-(hybrid + RRF + citation verification) — don't rebuild it from scratch.
+Retrieval core (hybrid + RRF + rerank, Stage 1.5) was originally meant
+to fork an existing "Docify" pipeline, but no such source was ever
+available anywhere in this repo — confirmed and built fresh from the
+documented behavior instead. Citation verification is a separate,
+not-yet-built concern for Stage 1.7's chat work, not retrieval itself.
 
 ## Before writing ingest/retrieval code
 
