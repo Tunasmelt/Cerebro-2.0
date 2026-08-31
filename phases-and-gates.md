@@ -150,7 +150,9 @@ checkpoints allowing resume after a mid-job crash.
 
 ### Stage 1.5 — Retrieve
 **Exit criteria:** Hybrid retrieval (vector + FTS, RRF-fused, reranked)
-returns relevant chunks for a query, forked from Docify's pipeline.
+returns relevant chunks for a query. No Docify source was ever available
+to fork from — built fresh from this exit criteria's own spec instead;
+see architecture-and-security.md §1 "Retrieval pipeline" for the design.
 **Tests:**
 - Fixture query with a known-relevant chunk returns that chunk in the
   top 3 post-rerank.

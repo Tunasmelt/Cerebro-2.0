@@ -13,7 +13,7 @@ FastAPI (Render, single uvicorn worker, async)
    ├─ ingest/      upload → normalize → extract → chunk
    ├─ embed/       provider adapter (Jina; Voyage/Cohere documented
    │                fallbacks — see CLAUDE.md §Stack)
-   ├─ retrieve/    hybrid + RRF + rerank (forked from Docify)
+   ├─ retrieve/    hybrid + RRF + rerank (Cohere rerank-v4.0-pro)
    ├─ graph/       clustering + 2D projection
    ├─ chat/        SSE, prompt assembly
    └─ core/        JWT auth, rate limits, Langfuse client
@@ -25,7 +25,7 @@ Supabase
    └─ storage/originals   ← untouched uploads, retrieval never reads this
         │
         ▼
-Hosted APIs: Jina embed, rerank TBD, Gemini generate, Langfuse
+Hosted APIs: Jina embed, Cohere rerank, Gemini generate, Langfuse
 ```
 
 `ingest/` is written as if it will eventually run as its own Render
@@ -87,6 +87,32 @@ since both numbers "look like 50MB."
 Stalled `uploading` jobs (signed URL issued, upload never confirmed)
 need an expiry sweep — same resumable-job pattern as any other ingest
 stage, not new machinery.
+
+### Retrieval pipeline (detail, Stage 1.5)
+
+Not actually forked from Docify — no Docify source was ever available
+anywhere in this repo despite earlier docs saying so; built fresh from
+the documented hybrid+RRF+rerank behavior instead (see Stage 1.5's
+conversation record).
+
+```
+query → embed (Jina, same client as ingest)
+      → vector search (match_chunks_vector RPC, cosine distance)  ─┐
+      → full-text search (match_chunks_fts RPC, ts_rank)          ─┤→ RRF fuse (k=60)
+      → top RERANK_TOP_N fused candidates → Cohere rerank-v4.0-pro
+      → results below RELEVANCE_FLOOR dropped, not forced into output
+      → top FINAL_TOP_K returned
+```
+
+Both RPC functions exist because PostgREST's plain table query syntax
+can't order by a computed expression (cosine distance, ts_rank) — only
+real columns. Both are `SECURITY INVOKER` (Postgres's default), so RLS
+applies exactly as it does to direct table access. Their `search_path`
+must include `extensions`, not just `public` — the `halfvec` operators
+live in `extensions` (moved there in Stage 0.2's own security fix), and
+pinning to `public` alone breaks vector search with "operator does not
+exist", caught live when the first real RPC call failed after applying
+too narrow a `search_path`.
 
 ---
 
