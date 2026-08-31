@@ -247,6 +247,10 @@ class EmbedStorage(Protocol):
     async def set_document_embedding_provider(
         self, *, user_jwt: str, document_id: str, provider: str
     ) -> None: ...
+    async def get_job_state(self, *, user_jwt: str, document_id: str) -> str | None:
+        """None if no ingest_jobs row exists for this document at all."""
+        ...
+    async def reset_job_to_embedding(self, *, user_jwt: str, document_id: str) -> None: ...
 
 
 class SupabaseEmbedStorage:
@@ -369,6 +373,25 @@ class SupabaseEmbedStorage:
                 json={"embedding_provider": provider},
             )
 
+    async def get_job_state(self, *, user_jwt: str, document_id: str) -> str | None:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/ingest_jobs",
+                headers=self._headers(user_jwt),
+                params={"document_id": f"eq.{document_id}", "select": "state"},
+            )
+        rows = response.json()
+        return rows[0]["state"] if rows else None
+
+    async def reset_job_to_embedding(self, *, user_jwt: str, document_id: str) -> None:
+        async with httpx.AsyncClient() as client:
+            await client.patch(
+                f"{self._supabase_url}/rest/v1/ingest_jobs",
+                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                params={"document_id": f"eq.{document_id}"},
+                json={"state": "embedding", "last_error": None},
+            )
+
 
 _storage: EmbedStorage = SupabaseEmbedStorage()
 
@@ -483,3 +506,52 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
 
     await storage.mark_ready(user_jwt=user_jwt, document_id=document_id)
     return True
+
+
+class RetryError(Exception):
+    """Raised when a document's failed job isn't safely retryable yet."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+async def check_retry_eligible(*, user_jwt: str, document_id: str) -> None:
+    """Checked synchronously by the retry-ingest route before scheduling
+    run_embed_job as a background task (same request/response shape as
+    upload-confirm). Raises RetryError if not eligible; otherwise resets
+    the job to `embedding` so its state reflects reality immediately,
+    before the background task even starts.
+
+    Deliberately scoped to embed-stage failures only. run_embed_job's
+    checkpoint + provider-lock make it safe to re-call at any point — but
+    normalize.py has no skip-if-already-done check, and extract.py's
+    behavior on an already-extracted document is unverified, so blindly
+    re-running the whole normalize->extract->embed chain on retry risks
+    duplicate chunk rows. "Chunks already exist for this document" is
+    used as the proxy for "extract already completed, so the failure
+    that needs retrying is embed's" — a job that failed earlier than
+    that raises RetryError instead of silently attempting an unsafe
+    full-pipeline re-run.
+    """
+    storage = get_embed_storage()
+
+    job_state = await storage.get_job_state(user_jwt=user_jwt, document_id=document_id)
+    if job_state is None:
+        raise RetryError("not_found", "No ingest job found for this document")
+    if job_state != "failed":
+        raise RetryError(
+            "not_retryable", f"Job is not in a failed state (state={job_state})"
+        )
+
+    chunks = await storage.get_chunks(user_jwt=user_jwt, document_id=document_id)
+    if not chunks:
+        raise RetryError(
+            "not_retryable",
+            "Job failed before extraction produced any chunks — retrying the "
+            "normalize/extract stages isn't supported yet, only embed-stage "
+            "failures are retryable",
+        )
+
+    await storage.reset_job_to_embedding(user_jwt=user_jwt, document_id=document_id)
