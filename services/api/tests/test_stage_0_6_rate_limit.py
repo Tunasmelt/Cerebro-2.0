@@ -23,7 +23,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
 from app.core import auth as auth_module
+from app.core import documents_storage as documents_storage_module
 from app.core import rate_limit as rate_limit_module
+from app.core.documents_storage import SignedUpload
 from app.core.rate_limit import RateLimiter
 from app.main import app
 
@@ -66,15 +68,31 @@ def fake_clock():
     return clock
 
 
+class _FakeDocumentsStorage:
+    """Just enough to let upload-init's real handler succeed without any
+    network — this test is about the rate limiter, not upload logic
+    (already covered by test_stage_1_1_upload.py)."""
+
+    async def authorize(self, *, user_jwt, user_id, title, mime):
+        return SignedUpload(document_id="doc-x", upload_url="https://fake/doc-x")
+
+    async def confirm(self, *, user_jwt, user_id, document_id):
+        raise NotImplementedError
+
+
 @pytest.fixture(autouse=True)
 def _wire_test_seams(keypair, fake_clock, monkeypatch):
     _private_key, public_key = keypair
     monkeypatch.setenv("SUPABASE_URL", "https://test-project.supabase.co")
     auth_module.set_jwks_client(_StubJWKClient(public_key))
     rate_limit_module.set_rate_limiter(RateLimiter(clock=fake_clock))
+    documents_storage_module.set_documents_storage(_FakeDocumentsStorage())
     yield
     auth_module.set_jwks_client(None)
     rate_limit_module.set_rate_limiter(RateLimiter())
+    documents_storage_module.set_documents_storage(
+        documents_storage_module.SupabaseDocumentsStorage()
+    )
 
 
 @pytest.fixture
@@ -145,14 +163,28 @@ def test_limit_is_scoped_per_route_class(client, keypair):
 
 
 def test_upload_class_uses_the_10_per_hour_limit(client, keypair):
+    # Regression test: this used to hit the stale placeholder path
+    # POST /api/v1/documents — a path documents.py never actually
+    # implements (the real route is /api/v1/documents/upload-init) —
+    # so it passed by testing the wrong thing while the real route
+    # silently fell through to the "general" 100/min class instead.
+    # Caught live via a Phase 0 audit that actually burst-tested
+    # production: 15 real upload-init calls succeeded where a 429
+    # should have landed at the 11th. Fixed in rate_limit.py's
+    # classify_route; this test now hits the real route.
     private_key, _ = keypair
     headers = auth_headers(private_key)
+    body = {"filename": "x.txt", "mime": "text/plain", "size_bytes": 10}
 
     for i in range(10):
-        response = client.post("/api/v1/documents", headers=headers)
+        response = client.post(
+            "/api/v1/documents/upload-init", headers=headers, json=body
+        )
         assert response.status_code != 429, f"upload {i + 1} was rate limited early"
 
-    response = client.post("/api/v1/documents", headers=headers)
+    response = client.post(
+        "/api/v1/documents/upload-init", headers=headers, json=body
+    )
     assert response.status_code == 429
 
 

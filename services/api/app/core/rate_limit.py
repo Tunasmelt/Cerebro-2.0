@@ -6,6 +6,19 @@ classifies against the *documented future paths* from api-documentation.md
 so real handlers inherit the right limit automatically once built, instead
 of needing every new route to remember to opt in.
 
+That plan broke silently once: this module originally matched
+`POST /api/v1/documents` for the "upload" class, guessed before Stage
+1.1 built the real upload flow — which ended up at
+`POST /api/v1/documents/upload-init` instead, a path that never matched
+the guess. The mismatch fell through to the "general" class (100/min)
+and sat undetected until a live Phase 0 audit actually burst-tested
+production and found 15 upload-init calls succeeding with no 429 where
+10/hour should have kicked in. Fixed here; see
+tests/test_stage_0_6_rate_limit.py for the regression test. Lesson:
+this file's "classify against the documented future path" approach
+needs to be re-checked against the real route the moment it's built,
+not just relied on to already line up.
+
 In-memory sliding-window log, not Redis: this project's stack has no
 external cache/queue, Render's free tier runs a single instance/single
 uvicorn worker (per CLAUDE.md), so per-process state is genuinely
@@ -37,7 +50,7 @@ def classify_route(path: str, method: str) -> str | None:
         return "chat"
     if _SEAL_UNSEAL_RE.match(path):
         return "seal_unseal"
-    if path == "/api/v1/documents" and method == "POST":
+    if path == "/api/v1/documents/upload-init" and method == "POST":
         return "upload"
     if path.startswith("/api/v1/graph"):
         return "graph"
