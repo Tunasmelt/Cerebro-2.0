@@ -23,7 +23,6 @@ unchanged into `indexed` so retrieval's "only ever reads indexed"
 invariant still holds for every mime type, not just the two with a real
 optimization step.
 """
-import asyncio
 import io
 import os
 from typing import Any, Protocol
@@ -31,6 +30,8 @@ from typing import Any, Protocol
 import httpx
 import pikepdf
 from PIL import Image
+
+from app.ingest.concurrency import INGEST_LOCK
 
 MAX_IMAGE_DIMENSION = 2048  # px — not a number the docs specify; chosen
 # as a reasonable bound (common vision-API ceiling) that still leaves
@@ -190,10 +191,9 @@ def set_normalize_storage(storage: NormalizeStorage) -> None:
     _storage = storage
 
 
-# Ingest concurrency = 1, non-negotiable per CLAUDE.md's memory governance
-# guardrails — two normalize jobs must never run their heavy step at the
-# same time on Render's single instance.
-_normalize_lock = asyncio.Lock()
+# Ingest concurrency = 1 is enforced by a single lock shared across the
+# whole pipeline (app/ingest/concurrency.py), not a per-stage lock — see
+# that module for why.
 
 
 async def run_normalize_job(*, user_jwt: str, document_id: str) -> bool:
@@ -205,7 +205,7 @@ async def run_normalize_job(*, user_jwt: str, document_id: str) -> bool:
     mime = document["mime"]
     user_id = document["user_id"]
 
-    async with _normalize_lock:
+    async with INGEST_LOCK:
         content = await storage.download_original(
             user_jwt=user_jwt, path=document["original_storage_path"]
         )

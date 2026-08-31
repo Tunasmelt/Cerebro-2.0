@@ -7,6 +7,7 @@ from app.core.documents_storage import (
     MAX_UPLOAD_BYTES,
     get_documents_storage,
 )
+from app.ingest.embed import run_embed_job
 from app.ingest.extract import run_extract_job
 from app.ingest.normalize import run_normalize_job
 
@@ -14,16 +15,20 @@ router = APIRouter()
 
 
 async def _run_ingest_pipeline(*, user_jwt: str, document_id: str) -> None:
-    """Chains normalize -> extract in-process, in one background task.
-    Each stage module stays independent (per architecture-and-security.md
-    §1's "could move to its own service" design intent) — this is the
-    only place that knows the pipeline order. Stops early if a stage
-    fails; Stage 1.4 owns the real resumable job-state-machine mechanics,
-    this is deliberately just sequential chaining for now."""
+    """Chains normalize -> extract -> embed in-process, in one background
+    task. Each stage module stays independent (per
+    architecture-and-security.md §1's "could move to its own service"
+    design intent) — this is the only place that knows the pipeline
+    order. Stops early if a stage fails; each stage's own checkpoint
+    (embed's ingest_jobs.checkpoint) is what actually makes a crash mid-
+    pipeline resumable, not this wrapper."""
     normalized = await run_normalize_job(user_jwt=user_jwt, document_id=document_id)
     if not normalized:
         return
-    await run_extract_job(user_jwt=user_jwt, document_id=document_id)
+    extracted = await run_extract_job(user_jwt=user_jwt, document_id=document_id)
+    if not extracted:
+        return
+    await run_embed_job(user_jwt=user_jwt, document_id=document_id)
 
 
 def _error(code: str, message: str, status_code: int) -> JSONResponse:

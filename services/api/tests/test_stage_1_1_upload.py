@@ -32,6 +32,7 @@ from app.core.documents_storage import (
     ConfirmedUpload,
     SignedUpload,
 )
+from app.ingest import embed as embed_module
 from app.ingest import extract as extract_module
 from app.ingest import normalize as normalize_module
 from app.main import app
@@ -129,6 +130,36 @@ class _NoOpExtractStorage:
         pass
 
 
+class _NoOpEmbedStorage:
+    """Empty text content -> zero chunks -> extract still succeeds and
+    chains into embed (Stage 1.4) too, even though there's nothing to
+    actually embed."""
+
+    async def get_document(self, *, user_jwt, document_id):
+        return {"user_id": TEST_SUB, "mime": "text/plain", "original_storage_path": "unused"}
+
+    async def get_chunks(self, *, user_jwt, document_id):
+        return []
+
+    async def download_original(self, *, user_jwt, path):
+        return b""
+
+    async def get_checkpoint(self, *, user_jwt, document_id):
+        return {}
+
+    async def save_checkpoint(self, **kwargs):
+        pass
+
+    async def update_chunk_embedding(self, **kwargs):
+        pass
+
+    async def mark_ready(self, **kwargs):
+        pass
+
+    async def mark_failed(self, **kwargs):
+        pass
+
+
 @pytest.fixture
 def keypair():
     private_key = ec.generate_private_key(ec.SECP256R1())
@@ -148,11 +179,13 @@ def _wire_test_seams(keypair, fake_storage, monkeypatch):
     storage_module.set_documents_storage(fake_storage)
     normalize_module.set_normalize_storage(_NoOpNormalizeStorage())
     extract_module.set_extract_storage(_NoOpExtractStorage())
+    embed_module.set_embed_storage(_NoOpEmbedStorage())
     yield
     auth_module.set_jwks_client(None)
     storage_module.set_documents_storage(storage_module.SupabaseDocumentsStorage())
     normalize_module.set_normalize_storage(normalize_module.SupabaseNormalizeStorage())
     extract_module.set_extract_storage(extract_module.SupabaseExtractStorage())
+    embed_module.set_embed_storage(embed_module.SupabaseEmbedStorage())
 
 
 @pytest.fixture

@@ -11,7 +11,8 @@ Next.js route handlers (Vercel)      ← BFF proxy, edge rate limit, upload size
         ▼
 FastAPI (Render, single uvicorn worker, async)
    ├─ ingest/      upload → normalize → extract → chunk
-   ├─ embed/       provider adapter (Voyage/Cohere)
+   ├─ embed/       provider adapter (Jina; Voyage/Cohere documented
+   │                fallbacks — see CLAUDE.md §Stack)
    ├─ retrieve/    hybrid + RRF + rerank (forked from Docify)
    ├─ graph/       clustering + 2D projection
    ├─ chat/        SSE, prompt assembly
@@ -24,7 +25,7 @@ Supabase
    └─ storage/originals   ← untouched uploads, retrieval never reads this
         │
         ▼
-Hosted APIs: Voyage/Cohere embed + rerank, Gemini generate, Langfuse
+Hosted APIs: Jina embed, rerank TBD, Gemini generate, Langfuse
 ```
 
 `ingest/` is written as if it will eventually run as its own Render
