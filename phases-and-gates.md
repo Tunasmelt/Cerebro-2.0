@@ -171,17 +171,30 @@ auth via directly-minted JWTs); added deliberately here rather than
 discovered as a gap during Stage 1.7's chat UI work, since chat needs a
 real logged-in user to mean anything.
 **Tests:**
-- Sign-up with a new email/password creates a real Supabase Auth user and
-  lands in an authenticated session.
+- Sign-up with a new email/password creates a real Supabase Auth user.
+  Email confirmation stays on (Supabase's secure default, decided
+  deliberately in this stage's conversation over disabling it) — so
+  sign-up itself does NOT land in an authenticated session; the UI shows
+  a clear "check your email" state instead, not a silent no-op or crash.
+- Confirming via the emailed link establishes a real session through
+  `/auth/confirm`. The default "Confirm signup" template was kept
+  (no dashboard edit) rather than switched to a custom token_hash
+  template, which means the link carries a PKCE `code` param whose
+  exchange requires the same browser session that started sign-up —
+  so this step was verified live, in one continuous browser session,
+  rather than via a server-generated link (unlike Stage 0.2's SMTP
+  workaround, which isn't usable here for that reason).
 - Sign-in with valid credentials succeeds; invalid credentials show an
   inline error (per the mockup's error state), not a crash or a silent
   no-op.
-- After signing in through the UI, a real protected API call succeeds
-  using that session's token — proves the login flow produces a working
-  `Authorization` header, not just a cosmetic "logged in" state.
+- After a session exists (via confirm or sign-in), a real protected API
+  call succeeds using that session's token — proves the login flow
+  produces a working `Authorization` header, not just a cosmetic
+  "logged in" state.
 - Sign-out clears the session; a subsequent protected call fails.
-- No "forgot passphrase" concept anywhere on this screen (per the
-  mockup's explicit note — conflating account password with sealed-file
+- No "forgot password" reset flow is built yet (not in this stage's
+  scope) and no "forgot passphrase" concept anywhere on this screen (per
+  the mockup's explicit note — conflating account password with sealed-file
   passphrase would be a real product bug, not a copy nitpick).
 
 ### Stage 1.7 — Chat & SSE
