@@ -40,6 +40,8 @@ def _make_image_bytes(size=(500, 400)) -> bytes:
 
 
 class _FakeEmbedClient:
+    provider = "jina"
+
     def __init__(self, *, fail_after: int | None = None):
         self.text_calls: list[str] = []
         self.image_calls: list[bytes] = []
@@ -70,6 +72,7 @@ class _FakeEmbedStorage:
         self.embeddings: dict[str, list[float]] = {}
         self.marked_ready = False
         self.marked_failed = None
+        self.embedding_provider = None
 
     async def get_document(self, *, user_jwt, document_id):
         return {
@@ -100,12 +103,22 @@ class _FakeEmbedStorage:
     async def mark_failed(self, *, user_jwt, document_id, error_code):
         self.marked_failed = error_code
 
+    async def set_document_embedding_provider(self, *, user_jwt, document_id, provider):
+        self.embedding_provider = provider
+
 
 @pytest.fixture(autouse=True)
 def _reset():
+    # These pre-existing Stage 1.4 tests predate the Voyage/Cohere
+    # fallback chain and assert immediate mark_failed on the fake
+    # client's failure — an empty fallback list keeps that exact
+    # behavior; the fallback path itself is covered in
+    # test_embed_fallback_chain.py.
+    embed_module.set_fallback_embed_clients([])
     yield
     embed_module.set_embed_client(embed_module.JinaEmbedClient())
     embed_module.set_embed_storage(embed_module.SupabaseEmbedStorage())
+    embed_module.set_fallback_embed_clients(embed_module.default_fallback_clients())
 
 
 def _text_chunks(n: int) -> list[dict]:

@@ -130,7 +130,12 @@ def set_rerank_client(client: RerankClient) -> None:
 
 class RetrieveStorage(Protocol):
     async def vector_search(
-        self, *, user_jwt: str, query_embedding: list[float], match_count: int
+        self,
+        *,
+        user_jwt: str,
+        query_embedding: list[float],
+        match_count: int,
+        primary_provider: str,
     ) -> list[dict[str, Any]]: ...
     async def fts_search(
         self, *, user_jwt: str, query_text: str, match_count: int
@@ -150,13 +155,22 @@ class SupabaseRetrieveStorage:
         }
 
     async def vector_search(
-        self, *, user_jwt: str, query_embedding: list[float], match_count: int
+        self,
+        *,
+        user_jwt: str,
+        query_embedding: list[float],
+        match_count: int,
+        primary_provider: str,
     ) -> list[dict[str, Any]]:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self._supabase_url}/rest/v1/rpc/match_chunks_vector",
                 headers=self._headers(user_jwt),
-                json={"query_embedding": query_embedding, "match_count": match_count},
+                json={
+                    "query_embedding": query_embedding,
+                    "match_count": match_count,
+                    "primary_provider": primary_provider,
+                },
             )
         if response.status_code >= 400:
             raise RetrieveError("vector_search_failed", response.text)
@@ -196,8 +210,16 @@ async def retrieve(*, user_jwt: str, query: str) -> list[RetrievedChunk]:
 
     query_embedding = await embed_client.embed_text(query)
 
+    # Vector search is scoped to documents embedded by the same provider
+    # as the query itself (always the primary client — see embed.py's
+    # module docstring for why fallback doesn't apply at query time).
+    # A document that fell back to Voyage/Cohere lives in a different
+    # vector space and must not be compared against this query vector.
     vector_results = await storage.vector_search(
-        user_jwt=user_jwt, query_embedding=query_embedding, match_count=VECTOR_CANDIDATES
+        user_jwt=user_jwt,
+        query_embedding=query_embedding,
+        match_count=VECTOR_CANDIDATES,
+        primary_provider=embed_client.provider,
     )
     fts_results = await storage.fts_search(
         user_jwt=user_jwt, query_text=query, match_count=FTS_CANDIDATES

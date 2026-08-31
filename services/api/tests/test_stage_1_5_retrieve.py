@@ -61,6 +61,8 @@ def test_rrf_fuse_single_list_preserves_its_order():
 
 
 class _FakeEmbedClient:
+    provider = "jina"
+
     async def embed_text(self, text: str) -> list[float]:
         return [0.1] * 1024
 
@@ -91,7 +93,7 @@ class _FakeRetrieveStorage:
         self.vector_results = vector_results
         self.fts_results = fts_results
 
-    async def vector_search(self, *, user_jwt, query_embedding, match_count):
+    async def vector_search(self, *, user_jwt, query_embedding, match_count, primary_provider):
         return self.vector_results[:match_count]
 
     async def fts_search(self, *, user_jwt, query_text, match_count):

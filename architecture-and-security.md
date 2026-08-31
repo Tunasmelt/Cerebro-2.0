@@ -11,8 +11,9 @@ Next.js route handlers (Vercel)      ← BFF proxy, edge rate limit, upload size
         ▼
 FastAPI (Render, single uvicorn worker, async)
    ├─ ingest/      upload → normalize → extract → chunk
-   ├─ embed/       provider adapter (Jina; Voyage/Cohere documented
-   │                fallbacks — see CLAUDE.md §Stack)
+   ├─ embed/       provider adapter, Jina primary with an automatic
+   │                Voyage → Cohere fallback chain (added after Stage
+   │                1.4 — see "Embedding provider fallback" below)
    ├─ retrieve/    hybrid + RRF + rerank (Cohere rerank-v4.0-pro)
    ├─ graph/       clustering + 2D projection
    ├─ chat/        SSE, prompt assembly
@@ -88,6 +89,37 @@ Stalled `uploading` jobs (signed URL issued, upload never confirmed)
 need an expiry sweep — same resumable-job pattern as any other ingest
 stage, not new machinery.
 
+### Embedding provider fallback (added after Stage 1.4)
+
+Stage 1.4 shipped with Jina as the sole embedding provider. A fallback
+chain (Jina → Voyage `voyage-multimodal-3.5` → Cohere `embed-v4.0`,
+both confirmed against live docs before implementation, both told to
+output 1024-dim via `output_dimension` to match `chunks.embedding
+halfvec(1024)`) was added as new scope afterward, at the user's request.
+
+The constraint that shapes the whole design: different providers do not
+share a vector space, even at identical dimensions, so a naive "retry
+the next provider on any failure" would silently mix incompatible
+vectors within a document or across the corpus. The fallback is
+therefore **whole-job-before-first-chunk only**: if the primary fails on
+a document's very first chunk, the next provider is tried for that same
+chunk; the first provider to succeed locks the document
+(`documents.embedding_provider`) for every remaining chunk and any
+future resumed run. A failure after that lock just fails the job, as
+before this chain existed — no cascading mid-job.
+
+`documents.embedding_provider` (`supabase/migrations/0007`, default
+`'jina'`) makes this explicit rather than inferred. Vector search
+(`match_chunks_vector`) takes a `primary_provider` parameter and joins
+`documents` to filter to it — a query, which always embeds with the
+primary client only (no fallback at query time; a fallback-provider
+query vector wouldn't be comparable to the Jina-space corpus anyway),
+never gets compared against a document that fell back to Voyage or
+Cohere. Such a document simply isn't reachable by vector search until
+it's re-embedded with the primary provider — a deliberate correctness
+trade (filter and accept reduced recall for that document) over silently
+comparing incompatible vectors.
+
 ### Retrieval pipeline (detail, Stage 1.5)
 
 Not actually forked from Docify — no Docify source was ever available
@@ -96,7 +128,8 @@ the documented hybrid+RRF+rerank behavior instead (see Stage 1.5's
 conversation record).
 
 ```
-query → embed (Jina, same client as ingest)
+query → embed (primary client only — Jina, same as ingest's primary;
+        no fallback at query time, see "Embedding provider fallback")
       → vector search (match_chunks_vector RPC, cosine distance)  ─┐
       → full-text search (match_chunks_fts RPC, ts_rank)          ─┤→ RRF fuse (k=60)
       → top RERANK_TOP_N fused candidates → Cohere rerank-v4.0-pro

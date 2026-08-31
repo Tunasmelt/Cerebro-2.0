@@ -51,11 +51,13 @@ Next.js 15 (Vercel) → FastAPI (Render) → Supabase (Postgres + pgvector +
 storage + auth). Embeddings/generation/rerank are hosted API calls only —
 embeddings use Jina (`jina-embeddings-v5-omni`, chosen in Stage 1.4 over
 Voyage/Cohere for its broader multimodal span — text/image/audio/video/PDF
-in one shared vector space — plus an explicit free tier; Voyage
-(`voyage-multimodal-3.5`) and Cohere (`embed-v4.0`) remain viable
-documented alternatives if Jina's terms or limits ever stop working) —
-plus Cohere for reranking (`rerank-v4.0-pro`, adopted Stage 1.5),
-Gemini for generation. Observability: Langfuse
+in one shared vector space — plus an explicit free tier) as the primary
+provider, with an automatic fallback chain to Voyage (`voyage-multimodal-3.5`)
+then Cohere (`embed-v4.0`) added after Stage 1.4 (see
+architecture-and-security.md's "Embedding provider fallback" for the
+whole-job-before-first-chunk design that keeps a document's vectors in
+one provider's vector space) — plus Cohere for reranking
+(`rerank-v4.0-pro`, adopted Stage 1.5), Gemini for generation. Observability: Langfuse
 tracing on every retrieval span, RAGAS as a CI
 regression gate.
 
