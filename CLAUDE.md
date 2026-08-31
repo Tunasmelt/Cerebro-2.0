@@ -48,9 +48,14 @@ searchable, content does not, until unlocked).
 ## Stack
 
 Next.js 15 (Vercel) → FastAPI (Render) → Supabase (Postgres + pgvector +
-storage + auth). Embeddings/generation/rerank are hosted API calls only
-(Voyage or Cohere embed, a hosted reranker, Gemini for generation).
-Observability: Langfuse tracing on every retrieval span, RAGAS as a CI
+storage + auth). Embeddings/generation/rerank are hosted API calls only —
+embeddings use Jina (`jina-embeddings-v5-omni`, chosen in Stage 1.4 over
+Voyage/Cohere for its broader multimodal span — text/image/audio/video/PDF
+in one shared vector space — plus an explicit free tier; Voyage
+(`voyage-multimodal-3.5`) and Cohere (`embed-v4.0`) remain viable
+documented alternatives if Jina's terms or limits ever stop working) —
+plus a hosted reranker, Gemini for generation. Observability: Langfuse
+tracing on every retrieval span, RAGAS as a CI
 regression gate.
 
 ## Build order (see phases-and-gates.md for full detail)

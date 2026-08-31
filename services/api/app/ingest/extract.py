@@ -31,6 +31,8 @@ import httpx
 import pdfplumber
 from PIL import Image
 
+from app.ingest.concurrency import INGEST_LOCK
+
 TEXT_CHUNK_SIZE = 1000  # chars — not specified anywhere in the docs;
 # a plain, reasonable default for a first-pass chunker. Easy to retune,
 # not a load-bearing architectural number.
@@ -245,21 +247,22 @@ async def run_extract_job(*, user_jwt: str, document_id: str) -> bool:
     user_id = document["user_id"]
 
     try:
-        if mime == "application/pdf":
-            content = await storage.download_indexed(
-                user_jwt=user_jwt, path=document["storage_path"]
-            )
-            chunks = extract_pdf_chunks(content)
-        elif mime == "text/plain":
-            content = await storage.download_indexed(
-                user_jwt=user_jwt, path=document["storage_path"]
-            )
-            chunks = extract_text_chunks(content.decode("utf-8", errors="replace"))
-        else:
-            original = await storage.download_original(
-                user_jwt=user_jwt, path=document["original_storage_path"]
-            )
-            chunks = extract_image_chunks(original)
+        async with INGEST_LOCK:
+            if mime == "application/pdf":
+                content = await storage.download_indexed(
+                    user_jwt=user_jwt, path=document["storage_path"]
+                )
+                chunks = extract_pdf_chunks(content)
+            elif mime == "text/plain":
+                content = await storage.download_indexed(
+                    user_jwt=user_jwt, path=document["storage_path"]
+                )
+                chunks = extract_text_chunks(content.decode("utf-8", errors="replace"))
+            else:
+                original = await storage.download_original(
+                    user_jwt=user_jwt, path=document["original_storage_path"]
+                )
+                chunks = extract_image_chunks(original)
     except ExtractError as exc:
         await storage.mark_failed(
             user_jwt=user_jwt, document_id=document_id, error_code=exc.code

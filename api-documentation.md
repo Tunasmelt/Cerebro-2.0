@@ -14,8 +14,9 @@ doesn't exist yet.
 |---|---|---|
 | Supabase | Postgres, pgvector, storage, auth, RLS | https://supabase.com/docs |
 | Supabase — pgvector guide | halfvec, HNSW indexing | https://supabase.com/docs/guides/ai/vector-columns |
-| Voyage AI | Text + multimodal embeddings, rerank | https://docs.voyageai.com |
-| Cohere | Alternative embed + rerank provider | https://docs.cohere.com |
+| Jina AI | Text + multimodal (image/audio/video/PDF) embeddings — adopted Stage 1.4 | https://jina.ai/embeddings/ |
+| Voyage AI | Text + multimodal embeddings, rerank — documented fallback | https://docs.voyageai.com |
+| Cohere | Alternative embed + rerank provider — documented fallback | https://docs.cohere.com |
 | Google Gemini | Generation, vision captioning | https://ai.google.dev/gemini-api/docs |
 | Langfuse | Tracing, spans, cost/latency observability | https://langfuse.com/docs |
 | RAGAS | Faithfulness / relevancy / context-precision eval | https://docs.ragas.io |
