@@ -200,12 +200,22 @@ real logged-in user to mean anything.
 ### Stage 1.7 — Chat & SSE
 **Exit criteria:** SSE stream emits `retrieval` (real chunk/document
 IDs) before any `token` event, then tokens, then `citation` events, then
-`done`.
+`done`. Gemini's generation API confirmed against current docs before
+implementation, not from memory — the REST surface moved to a new
+`interactions` endpoint with a step-based SSE event model
+(`interaction.created` -> `step.start` -> `step.delta` -> `step.stop` ->
+`interaction.completed`), replacing the older
+`streamGenerateContent`/`candidates` shape; see
+architecture-and-security.md's "Chat pipeline" for the full design.
 **Tests:**
 - Automated: assert `retrieval` event timestamp precedes first `token`
   event timestamp on every run, not just typically.
 - Citation chips in a response resolve to real chunks — no citation
-  pointing at a chunk ID that wasn't actually retrieved.
+  pointing at a chunk ID that wasn't actually retrieved. Enforced by
+  construction, not just tested: the model is prompted to cite using
+  `[[chunk:<real-id>]]` markers carrying the chunk's actual id, and any
+  marker naming an id outside the retrieved set is dropped before ever
+  becoming a `citation` event, never trusted as-is.
 
 ### Stage 1.8 — Observability & evals
 **Exit criteria:** Langfuse traces every turn with the full span tree;

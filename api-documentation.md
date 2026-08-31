@@ -123,16 +123,28 @@ POST   /chat/sessions              Create a session.
 GET    /chat/sessions/{id}         History, including stored
                                     retrieved_chunk_ids per message — used
                                     to replay the graph pulse animation
-                                    for past conversations.
-POST   /chat/sessions/{id}/stream  SSE. Emits, in order:
+                                    for past conversations. (Not yet
+                                    implemented — Stage 1.7 built create +
+                                    stream only.)
+POST   /chat/sessions/{id}/stream  Body: { query }. SSE. Emits, in order:
                                       event: retrieval
                                         data: { chunk_ids, document_ids }
                                       event: token          (repeated)
+                                        data: { text }
                                       event: citation        (repeated)
+                                        data: { chunk_id, document_id }
                                       event: done
                                     The retrieval event MUST arrive before
                                     the first token event — the graph
-                                    pulse depends on this ordering.
+                                    pulse depends on this ordering; this
+                                    is structural (retrieve() is fully
+                                    awaited first), not just observed.
+                                    Citations come from the model citing
+                                    inline with [[chunk:<id>]] markers —
+                                    any marker naming an id outside the
+                                    real retrieved set is dropped, never
+                                    forwarded. 404 if the session doesn't
+                                    exist or isn't the caller's own.
 ```
 
 ### Graph
