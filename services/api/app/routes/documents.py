@@ -7,7 +7,7 @@ from app.core.documents_storage import (
     MAX_UPLOAD_BYTES,
     get_documents_storage,
 )
-from app.ingest.embed import run_embed_job
+from app.ingest.embed import RetryError, check_retry_eligible, run_embed_job
 from app.ingest.extract import run_extract_job
 from app.ingest.normalize import run_normalize_job
 
@@ -109,3 +109,22 @@ async def upload_confirm(request: Request, document_id: str, background_tasks: B
         },
         status_code=200,
     )
+
+
+@router.post("/api/v1/documents/{document_id}/retry-ingest")
+async def retry_ingest(request: Request, document_id: str, background_tasks: BackgroundTasks):
+    """Retries a document whose embed stage failed. Scoped to embed-stage
+    failures only — see check_retry_eligible's docstring for why
+    normalize/extract failures aren't auto-retried here yet."""
+    try:
+        await check_retry_eligible(
+            user_jwt=request.state.user_jwt, document_id=document_id
+        )
+    except RetryError as exc:
+        status_code = 404 if exc.code == "not_found" else 409
+        return _error(exc.code, exc.message, status_code)
+
+    background_tasks.add_task(
+        run_embed_job, user_jwt=request.state.user_jwt, document_id=document_id
+    )
+    return JSONResponse({"id": document_id, "state": "embedding"}, status_code=202)

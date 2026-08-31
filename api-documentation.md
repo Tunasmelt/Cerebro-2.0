@@ -67,6 +67,19 @@ POST   /documents/{id}/upload-confirm  No body. Server verifies the
                                     API) before advancing the job past
                                     uploading — the client's claim of
                                     completion is never trusted alone.
+POST   /documents/{id}/retry-ingest  No body. Retries a failed job, but
+                                    only if it failed during embed —
+                                    proxied by chunks already existing
+                                    for the document (extract completed).
+                                    404 if no job exists, 409 if the job
+                                    isn't in state=failed or failed before
+                                    any chunk was extracted (normalize/
+                                    extract retry isn't safe yet — see
+                                    embed.py's check_retry_eligible).
+                                    202 + state=embedding on success, with
+                                    the actual retry running in the
+                                    background, same pattern as
+                                    upload-confirm.
 GET    /documents                  List, cursor-paginated. Filterable by
                                     status (processing|ready|failed|
                                     sealed) — "uploading" is an
