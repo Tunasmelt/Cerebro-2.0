@@ -32,6 +32,7 @@ from app.core.documents_storage import (
     ConfirmedUpload,
     SignedUpload,
 )
+from app.ingest import extract as extract_module
 from app.ingest import normalize as normalize_module
 from app.main import app
 
@@ -100,6 +101,34 @@ class _NoOpNormalizeStorage:
         pass
 
 
+class _NoOpExtractStorage:
+    """Stage 1.2's text/plain pass-through means the no-op normalize
+    above now succeeds and chains into extract (Stage 1.3) too."""
+
+    async def get_document(self, *, user_jwt, document_id):
+        return {
+            "user_id": TEST_SUB,
+            "mime": "text/plain",
+            "storage_path": "unused",
+            "original_storage_path": "unused",
+        }
+
+    async def download_indexed(self, *, user_jwt, path):
+        return b""
+
+    async def download_original(self, *, user_jwt, path):
+        return b""
+
+    async def insert_chunks(self, **kwargs):
+        pass
+
+    async def mark_extracted(self, **kwargs):
+        pass
+
+    async def mark_failed(self, **kwargs):
+        pass
+
+
 @pytest.fixture
 def keypair():
     private_key = ec.generate_private_key(ec.SECP256R1())
@@ -118,10 +147,12 @@ def _wire_test_seams(keypair, fake_storage, monkeypatch):
     auth_module.set_jwks_client(_StubJWKClient(public_key))
     storage_module.set_documents_storage(fake_storage)
     normalize_module.set_normalize_storage(_NoOpNormalizeStorage())
+    extract_module.set_extract_storage(_NoOpExtractStorage())
     yield
     auth_module.set_jwks_client(None)
     storage_module.set_documents_storage(storage_module.SupabaseDocumentsStorage())
     normalize_module.set_normalize_storage(normalize_module.SupabaseNormalizeStorage())
+    extract_module.set_extract_storage(extract_module.SupabaseExtractStorage())
 
 
 @pytest.fixture

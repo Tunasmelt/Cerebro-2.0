@@ -7,9 +7,23 @@ from app.core.documents_storage import (
     MAX_UPLOAD_BYTES,
     get_documents_storage,
 )
+from app.ingest.extract import run_extract_job
 from app.ingest.normalize import run_normalize_job
 
 router = APIRouter()
+
+
+async def _run_ingest_pipeline(*, user_jwt: str, document_id: str) -> None:
+    """Chains normalize -> extract in-process, in one background task.
+    Each stage module stays independent (per architecture-and-security.md
+    §1's "could move to its own service" design intent) — this is the
+    only place that knows the pipeline order. Stops early if a stage
+    fails; Stage 1.4 owns the real resumable job-state-machine mechanics,
+    this is deliberately just sequential chaining for now."""
+    normalized = await run_normalize_job(user_jwt=user_jwt, document_id=document_id)
+    if not normalized:
+        return
+    await run_extract_job(user_jwt=user_jwt, document_id=document_id)
 
 
 def _error(code: str, message: str, status_code: int) -> JSONResponse:
@@ -77,7 +91,7 @@ async def upload_confirm(request: Request, document_id: str, background_tasks: B
     # confirm's background task queues behind this one rather than
     # running in parallel.
     background_tasks.add_task(
-        run_normalize_job,
+        _run_ingest_pipeline,
         user_jwt=request.state.user_jwt,
         document_id=document_id,
     )
