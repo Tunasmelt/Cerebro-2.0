@@ -147,6 +147,38 @@ pinning to `public` alone breaks vector search with "operator does not
 exist", caught live when the first real RPC call failed after applying
 too narrow a `search_path`.
 
+### Chat pipeline (detail, Stage 1.7)
+
+Generation uses Gemini's `interactions` REST endpoint (confirmed live
+before implementation — this is a newer step-based SSE surface, not the
+`streamGenerateContent`/`candidates` shape training data would default
+to assuming), model `gemini-3.7-flash`. Only `step.delta` events with
+`delta.type == "text"` are consumed; `interaction.created`/`step.start`/
+`step.stop`/`interaction.completed` are ignored — chat/stream.py just
+needs the raw token stream.
+
+```
+POST /chat/sessions/{id}/stream
+  → save user message
+  → retrieve(query)                          (Stage 1.5, unchanged)
+  → emit `retrieval` event                    ← before any generation call
+  → build system_instruction from retrieved chunks, each tagged
+    [[chunk:<real-id>]]
+  → stream Gemini interactions → emit `token` events as text deltas arrive
+  → extract_citations(full_text, retrieved_chunks)
+      any [[chunk:<id>]] marker naming an id NOT in the retrieved set
+      is dropped here — never forwarded as a citation, whether from a
+      model hallucination or a malformed marker
+  → emit one `citation` event per validated match
+  → save assistant message (content + real retrieved_chunk_ids, for
+    Phase 2's retrieval-replay animation)
+  → emit `done`
+```
+
+The `retrieval` event is yielded from a fully-awaited `retrieve()` call
+before the generate client is ever touched — the ordering is structural,
+not a race that happens to usually resolve correctly.
+
 ---
 
 ## 2. Data model
