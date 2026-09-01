@@ -83,7 +83,14 @@ class GeminiGenerateClient:
     async def stream_text(
         self, *, system_instruction: str, input_text: str
     ) -> AsyncIterator[str]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # 30s wasn't enough — a live production request hit
+        # httpx.ReadTimeout mid-generation (caught by a Phase 1 audit
+        # that actually made a real chat call, not just local testing,
+        # where every prior call finished in ~3s). 90s gives real
+        # headroom against network variance from Render; stream.py now
+        # also surfaces a real `error` SSE event if this still isn't
+        # enough, instead of the connection just dying silently.
+        async with httpx.AsyncClient(timeout=90.0) as client:
             async with client.stream(
                 "POST",
                 GEMINI_INTERACTIONS_URL,
