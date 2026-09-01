@@ -129,33 +129,82 @@ class SupabaseSealedStorage:
             for c in chunks
         ]
         async with httpx.AsyncClient() as client:
-            insert_resp = await client.post(
-                f"{self._supabase_url}/rest/v1/sealed_chunks",
-                headers=self._headers(user_jwt),
-                json=rows,
-            )
-            if insert_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="seal_insert_failed")
-
-            # Sealed content must never remain in the retrieval-path
-            # table — delete the plaintext/embedding rows this document
-            # had in `chunks` now that the ciphertext copy is stored.
-            delete_resp = await client.delete(
-                f"{self._supabase_url}/rest/v1/chunks",
-                headers=self._headers(user_jwt),
-                params={"document_id": f"eq.{document_id}"},
-            )
-            if delete_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="seal_chunk_delete_failed")
-
+            # Found live (Stage 3.5 adversarial testing): sealing a
+            # document whose background ingest pipeline (normalize ->
+            # extract -> embed, kicked off by upload-confirm) was still
+            # in flight let that pipeline finish AFTER this function
+            # returned, re-writing plaintext + a fresh embedding into
+            # `chunks` and overwriting status back to 'ready' — silently
+            # un-sealing content that had just been sealed. This single
+            # PostgREST PATCH with `status=eq.ready` in the filter is
+            # the fix: it atomically flips ready -> sealed at the
+            # database level, so it can only ever succeed once ingest
+            # has already finished writing every chunk for this
+            # document (mark_ready in embed.py is unconditionally the
+            # LAST write embed.py makes) — there is no window where
+            # ingest can still be mid-flight when this succeeds, and no
+            # window where a second concurrent seal attempt could also
+            # succeed (only one PATCH call can ever match a row still at
+            # status='ready').
             status_resp = await client.patch(
                 f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={"id": f"eq.{document_id}"},
+                headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+                params={"id": f"eq.{document_id}", "status": "eq.ready"},
                 json={"status": "sealed"},
             )
             if status_resp.status_code >= 400:
                 raise HTTPException(status_code=502, detail="seal_status_update_failed")
+            if not status_resp.json():
+                raise SealedStorageError(
+                    "not_ready",
+                    "Document must finish processing (status=ready) before it can be sealed",
+                )
+
+            # From here on, status is already 'sealed'. If either write
+            # below fails partway, the document must not be left stuck:
+            # sealed status with no compensating action would mean the
+            # `status=eq.ready` guard above can never match again, so a
+            # retry could never re-attempt this seal, and depending on
+            # which write failed the document could still hold plaintext
+            # in `chunks`, or the caller's ciphertext, or neither. On any
+            # failure here, best-effort revert status back to 'ready' so
+            # the caller can simply retry sealing.
+            try:
+                insert_resp = await client.post(
+                    f"{self._supabase_url}/rest/v1/sealed_chunks",
+                    headers=self._headers(user_jwt),
+                    json=rows,
+                )
+                if insert_resp.status_code >= 400:
+                    raise HTTPException(status_code=502, detail="seal_insert_failed")
+
+                # Sealed content must never remain in the retrieval-path
+                # table — delete the plaintext/embedding rows this
+                # document had in `chunks` now that the ciphertext copy
+                # is stored. Safe to do only now, after the status flip
+                # above proved ingest had already finished writing them.
+                delete_resp = await client.delete(
+                    f"{self._supabase_url}/rest/v1/chunks",
+                    headers=self._headers(user_jwt),
+                    params={"document_id": f"eq.{document_id}"},
+                )
+                if delete_resp.status_code >= 400:
+                    raise HTTPException(status_code=502, detail="seal_chunk_delete_failed")
+            except Exception:
+                # Best-effort — if this itself fails (network error), the
+                # caller must still see the ORIGINAL failure, not this
+                # one, so it's swallowed rather than left to replace the
+                # exception being propagated below.
+                try:
+                    await client.patch(
+                        f"{self._supabase_url}/rest/v1/documents",
+                        headers=self._headers(user_jwt),
+                        params={"id": f"eq.{document_id}", "status": "eq.sealed"},
+                        json={"status": "ready"},
+                    )
+                except Exception:
+                    pass
+                raise
 
     async def _first_sealed_chunk(
         self, client: httpx.AsyncClient, user_jwt: str, document_id: str

@@ -25,20 +25,25 @@ class SealBody(BaseModel):
 @router.post("/api/v1/documents/{document_id}/seal")
 async def seal_document(request: Request, document_id: str, body: SealBody):
     storage = get_sealed_storage()
-    await storage.seal_document(
-        user_jwt=request.state.user_jwt,
-        user_id=request.state.user["sub"],
-        document_id=document_id,
-        chunks=[
-            ChunkCiphertext(
-                ordinal=c.ordinal,
-                content_ciphertext_b64=c.content_ciphertext,
-                salt_b64=c.salt,
-                nonce_b64=c.nonce,
-            )
-            for c in body.chunks
-        ],
-    )
+    try:
+        await storage.seal_document(
+            user_jwt=request.state.user_jwt,
+            user_id=request.state.user["sub"],
+            document_id=document_id,
+            chunks=[
+                ChunkCiphertext(
+                    ordinal=c.ordinal,
+                    content_ciphertext_b64=c.content_ciphertext,
+                    salt_b64=c.salt,
+                    nonce_b64=c.nonce,
+                )
+                for c in body.chunks
+            ],
+        )
+    except SealedStorageError as exc:
+        if exc.code == "not_ready":
+            return _error(exc.code, exc.message, 409)
+        raise
     return JSONResponse({"id": document_id, "status": "sealed"}, status_code=200)
 
 
