@@ -1,0 +1,80 @@
+.page {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: #0a0a0f;
+  overflow: hidden;
+}
+
+.canvasWrap {
+  width: 100%;
+  height: 100%;
+}
+
+.sidePanel {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 320px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: #13131a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 20px;
+  color: #f4f4f5;
+}
+
+.sidePanelTitle {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  word-break: break-word;
+}
+
+.closeButton {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: #a1a1aa;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.chunkItem {
+  font-size: 13px;
+  color: #a1a1aa;
+  line-height: 1.5;
+  padding: 10px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.chunkItem:first-of-type {
+  border-top: none;
+}
+
+.legend {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  background: #13131a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #a1a1aa;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.emptyState {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #a1a1aa;
+  font-size: 14px;
+  text-align: center;
+}
