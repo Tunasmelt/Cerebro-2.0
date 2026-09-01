@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app.core.documents_storage import (
     ALLOWED_MIME_TYPES,
     MAX_UPLOAD_BYTES,
+    DocumentsStorageError,
     get_documents_storage,
 )
 from app.graph.cluster import place_new_document
@@ -154,3 +155,69 @@ async def retry_ingest(request: Request, document_id: str, background_tasks: Bac
         document_id=document_id,
     )
     return JSONResponse({"id": document_id, "state": "embedding"}, status_code=202)
+
+
+@router.get("/api/v1/documents/{document_id}")
+async def get_document(request: Request, document_id: str):
+    """Stage 3.6 — ingest_state/last_error are folded in directly rather
+    than a separate GET /ingest-jobs/{id}: the frontend only ever has a
+    document_id to poll with, never a raw ingest_jobs.id, so a second
+    endpoint keyed by a different id space would add surface without
+    adding capability."""
+    storage = get_documents_storage()
+    document = await storage.get_document(
+        user_jwt=request.state.user_jwt, document_id=document_id
+    )
+    if document is None:
+        return _error("not_found", "Document not found", 404)
+    return JSONResponse(document, status_code=200)
+
+
+async def _signed_url_response(request: Request, document_id: str, variant: str) -> JSONResponse:
+    storage = get_documents_storage()
+    try:
+        url = await storage.get_signed_url(
+            user_jwt=request.state.user_jwt, document_id=document_id, variant=variant
+        )
+    except DocumentsStorageError as exc:
+        if exc.code == "not_found":
+            return _error(exc.code, exc.message, 404)
+        if exc.code == "document_sealed":
+            return _error(exc.code, exc.message, 423)
+        if exc.code == "not_available":
+            return _error(exc.code, exc.message, 404)
+        raise
+    return JSONResponse({"url": url}, status_code=200)
+
+
+@router.get("/api/v1/documents/{document_id}/download")
+async def download_document(request: Request, document_id: str):
+    """Signed URL to the normalized (indexed) file. A sealed document
+    rejects this with 423 — sealing (Stage 3.3) only ever removed
+    plaintext from `chunks`, never re-encrypted the Storage object
+    itself, so a signed URL here would bypass the passphrase entirely
+    if not blocked explicitly."""
+    return await _signed_url_response(request, document_id, "indexed")
+
+
+@router.get("/api/v1/documents/{document_id}/original")
+async def download_original(request: Request, document_id: str):
+    """Same sealed-document rejection as /download, same reasoning."""
+    return await _signed_url_response(request, document_id, "original")
+
+
+@router.delete("/api/v1/documents/{document_id}")
+async def delete_document(request: Request, document_id: str):
+    """Deletes both Storage objects (best-effort) then the documents
+    row, which cascades chunks/sealed_chunks/ingest_jobs/
+    document_clusters/document_edges/unlock_claims via each table's own
+    FK — no new migration needed, every cascade was already declared.
+    Works on sealed documents too; deleting only requires ownership
+    (RLS), never the passphrase."""
+    storage = get_documents_storage()
+    deleted = await storage.delete_document(
+        user_jwt=request.state.user_jwt, document_id=document_id
+    )
+    if not deleted:
+        return _error("not_found", "Document not found", 404)
+    return JSONResponse({"id": document_id, "deleted": True}, status_code=200)

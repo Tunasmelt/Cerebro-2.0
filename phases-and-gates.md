@@ -726,6 +726,38 @@ With that fixed, the actual gate:
 All test documents and their sealed/unlock artifacts cleaned up via
 direct SQL after confirming full cascade cleanup.
 
+### Stage 3.6 — Document lifecycle completion (single fetch, download, delete)
+Found by a post-gate audit of `api-documentation.md` against the real
+routes in `services/api/app/routes/`: four documented Phase 1 endpoints
+were never built (`GET /documents/{id}`, `GET /documents/{id}/download`,
+`GET /documents/{id}/original`, `DELETE /documents/{id}`), and the real
+`POST /documents/{id}/unlock` was missing from the docs entirely. The
+product currently has no way to fetch a single document's detail, open
+either stored file, or delete a document at all.
+
+**Exit criteria:**
+- `GET /documents/{id}` returns metadata + status + ingest state/error,
+  scoped to the caller (404 for another user's document, RLS).
+- `GET /documents/{id}/download` and `GET /documents/{id}/original`
+  return short-lived signed URLs for the caller's own document; **a
+  sealed document rejects both with `423 document_sealed`, never a
+  signed URL** — sealing so far only ever removed plaintext from the
+  `chunks` table (Stage 3.3), never touched the underlying Storage
+  object, so without this check building a download route would be a
+  straight bypass of everything Stages 3.1–3.5 built.
+- `DELETE /documents/{id}` removes both Storage objects (best-effort)
+  and the `documents` row, which cascades every dependent table via
+  existing FKs — no new migration needed, every cascade was already
+  declared when each table was created.
+**Tests:** ownership scoping (404, not 403) on all four routes; sealed
+download/original rejection is the load-bearing test here, verified
+both at the route level (fake storage) and live against a real sealed
+document on production; delete-cascade verified against a fake httpx
+transport asserting both Storage delete calls happen before the
+`documents` row delete, plus a live production round-trip confirming
+`chunks`/`sealed_chunks`/`ingest_jobs`/`unlock_claims` rows are actually
+gone afterward (not just assumed from the FK declaration).
+
 ---
 
 ## Phase 4 — Kanban, todo, token playground *(planned — not built this window)*
