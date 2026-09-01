@@ -66,7 +66,14 @@ POST   /documents/{id}/upload-confirm  No body. Server verifies the
                                     (existence + size via Supabase admin
                                     API) before advancing the job past
                                     uploading — the client's claim of
-                                    completion is never trusted alone.
+                                    completion is never trusted alone. A
+                                    successful embed at the end of this
+                                    background pipeline triggers Stage
+                                    2.5's nearest-centroid graph
+                                    placement automatically (no separate
+                                    call needed) — see
+                                    architecture-and-security.md's
+                                    "Incremental clustering" section.
 POST   /documents/{id}/retry-ingest  No body. Retries a failed job, but
                                     only if it failed during embed —
                                     proxied by chunks already existing
@@ -79,7 +86,8 @@ POST   /documents/{id}/retry-ingest  No body. Retries a failed job, but
                                     202 + state=embedding on success, with
                                     the actual retry running in the
                                     background, same pattern as
-                                    upload-confirm.
+                                    upload-confirm — including the same
+                                    graph-placement trigger on success.
 GET    /documents                  List, cursor-paginated. Filterable by
                                     status (processing|ready|failed|
                                     sealed) — "uploading" is an
