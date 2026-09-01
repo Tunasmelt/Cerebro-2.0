@@ -209,6 +209,32 @@ async def test_generation_failure_yields_an_error_event_not_a_dead_stream():
 
 
 @pytest.mark.asyncio
+async def test_error_message_falls_back_to_exception_type_when_str_is_empty():
+    # Regression: a real production httpx.ReadTimeout has an empty
+    # str(exc) (no message was ever set on it), which surfaced as
+    # {"message": ""} to the client — useless for debugging. The
+    # exception's type name is now used as a fallback.
+    class _FakeGenerateClientEmptyError:
+        async def stream_text(self, *, system_instruction, input_text):
+            raise TimeoutError()
+            yield  # pragma: no cover - makes this an async generator
+
+    _wire_retrieve([_chunk("c1111111-1111-1111-1111-111111111111", "relevant content")])
+    set_generate_client(_FakeGenerateClientEmptyError())
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    events = await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query="q"
+        )
+    )
+
+    error_event = events[-1]
+    assert error_event[0] == "error"
+    assert error_event[1]["message"] == "TimeoutError"
+
+
+@pytest.mark.asyncio
 async def test_generation_failure_does_not_persist_a_partial_assistant_message():
     _wire_retrieve([_chunk("c1111111-1111-1111-1111-111111111111", "relevant content")])
     set_generate_client(_FakeGenerateClient(["partial ", "more"], fail_after=1))
