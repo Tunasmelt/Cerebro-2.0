@@ -485,12 +485,30 @@ assert the table exists, has no embedding column, has no FK either
 direction with `chunks`, has RLS enabled, and that `retrieve.py` never
 references `sealed_chunks`.
 
-### Stage 3.2 — Client-side crypto
+### Stage 3.2 — Client-side crypto ✅
 **Exit criteria:** WebCrypto derives a key from passphrase (Argon2id),
 AES-256-GCM encrypts file bytes client-side.
 **Tests:** Known-answer test vectors confirm correct encrypt/decrypt
 round-trip; confirm no derived key or plaintext passphrase appears in any
 network request body except the intentional per-request unlock use.
+**Done:** `apps/web/src/lib/crypto/seal.ts` — `deriveKey` runs Argon2id
+(via `hash-wasm`, since SubtleCrypto itself only ships PBKDF2/HKDF/ECDH
+for key derivation, no Argon2id) at 64 MiB / 3 iterations / 1 lane
+(above OWASP's Argon2id baseline), imports the result as a
+**non-extractable** AES-256-GCM `CryptoKey` — `crypto.subtle.exportKey`
+on it is asserted to reject. `sealBytes`/`unsealBytes` wrap
+encrypt/decrypt with a fresh salt and nonce generated per call. No
+`fetch` call exists anywhere in this module (asserted directly in
+tests) — this is Stage 3.2's half of the "never appears in any network
+request body" requirement; the other half (the unlock endpoint itself)
+is Stage 3.3's. First frontend unit-test setup in this repo:
+`vitest` + `apps/web/src/lib/crypto/seal.test.ts` (10 tests — determinism,
+salt-scoping, non-extractability, a fixed known-answer vector pinning
+the Argon2id parameters, encrypt/decrypt round-trip incl. empty/binary
+content, wrong-passphrase and tampered-ciphertext rejection, no-fetch),
+wired into CI as a new step in the existing `web (lint + build)` job
+(kept that exact job name — it's a required branch-protection status
+check, renaming it would break the merge gate).
 
 ### Stage 3.3 — Seal/unseal API & unlock claims
 **Exit criteria:** Unlock issues a 15-minute session-scoped claim; expiry
