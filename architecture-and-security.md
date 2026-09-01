@@ -345,6 +345,59 @@ could drift if a document were ever deleted; chunks from the same
 document collapse to one entry so a message with several chunks from
 one document doesn't produce a duplicate pulse.
 
+### Incremental clustering (detail, Stage 2.5)
+
+Stage 2.1's full recompute is safe to keep calling repeatedly, but
+reshuffles every cluster's 2D position on every run — fine after a
+manual `/graph/recluster`, disruptive if it fired after every single
+upload. Stage 2.5 adds a cheaper path for the common case (one new
+document, existing clusters are still meaningful) and falls back to the
+existing full recompute once enough incremental placements have
+accumulated that the cluster set is presumably stale.
+
+```
+embed job succeeds
+  → place_new_document(user_jwt, user_id, document_id)
+      no clusters exist yet          → "unclustered" (nothing to join)
+      incremental_count + 1 >= 10    → run_clustering_job (full recompute),
+                                        return "full_recluster"
+      else                           → nearest-centroid placement:
+                                        mean-pool this doc's chunks into a
+                                        centroid, find_nearest_cluster()
+                                        against clusters.centroid_embedding
+                                        (real 1024-dim, NOT centroid_x/y),
+                                        insert one document_clusters row
+                                        with placement_method='incremental'
+                                        → "incremental"
+```
+
+`clusters.centroid_embedding` persists the same high-dim centroid
+`kmeans()` already computes internally every full recluster — previously
+discarded after the 2D projection step, now kept so "which cluster is
+this new document actually closest to" can be answered with real
+distance instead of the lossy PCA projection (same principle as Stage
+2.2's kNN edges using real centroids, not `centroid_x`/`centroid_y`).
+
+`document_clusters.placement_method` ('kmeans' | 'incremental')
+distinguishes a row written by the last full recluster from one written
+by incremental placement — `count_incremental_placements` counts rows
+with `placement_method='incremental'` for the threshold check
+(`INCREMENTAL_RECLUSTER_THRESHOLD = 10`, an easy-to-retune default in
+the same category as `choose_k`'s heuristic). A full recluster resets
+the count implicitly: every row it writes is `placement_method='kmeans'`
+again.
+
+Incremental placement inserts exactly one new `document_clusters` row
+and never touches `clusters.centroid_x/centroid_y` or any other
+document's row — "uploading one document doesn't move unrelated nodes"
+holds by construction, not by care taken not to break it. Runs as the
+last step of the ingest pipeline (`documents.py`'s `_embed_then_place`,
+reached from both `upload-confirm`'s pipeline and `retry-ingest`) after
+a successful embed — best-effort, logged and degraded to
+`"unclustered"` on failure rather than blocking or crashing the
+background task, same posture as `run_clustering_job`. No new route: a
+new upload naturally flows through the existing ingest background task.
+
 ---
 
 ## 2. Data model
@@ -383,9 +436,13 @@ sealed_chunks (                 -- Phase 3, isolated from chunks
 
 clusters (
   id, user_id, label, centroid_x, centroid_y,
-  method, computed_at
+  method, computed_at,
+  centroid_embedding halfvec(1024)  -- Stage 2.5, nullable (predates migration)
 )
-document_clusters ( document_id, cluster_id, distance )
+document_clusters (
+  document_id, cluster_id, user_id, distance,
+  placement_method  -- Stage 2.5: 'kmeans' | 'incremental', default 'kmeans'
+)
 document_edges (                -- Stage 2.2, undocumented before this
   document_id, neighbor_document_id, distance, rank  -- rank 1..3
 )

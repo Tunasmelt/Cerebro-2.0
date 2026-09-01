@@ -87,6 +87,7 @@ class SupabaseGraphStorage:
         user_jwt: str,
         user_id: str,
         cluster_positions: list[tuple[float, float]],
+        cluster_centroid_embeddings: list[list[float]],
         assignments: list[ClusterAssignment],
         edges: list[Edge],
     ) -> None:
@@ -118,7 +119,7 @@ class SupabaseGraphStorage:
                 return
 
             cluster_ids: list[str] = []
-            for x, y in cluster_positions:
+            for (x, y), centroid_embedding in zip(cluster_positions, cluster_centroid_embeddings):
                 insert_resp = await client.post(
                     f"{self._supabase_url}/rest/v1/clusters",
                     headers={
@@ -126,7 +127,12 @@ class SupabaseGraphStorage:
                         "Content-Type": "application/json",
                         "Prefer": "return=representation",
                     },
-                    json={"user_id": user_id, "centroid_x": x, "centroid_y": y},
+                    json={
+                        "user_id": user_id,
+                        "centroid_x": x,
+                        "centroid_y": y,
+                        "centroid_embedding": centroid_embedding,
+                    },
                 )
                 if insert_resp.status_code >= 400:
                     raise GraphStorageError("insert_cluster_failed", insert_resp.text)
@@ -246,3 +252,69 @@ class SupabaseGraphStorage:
         if chunks_resp.status_code >= 400:
             raise GraphStorageError("fetch_chunks_failed", chunks_resp.text)
         return chunks_resp.json()
+
+    async def get_clusters_with_centroids(self, *, user_jwt: str) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/clusters",
+                headers=self._headers(user_jwt),
+                params={"select": "id,centroid_embedding", "centroid_embedding": "not.is.null"},
+            )
+        if response.status_code >= 400:
+            raise GraphStorageError("fetch_clusters_failed", response.text)
+        return [
+            {"id": row["id"], "centroid_embedding": _parse_embedding(row["centroid_embedding"])}
+            for row in response.json()
+        ]
+
+    async def count_incremental_placements(self, *, user_jwt: str) -> int:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/document_clusters",
+                headers=self._headers(user_jwt),
+                params={"select": "document_id", "placement_method": "eq.incremental"},
+            )
+        if response.status_code >= 400:
+            raise GraphStorageError("count_incremental_failed", response.text)
+        return len(response.json())
+
+    async def get_document_chunk_embeddings(
+        self, *, user_jwt: str, document_id: str
+    ) -> list[list[float]]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/chunks",
+                headers=self._headers(user_jwt),
+                params={"document_id": f"eq.{document_id}", "select": "embedding"},
+            )
+        if response.status_code >= 400:
+            raise GraphStorageError("fetch_document_chunks_failed", response.text)
+        return [
+            parsed
+            for row in response.json()
+            if (parsed := _parse_embedding(row.get("embedding"))) is not None
+        ]
+
+    async def insert_incremental_assignment(
+        self,
+        *,
+        user_jwt: str,
+        user_id: str,
+        document_id: str,
+        cluster_id: str,
+        distance: float,
+    ) -> None:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self._supabase_url}/rest/v1/document_clusters",
+                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                json={
+                    "document_id": document_id,
+                    "cluster_id": cluster_id,
+                    "user_id": user_id,
+                    "distance": distance,
+                    "placement_method": "incremental",
+                },
+            )
+        if response.status_code >= 400:
+            raise GraphStorageError("insert_incremental_assignment_failed", response.text)

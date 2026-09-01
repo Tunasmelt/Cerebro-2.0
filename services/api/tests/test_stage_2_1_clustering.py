@@ -236,11 +236,21 @@ class _FakeGraphStorage:
     async def get_ready_documents_with_chunk_embeddings(self, *, user_jwt):
         return self.documents
 
-    async def replace_graph(self, *, user_jwt, user_id, cluster_positions, assignments, edges):
+    async def replace_graph(
+        self,
+        *,
+        user_jwt,
+        user_id,
+        cluster_positions,
+        cluster_centroid_embeddings,
+        assignments,
+        edges,
+    ):
         self.replace_calls.append(
             {
                 "user_id": user_id,
                 "cluster_positions": cluster_positions,
+                "cluster_centroid_embeddings": cluster_centroid_embeddings,
                 "assignments": assignments,
                 "edges": edges,
             }

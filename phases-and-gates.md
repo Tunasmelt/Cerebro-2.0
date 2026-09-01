@@ -379,12 +379,49 @@ list them for a "reopen a past conversation" picker.
 ### Stage 2.5 — Incremental clustering
 **Exit criteria:** New uploads get nearest-centroid placement without
 triggering a full re-cluster; full re-cluster runs on schedule/threshold
-only.
+only. `clusters.centroid_embedding` (real 1024-dim halfvec, migration
+0010) persists the same high-dim centroid `kmeans()` already computes
+every full recluster, so a new document's nearest cluster is chosen by
+real embedding distance, not the lossy 2D PCA projection Stage 2.1 uses
+for rendering — same principle as Stage 2.2's kNN edges.
+`document_clusters.placement_method` ('kmeans' vs 'incremental')
+distinguishes a full-recluster row from a single incrementally-placed
+one; `INCREMENTAL_RECLUSTER_THRESHOLD = 10` (reasonable, easy-to-retune
+default, same category as `choose_k`'s heuristic and retrieve.py's
+`RRF_K`) is how many incremental placements accumulate before the next
+upload triggers a full recluster instead. Placement runs automatically
+as the last step of the ingest pipeline after a successful embed (and
+after a successful retry-ingest) — no new route was needed.
 **Tests:**
+- `find_nearest_cluster` (pure function): picks the real nearest
+  centroid by embedding distance; returns `None` for an empty cluster
+  list.
+- `place_new_document`: returns `"unclustered"` when no clusters exist
+  yet or the document has no chunk embeddings; returns `"incremental"`
+  and inserts exactly one `document_clusters` row (nearest cluster,
+  correct distance) without touching any other row when under
+  threshold; returns `"full_recluster"` and defers to
+  `run_clustering_job` when the threshold is hit; failures are logged
+  and degrade to `"unclustered"` rather than crashing the background
+  task (same pattern as Stage 2.1's `run_clustering_job` failure
+  handling).
+- Storage-level: `get_clusters_with_centroids` and
+  `get_document_chunk_embeddings` correctly parse PostgREST's
+  string-serialized `halfvec` values (same lesson as Stage 2.1's
+  `_parse_embedding`); `count_incremental_placements` and
+  `insert_incremental_assignment` verified against a fake httpx
+  transport.
 - Uploading one new document does not change the position of unrelated
-  existing nodes.
+  existing nodes — true by construction (incremental placement only
+  ever inserts one new `document_clusters` row; it never touches
+  `clusters.centroid_x/centroid_y` or any other document's row), backed
+  by the unit test above; a fully live multi-upload confirmation is
+  still yours to run once real documents exist.
 - Forcing the re-cluster threshold does reposition the graph as
-  expected.
+  expected — unit-verified (`full_recluster` path invokes
+  `run_clustering_job`, which does reposition every cluster, exercised
+  in Stage 2.1's tests); live confirmation requires uploading 10+ real
+  documents for one user, yours to run.
 
 ### Phase 2 Gate
 All stages 2.1–2.5 pass their tests, **and** you confirm live:

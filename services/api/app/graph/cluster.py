@@ -19,7 +19,20 @@ category as retrieve.py's RRF_K/RELEVANCE_FLOOR.
 This stage does a full re-cluster every run — every document's
 centroid, all at once, k-means from scratch. Stage 2.5 adds incremental
 nearest-centroid placement for new uploads so a single new document
-doesn't reshuffle the whole graph; that's explicitly out of scope here.
+doesn't reshuffle the whole graph.
+
+Stage 2.5's placement uses each cluster's real 1024-dim centroid
+(`clusters.centroid_embedding`), not the 2D PCA-projected position
+(`centroid_x`/`centroid_y`) — the same "don't use the lossy projection
+for real distance" principle as Stage 2.2's kNN edges. A new document
+is assigned to its nearest existing cluster by real embedding distance
+without moving that cluster's stored 2D position or touching any other
+document's row — that's what makes "does not change the position of
+unrelated existing nodes" true by construction, not by carefully not
+breaking it. After INCREMENTAL_RECLUSTER_THRESHOLD documents have been
+placed this way since the last full recluster, the next one triggers a
+full recluster instead (which also resets the threshold, since every
+row becomes a fresh 'kmeans' placement again).
 """
 import logging
 import math
@@ -132,6 +145,7 @@ class Edge:
 @dataclass
 class ClusterResult:
     cluster_positions: list[tuple[float, float]]  # index-aligned with cluster labels
+    cluster_centroid_embeddings: list[list[float]]  # index-aligned, real 1024-dim
     assignments: list[ClusterAssignment]
     edges: list[Edge]
 
@@ -174,7 +188,9 @@ def cluster_documents(
     callers should already have filtered to status=ready documents."""
     clusterable = [d for d in documents if d["chunk_embeddings"]]
     if not clusterable:
-        return ClusterResult(cluster_positions=[], assignments=[], edges=[])
+        return ClusterResult(
+            cluster_positions=[], cluster_centroid_embeddings=[], assignments=[], edges=[]
+        )
 
     centroids_by_doc = np.array(
         [compute_document_centroid(d["chunk_embeddings"]) for d in clusterable]
@@ -200,6 +216,7 @@ def cluster_documents(
     )
     return ClusterResult(
         cluster_positions=[(float(x), float(y)) for x, y in positions],
+        cluster_centroid_embeddings=[c.tolist() for c in cluster_centroids],
         assignments=assignments,
         edges=edges,
     )
@@ -215,6 +232,7 @@ class GraphStorage(Protocol):
         user_jwt: str,
         user_id: str,
         cluster_positions: list[tuple[float, float]],
+        cluster_centroid_embeddings: list[list[float]],
         assignments: list[ClusterAssignment],
         edges: list[Edge],
     ) -> None: ...
@@ -223,6 +241,22 @@ class GraphStorage(Protocol):
     async def get_node_chunks(
         self, *, user_jwt: str, document_id: str
     ) -> list[dict[str, Any]] | None: ...
+    async def get_clusters_with_centroids(
+        self, *, user_jwt: str
+    ) -> list[dict[str, Any]]: ...
+    async def count_incremental_placements(self, *, user_jwt: str) -> int: ...
+    async def get_document_chunk_embeddings(
+        self, *, user_jwt: str, document_id: str
+    ) -> list[list[float]]: ...
+    async def insert_incremental_assignment(
+        self,
+        *,
+        user_jwt: str,
+        user_id: str,
+        document_id: str,
+        cluster_id: str,
+        distance: float,
+    ) -> None: ...
 
 
 _storage: GraphStorage | None = None
@@ -267,6 +301,7 @@ async def run_clustering_job(*, user_jwt: str, user_id: str) -> int:
             user_jwt=user_jwt,
             user_id=user_id,
             cluster_positions=result.cluster_positions,
+            cluster_centroid_embeddings=result.cluster_centroid_embeddings,
             assignments=result.assignments,
             edges=result.edges,
         )
@@ -274,3 +309,76 @@ async def run_clustering_job(*, user_jwt: str, user_id: str) -> int:
     except Exception:
         logger.exception("run_clustering_job failed for user %s", user_id)
         return -1
+
+
+# Reasonable, easy-to-retune default — not specified anywhere in the
+# docs, same category as choose_k's heuristic and retrieve.py's RRF_K.
+INCREMENTAL_RECLUSTER_THRESHOLD = 10
+
+
+def find_nearest_cluster(
+    document_centroid: np.ndarray, clusters: list[dict[str, Any]]
+) -> tuple[str, float] | None:
+    """clusters: [{"id": str, "centroid_embedding": list[float]}, ...].
+    Returns (cluster_id, distance) for the nearest one, or None if
+    `clusters` is empty. Pure function — no I/O, unit-testable without
+    numpy fixtures baked into storage mocks."""
+    if not clusters:
+        return None
+    best_id = clusters[0]["id"]
+    best_distance = float("inf")
+    for c in clusters:
+        centroid = np.array(c["centroid_embedding"], dtype=np.float64)
+        distance = float(np.linalg.norm(document_centroid - centroid))
+        if distance < best_distance:
+            best_distance = distance
+            best_id = c["id"]
+    return best_id, best_distance
+
+
+async def place_new_document(
+    *, user_jwt: str, user_id: str, document_id: str
+) -> str:
+    """Returns "unclustered" (no clusters exist yet to join — same state
+    a document sits in before any full recluster has ever run),
+    "incremental" (assigned to its nearest existing cluster, nothing
+    else touched), or "full_recluster" (the incremental-placement
+    threshold was hit, so a full recompute ran instead — which also
+    places this document, as part of clustering every ready document).
+
+    Runs as a background step after embed completes (documents.py) —
+    same "no client waiting, log failures explicitly" reasoning as
+    run_clustering_job."""
+    try:
+        storage = get_graph_storage()
+        clusters = await storage.get_clusters_with_centroids(user_jwt=user_jwt)
+        if not clusters:
+            return "unclustered"
+
+        incremental_count = await storage.count_incremental_placements(user_jwt=user_jwt)
+        if incremental_count + 1 >= INCREMENTAL_RECLUSTER_THRESHOLD:
+            await run_clustering_job(user_jwt=user_jwt, user_id=user_id)
+            return "full_recluster"
+
+        chunk_embeddings = await storage.get_document_chunk_embeddings(
+            user_jwt=user_jwt, document_id=document_id
+        )
+        if not chunk_embeddings:
+            return "unclustered"
+        document_centroid = compute_document_centroid(chunk_embeddings)
+
+        nearest = find_nearest_cluster(document_centroid, clusters)
+        if nearest is None:
+            return "unclustered"
+        cluster_id, distance = nearest
+        await storage.insert_incremental_assignment(
+            user_jwt=user_jwt,
+            user_id=user_id,
+            document_id=document_id,
+            cluster_id=cluster_id,
+            distance=distance,
+        )
+        return "incremental"
+    except Exception:
+        logger.exception("place_new_document failed for document %s", document_id)
+        return "unclustered"
