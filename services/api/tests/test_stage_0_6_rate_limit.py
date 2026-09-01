@@ -71,15 +71,19 @@ def fake_clock():
 
 
 class _FakeDocumentsStorage:
-    """Just enough to let upload-init's real handler succeed without any
-    network — this test is about the rate limiter, not upload logic
-    (already covered by test_stage_1_1_upload.py)."""
+    """Just enough to let upload-init's and GET /documents/{id}'s real
+    handlers succeed without any network — this test is about the rate
+    limiter, not document logic (already covered by
+    test_stage_1_1_upload.py / test_stage_3_6_document_lifecycle.py)."""
 
     async def authorize(self, *, user_jwt, user_id, title, mime):
         return SignedUpload(document_id="doc-x", upload_url="https://fake/doc-x")
 
     async def confirm(self, *, user_jwt, user_id, document_id):
         raise NotImplementedError
+
+    async def get_document(self, *, user_jwt, document_id):
+        return {"id": document_id, "title": "x", "status": "ready"}
 
 
 class _FakeGraphStorage:

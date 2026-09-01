@@ -45,6 +45,10 @@ ALLOWED_MIME_TYPES = {
     "image/webp": "webp",
 }
 
+SIGNED_URL_TTL_SECONDS = 60  # short-lived — a fresh signed URL is one
+# API call away for a legitimate request; there's no reason for a link
+# handed to the browser to remain valid longer than it takes to use it.
+
 
 @dataclass
 class Document:
@@ -69,6 +73,13 @@ class ConfirmedUpload:
     size_bytes: int
 
 
+class DocumentsStorageError(Exception):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
 class DocumentsStorage(Protocol):
     async def authorize(
         self, *, user_jwt: str, user_id: str, title: str, mime: str
@@ -81,6 +92,16 @@ class DocumentsStorage(Protocol):
     async def list_documents(
         self, *, user_jwt: str, user_id: str
     ) -> list[dict[str, Any]]: ...
+
+    async def get_document(
+        self, *, user_jwt: str, document_id: str
+    ) -> dict[str, Any] | None: ...
+
+    async def get_signed_url(
+        self, *, user_jwt: str, document_id: str, variant: str
+    ) -> str: ...
+
+    async def delete_document(self, *, user_jwt: str, document_id: str) -> bool: ...
 
 
 class SupabaseDocumentsStorage:
@@ -230,6 +251,112 @@ class SupabaseDocumentsStorage:
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="documents_list_failed")
         return response.json()
+
+    async def get_document(
+        self, *, user_jwt: str, document_id: str
+    ) -> dict[str, Any] | None:
+        async with httpx.AsyncClient() as client:
+            doc_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers=self._headers(user_jwt),
+                params={
+                    "id": f"eq.{document_id}",
+                    "select": "id,title,mime,size_bytes,status,created_at",
+                },
+            )
+            if doc_resp.status_code >= 400:
+                raise HTTPException(status_code=502, detail="document_lookup_failed")
+            doc_rows = doc_resp.json()
+            if not doc_rows:
+                return None
+            document = doc_rows[0]
+
+            job_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/ingest_jobs",
+                headers=self._headers(user_jwt),
+                params={
+                    "document_id": f"eq.{document_id}",
+                    "select": "state,last_error",
+                },
+            )
+            if job_resp.status_code >= 400:
+                raise HTTPException(status_code=502, detail="ingest_job_lookup_failed")
+            job_rows = job_resp.json()
+
+        document["ingest_state"] = job_rows[0]["state"] if job_rows else None
+        document["last_error"] = job_rows[0]["last_error"] if job_rows else None
+        return document
+
+    async def get_signed_url(
+        self, *, user_jwt: str, document_id: str, variant: str
+    ) -> str:
+        bucket, path_column = (
+            ("indexed", "storage_path")
+            if variant == "indexed"
+            else ("originals", "original_storage_path")
+        )
+        async with httpx.AsyncClient() as client:
+            document = await self._get_document(client, user_jwt, document_id)
+            if document is None:
+                raise DocumentsStorageError("not_found", "Document not found")
+            # Sealing (Stage 3.3) only ever removed plaintext from
+            # `chunks` — the underlying Storage object was never
+            # re-encrypted. A signed URL bypasses the passphrase
+            # entirely, so this has to fail closed here; there is no
+            # unlock-claim mechanism that gates raw Storage bytes yet.
+            if document["status"] == "sealed":
+                raise DocumentsStorageError(
+                    "document_sealed", "This document is sealed and cannot be downloaded"
+                )
+            path = document.get(path_column)
+            if not path:
+                raise DocumentsStorageError(
+                    "not_available", f"No {variant} file available for this document yet"
+                )
+
+            sign_resp = await client.post(
+                f"{self._supabase_url}/storage/v1/object/sign/{bucket}/{path}",
+                headers=self._headers(user_jwt),
+                json={"expiresIn": SIGNED_URL_TTL_SECONDS},
+            )
+            if sign_resp.status_code >= 400:
+                raise HTTPException(status_code=502, detail="signed_url_failed")
+            signed_path = sign_resp.json()["signedURL"]
+
+        return f"{self._supabase_url}/storage/v1{signed_path}"
+
+    async def delete_document(self, *, user_jwt: str, document_id: str) -> bool:
+        async with httpx.AsyncClient() as client:
+            document = await self._get_document(client, user_jwt, document_id)
+            if document is None:
+                return False
+
+            # Best-effort — a Storage delete failure shouldn't block
+            # removing the row the user actually asked to delete; an
+            # orphaned Storage object with no documents row pointing to
+            # it is inert (unreachable, never surfaced by any route).
+            for bucket, path in (
+                ("indexed", document.get("storage_path")),
+                ("originals", document.get("original_storage_path")),
+            ):
+                if not path:
+                    continue
+                await client.request(
+                    "DELETE",
+                    f"{self._supabase_url}/storage/v1/object/{bucket}",
+                    headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                    json={"prefixes": [path]},
+                )
+
+            delete_resp = await client.delete(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers=self._headers(user_jwt),
+                params={"id": f"eq.{document_id}"},
+            )
+            if delete_resp.status_code >= 400:
+                raise HTTPException(status_code=502, detail="document_delete_failed")
+
+        return True
 
 
 _storage: DocumentsStorage = SupabaseDocumentsStorage()

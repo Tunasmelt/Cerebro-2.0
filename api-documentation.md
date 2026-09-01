@@ -38,8 +38,10 @@ map to the source of truth, not a substitute for it.
 
 Base path: `/api/v1`. All routes except `/health` require a valid
 Supabase JWT (`Authorization: Bearer <token>`), verified in `core/`.
-All list endpoints are cursor-paginated. All routes are rate-limited per
-user — see architecture doc for the current limits table.
+List endpoints return a flat list, own rows only (RLS) — none of them
+ended up needing cursor pagination in practice. All routes are
+rate-limited per user — see architecture doc for the current limits
+table.
 
 ### Documents
 
@@ -88,24 +90,101 @@ POST   /documents/{id}/retry-ingest  No body. Retries a failed job, but
                                     background, same pattern as
                                     upload-confirm — including the same
                                     graph-placement trigger on success.
-GET    /documents                  List, cursor-paginated. Filterable by
-                                    status (processing|ready|failed|
-                                    sealed) — "uploading" is an
-                                    ingest_jobs.state value, not a
-                                    documents.status value; a document is
-                                    "processing" for its entire ingest
-                                    pipeline, uploading included.
-GET    /documents/{id}             Metadata + status.
-GET    /documents/{id}/download    Signed URL to the normalized (indexed)
-                                    file. Sealed documents require a valid
-                                    unlock claim header.
-GET    /documents/{id}/original    Signed URL to the untouched original.
-DELETE /documents/{id}             Removes document, chunks, vectors,
-                                    both storage objects.
-POST   /documents/{id}/seal        Body: passphrase. Moves chunks into
-                                    sealed_chunks, re-encrypts file.
-POST   /documents/{id}/unseal      Body: passphrase. Issues a session-
-                                    scoped unlock claim (15 min).
+GET    /documents                  Flat list, own documents only (RLS)
+                                    — not cursor-paginated in practice;
+                                    this project's realistic per-user
+                                    document count never needed it, and
+                                    no other list endpoint in this API
+                                    (chat sessions, graph nodes) is
+                                    paginated either.
+GET    /documents/{id}             Stage 3.6 — metadata + status, PLUS
+                                    ingest_state and last_error folded in
+                                    directly (ingest_jobs.state/last_error
+                                    for this document) — this replaces
+                                    the originally-planned standalone
+                                    GET /ingest-jobs/{id} + SSE push
+                                    below: the frontend already polls
+                                    GET /documents for status (Stage
+                                    1.1), so a second endpoint returning
+                                    the same kind of data under a
+                                    different id space (ingest_jobs.id,
+                                    which the frontend never has) added
+                                    surface without adding capability.
+                                    404 if the document doesn't exist or
+                                    isn't the caller's (RLS) — same
+                                    404-not-403 pattern as every other
+                                    per-document route in this API.
+GET    /documents/{id}/download    Stage 3.6 — signed URL (60s TTL) to
+                                    the normalized (indexed) file.
+                                    **Sealed documents reject this with
+                                    423 `document_sealed`, never a
+                                    signed URL** — sealing only ever
+                                    removed chunk-level plaintext from
+                                    the retrieval-path `chunks` table
+                                    (Stage 3.3); it was never designed to
+                                    re-encrypt the underlying Storage
+                                    object, and building this route was
+                                    the first time a path existed to
+                                    read that object directly at all. A
+                                    signed URL bypasses the passphrase
+                                    entirely, so this has to fail closed
+                                    by construction rather than trust an
+                                    unlock-claim header (there is no
+                                    mechanism to re-encrypt or gate
+                                    Storage's actual bytes transparently
+                                    yet — that's future scope, not
+                                    solved by this stage).
+GET    /documents/{id}/original    Stage 3.6 — signed URL (60s TTL) to
+                                    the untouched original. Same sealed-
+                                    document rejection as /download,
+                                    same reasoning.
+DELETE /documents/{id}             Stage 3.6 — deletes both Storage
+                                    objects (best-effort — a failed
+                                    Storage delete doesn't block removing
+                                    the row) then the `documents` row,
+                                    which cascades chunks, sealed_chunks,
+                                    ingest_jobs, document_clusters,
+                                    document_edges, and unlock_claims via
+                                    each table's own `on delete cascade`
+                                    FK (Stage 0.2/2.1/2.2/3.1/3.3
+                                    migrations). Works on sealed
+                                    documents too — deleting doesn't
+                                    require the passphrase, only
+                                    ownership (RLS).
+POST   /documents/{id}/seal        Body: `{ chunks: [{ ordinal,
+                                    content_ciphertext, salt, nonce }] }`
+                                    — base64 AES-256-GCM output the
+                                    client already produced (Stage 3.2's
+                                    seal.ts); the server never receives a
+                                    passphrase or a derived key here.
+                                    Moves ciphertext into sealed_chunks,
+                                    deletes the plaintext+embedding rows
+                                    from `chunks`, sets status=sealed.
+                                    409 `not_ready` if ingest hasn't
+                                    finished yet (Stage 3.5 — closes a
+                                    real race where sealing too early let
+                                    an in-flight ingest job re-populate
+                                    `chunks` afterward).
+POST   /documents/{id}/unlock      Body: `{ key }` — the Argon2id-
+                                    derived AES-256-GCM key, this request
+                                    only, never persisted. Test-decrypts
+                                    one real sealed_chunks row to prove
+                                    the key is correct (401 `invalid_key`
+                                    if not), then issues a claim (a
+                                    Postgres row, not a signed token)
+                                    scoped to this one document, expiring
+                                    in 15 minutes per Postgres's own
+                                    clock.
+POST   /documents/{id}/unseal      Body: `{ claim_id, key }` — the key
+                                    sent again, this request only.
+                                    Validates the claim's document scope
+                                    and expiry *before* touching any
+                                    ciphertext (401 `claim_expired`, 403
+                                    `claim_scope_mismatch`, 404
+                                    `claim_not_found`), then decrypts and
+                                    returns plaintext in the response
+                                    body only — never persisted
+                                    server-side.
 ```
 
 Size enforcement lives at Supabase Storage's bucket-level file size
@@ -113,16 +192,6 @@ config, not in this API — any client-side or `upload-init` size check
 is UX-only, verified against the actual bytes at `upload-confirm`, and
 `uploading` rows that never confirm need an expiry sweep like any other
 stalled ingest job.
-
-### Ingest jobs
-
-```
-GET    /ingest-jobs/{id}           Poll status + current pipeline stage
-                                    (uploading|normalizing|extracting|
-                                    embedding|ready|failed) + last_error
-                                    if failed. Also pushed via SSE — see
-                                    below.
-```
 
 ### Chat / retrieval
 
@@ -232,9 +301,18 @@ GET    /health                     No auth. Returns 200 + build sha.
 - Errors: `{ "error": { "code": "...", "message": "..." } }`, never a raw
   stack trace or exception string in the body — matches the UI rule of
   never showing raw errors to the user.
-- Sealed-content failures return a generic `sealed_locked` code
-  regardless of *why* the unlock failed (wrong passphrase vs. malformed
-  request) — this is a deliberate security choice, not an omission; see
-  architecture doc, manual-review item `escape-user-content` /
-  rate-limit discussion.
+- Sealed-tier failures use distinct codes per cause (`invalid_key`,
+  `not_found`, `claim_not_found`, `claim_scope_mismatch`,
+  `claim_expired`, `not_ready`, `document_sealed`) rather than one
+  generic code — an earlier draft of this doc specified a single
+  generic `sealed_locked` code "to avoid leaking why unlock failed,"
+  but that reasoning doesn't hold given how these routes are actually
+  scoped: every lookup (a claim, a sealed_chunks row) runs with the
+  caller's own JWT and is RLS-scoped first, so a nonexistent resource
+  and someone else's resource already come back identically (404) by
+  construction — a specific code beyond that point (e.g. `invalid_key`
+  vs `claim_expired` on the caller's *own* document) reveals nothing an
+  attacker didn't already have to prove ownership to see. Stage 3.5's
+  adversarial test suite is written around this specific-code contract
+  and verifies the RLS-scoping claim directly, live, against production.
 - Timestamps: ISO 8601 UTC throughout.
