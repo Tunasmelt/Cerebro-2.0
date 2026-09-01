@@ -17,7 +17,11 @@ def _strip_sql_comments(sql: str) -> str:
 
 
 def _sealed_chunks_migration() -> str:
-    matches = list(MIGRATIONS_DIR.glob("*sealed_chunks*.sql"))
+    # Specific enough not to also match a later migration whose name
+    # merely mentions sealed_chunks in passing (e.g. the Phase 3 Gate's
+    # column-type-fix migration) — this must resolve to the table's own
+    # creation migration specifically.
+    matches = list(MIGRATIONS_DIR.glob("*phase3_1_sealed_chunks*.sql"))
     assert len(matches) == 1, "expected exactly one sealed_chunks migration"
     return _strip_sql_comments(matches[0].read_text())
 
@@ -38,7 +42,7 @@ def test_sealed_chunks_has_no_foreign_key_to_or_from_chunks():
 
     # And nothing in any other migration adds a FK/view pulling
     # sealed_chunks into a chunks-based query.
-    sealed_migration_name = list(MIGRATIONS_DIR.glob("*sealed_chunks*.sql"))[0].name
+    sealed_migration_name = list(MIGRATIONS_DIR.glob("*phase3_1_sealed_chunks*.sql"))[0].name
     for path in MIGRATIONS_DIR.glob("*.sql"):
         if path.name == sealed_migration_name:
             continue
