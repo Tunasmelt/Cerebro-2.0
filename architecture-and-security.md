@@ -226,6 +226,41 @@ from this side without patching ragas's own source or a fragile
 upstream rather than build around a broken package — see
 phases-and-gates.md's Stage 1.8 entry.
 
+### Clustering pipeline (detail, Stage 2.1)
+
+k-means and the 2D projection (PCA via SVD) are hand-rolled directly on
+top of numpy — no scikit-learn. This project's own Stage 1.8 experience
+with `ragas` (a heavy dependency tree pulled in for one algorithm) made
+that cost concrete rather than theoretical, and the problem here is
+small (a few hundred documents, 1024-dim vectors) — well within what a
+from-scratch Lloyd's-algorithm-plus-k-means++-init implementation
+handles cleanly.
+
+```
+POST /graph/recluster
+  → fetch every status=ready document's chunks via one PostgREST
+    resource-embedding query (documents?select=id,chunks(embedding)) —
+    not N+1 queries per document
+  → mean-pool each document's chunk embeddings into one centroid vector
+  → k-means (k = round(sqrt(n_documents/2)), undefined in any doc,
+    chosen as a reasonable easy-to-retune default — same category as
+    retrieve.py's RRF_K)
+  → project cluster centroids to 2D via PCA/SVD
+  → full replace: delete this user's existing clusters +
+    document_clusters rows, insert the new set
+```
+
+Full recompute every run, not incremental — Stage 2.5 adds
+nearest-centroid placement for new uploads so a single new document
+doesn't reshuffle the whole graph; explicitly out of scope here.
+
+New cluster rows are inserted one at a time, not as a single bulk
+INSERT — Postgres/PostgREST don't guarantee a multi-row INSERT's
+returned rows come back in submission order, and this code needs to map
+each numpy cluster index to its real database id exactly. One request
+per cluster (there are only ever a few dozen) sidesteps an ordering
+guarantee that doesn't actually exist, rather than relying on it.
+
 ---
 
 ## 2. Data model

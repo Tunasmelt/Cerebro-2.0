@@ -6,10 +6,12 @@ from app.core.middleware import AuthMiddleware
 from app.core.rate_limit_middleware import RateLimitMiddleware
 from app.routes.chat import router as chat_router
 from app.routes.documents import router as documents_router
+from app.routes.graph import router as graph_router
 
 app = FastAPI()
 app.include_router(documents_router)
 app.include_router(chat_router)
+app.include_router(graph_router)
 # Starlette runs middleware in reverse add-order on the way in, so the
 # middleware added last runs first. AuthMiddleware must run before
 # RateLimitMiddleware (it needs request.state.user), hence this order.
