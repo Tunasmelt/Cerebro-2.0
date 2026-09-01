@@ -267,13 +267,26 @@ All stages 1.1–1.8 pass their tests, **and** you confirm live:
 ### Stage 2.1 — Clustering job
 **Exit criteria:** Background job assigns documents to clusters via
 numpy k-means on document-level centroid vectors, projects centroids to
-2D via numpy SVD/PCA.
+2D via numpy SVD/PCA. Hand-rolled with numpy directly rather than
+scikit-learn — CLAUDE.md's no-heavy-deps posture, and this project's own
+Stage 1.8 experience with `ragas` (a heavy dependency tree for one
+algorithm) made that cost concrete. k is chosen via
+`round(sqrt(n_documents/2))`, undefined in any doc — a reasonable,
+easy-to-retune default, same category as retrieve.py's RRF_K. Started
+before Phase 1's gate was formally confirmed — a deliberate call, not
+an oversight; Phase 1 is fully built and live-audited (see the Phase 1
+Gate checklist above), the gate itself is still yours to confirm live.
 **Tests:**
 - Deterministic fixture set of documents with known semantic groupings
   clusters as expected (documents about the same topic land in the same
   cluster more often than not).
 - Job completes within an acceptable time bound for a 300-document seed
-  set — timed, not estimated.
+  set — timed, not estimated. Local/CI timing: 300 synthetic documents
+  clustered in well under a second — but that's this machine's CPU, not
+  Render's throttled 0.1 CPU free-tier instance (same caveat as Stage
+  1.7's Gemini local-vs-Render latency gap). Live timing at real 300-
+  document scale against production is still outstanding — no corpus
+  that large exists there yet.
 
 ### Stage 2.2 — Graph API
 **Exit criteria:** `/graph/nodes`, `/graph/edges`, `/graph/nodes/{id}/chunks`

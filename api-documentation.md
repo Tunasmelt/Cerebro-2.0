@@ -164,11 +164,22 @@ POST   /chat/sessions/{id}/stream  Body: { query }. SSE. Emits, in order:
 ### Graph
 
 ```
+POST   /graph/recluster            No body. Triggers a full re-cluster
+                                    (Stage 2.1) as a background task,
+                                    same in-process pattern as the
+                                    ingest pipeline. 202 immediately;
+                                    the actual k-means + PCA run happens
+                                    after the response is sent. Always a
+                                    full recompute for now — Stage 2.5
+                                    adds incremental placement.
 GET    /graph/nodes                Document nodes + cluster_id + 2D
-                                    centroid position.
+                                    centroid position. (Not yet built —
+                                    Stage 2.2.)
 GET    /graph/edges                kNN edges (3 nearest neighbors per
-                                    document at last cluster run).
+                                    document at last cluster run). (Not
+                                    yet built — Stage 2.2.)
 GET    /graph/nodes/{id}/chunks    Chunk satellites for an expanded node.
+                                    (Not yet built — Stage 2.2.)
 ```
 
 ### Playground (Phase 4)
