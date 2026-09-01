@@ -21,6 +21,29 @@ async def create_session(request: Request):
     return JSONResponse({"id": session_id}, status_code=201)
 
 
+@router.get("/api/v1/chat/sessions")
+async def list_sessions(request: Request):
+    storage = get_chat_storage()
+    sessions = await storage.list_sessions(user_jwt=request.state.user_jwt)
+    return JSONResponse({"sessions": sessions})
+
+
+@router.get("/api/v1/chat/sessions/{session_id}/messages")
+async def get_messages(request: Request, session_id: str):
+    """Stage 2.4 — history for reopening a past conversation, with each
+    message's retrieved_chunk_ids resolved to retrieved_document_ids so
+    the frontend can replay the same graph pulse that happened live,
+    without re-deriving anything from the (possibly different by now)
+    live retrieval pipeline."""
+    storage = get_chat_storage()
+    messages = await storage.get_messages(
+        user_jwt=request.state.user_jwt, session_id=session_id
+    )
+    if messages is None:
+        return _error("not_found", "Chat session not found", 404)
+    return JSONResponse({"messages": messages})
+
+
 class StreamBody(BaseModel):
     query: str
 

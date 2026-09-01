@@ -36,10 +36,12 @@ class _StubJWKClient:
 class _FakeChatStorage:
     def __init__(self):
         self.sessions: dict[str, str] = {}  # session_id -> owner's raw JWT
+        self.messages: dict[str, list[dict]] = {}
 
     async def create_session(self, *, user_jwt, user_id):
         session_id = f"session-{len(self.sessions) + 1}"
         self.sessions[session_id] = user_jwt
+        self.messages[session_id] = []
         return session_id
 
     async def get_session(self, *, user_jwt, session_id):
@@ -53,6 +55,19 @@ class _FakeChatStorage:
 
     async def save_message(self, **kwargs):
         pass
+
+    async def list_sessions(self, *, user_jwt):
+        return [
+            {"id": sid, "created_at": "2026-01-01T00:00:00Z"}
+            for sid, owner in self.sessions.items()
+            if owner == user_jwt
+        ]
+
+    async def get_messages(self, *, user_jwt, session_id):
+        owner_jwt = self.sessions.get(session_id)
+        if owner_jwt is None or owner_jwt != user_jwt:
+            return None
+        return self.messages.get(session_id, [])
 
 
 class _FakeEmbedClient:
@@ -185,3 +200,67 @@ def test_chat_endpoints_require_auth(client):
         ).status_code
         == 401
     )
+    assert client.get("/api/v1/chat/sessions").status_code == 401
+    assert client.get("/api/v1/chat/sessions/session-1/messages").status_code == 401
+
+
+# --- Stage 2.4: session history for reopening a past conversation --------------
+
+
+def test_list_sessions_returns_only_the_callers_own(client, keypair, chat_storage):
+    private_key, _ = keypair
+    owner_headers = auth_headers(private_key, sub=TEST_SUB)
+    other_headers = auth_headers(private_key, sub=OTHER_SUB)
+
+    client.post("/api/v1/chat/sessions", headers=owner_headers)
+    client.post("/api/v1/chat/sessions", headers=other_headers)
+
+    response = client.get("/api/v1/chat/sessions", headers=owner_headers)
+    assert response.status_code == 200
+    sessions = response.json()["sessions"]
+    assert len(sessions) == 1
+
+
+def test_get_messages_for_nonexistent_session_returns_404(client, keypair):
+    private_key, _ = keypair
+    response = client.get(
+        "/api/v1/chat/sessions/does-not-exist/messages", headers=auth_headers(private_key)
+    )
+    assert response.status_code == 404
+
+
+def test_get_messages_on_another_users_session_returns_404_not_403(
+    client, keypair, chat_storage
+):
+    private_key, _ = keypair
+    owner_headers = auth_headers(private_key, sub=TEST_SUB)
+    other_headers = auth_headers(private_key, sub=OTHER_SUB)
+
+    created = client.post("/api/v1/chat/sessions", headers=owner_headers)
+    session_id = created.json()["id"]
+
+    response = client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages", headers=other_headers
+    )
+    assert response.status_code == 404
+
+
+def test_get_messages_returns_the_fake_storage_shape(client, keypair, chat_storage):
+    private_key, _ = keypair
+    headers = auth_headers(private_key)
+    created = client.post("/api/v1/chat/sessions", headers=headers)
+    session_id = created.json()["id"]
+    chat_storage.messages[session_id] = [
+        {
+            "id": "m1",
+            "role": "assistant",
+            "content": "answer",
+            "retrieved_chunk_ids": ["c1"],
+            "retrieved_document_ids": ["d1"],
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+    ]
+
+    response = client.get(f"/api/v1/chat/sessions/{session_id}/messages", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["messages"][0]["retrieved_document_ids"] == ["d1"]

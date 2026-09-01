@@ -22,9 +22,19 @@ const SATELLITE_ORBIT = 26;
 // well under ±5) — scaled up so nodes actually spread across the
 // canvas instead of clustering in a few pixels at the center.
 const POSITION_SCALE = 60;
+// ui-design-prompts.md §6: "brightening... then fading over roughly 2
+// seconds" — the single most important animation in the product, per
+// that doc, so this duration is a deliberate design value, not a
+// placeholder.
+const PULSE_DURATION_MS = 2000;
 
 type SimNode = SimulationNodeDatum & GraphNode;
 type SimLink = SimulationLinkDatum<SimNode>;
+
+/** `key` must change (e.g. incrementing counter) to re-trigger the
+ * animation even when `nodeIds` is identical to the previous pulse —
+ * e.g. replaying the same past conversation twice in a row. */
+export type GraphPulse = { nodeIds: string[]; key: number };
 
 export type GraphCanvasProps = {
   nodes: GraphNode[];
@@ -32,6 +42,10 @@ export type GraphCanvasProps = {
   selectedNodeId: string | null;
   satellites: ChunkSatellite[];
   onNodeClick: (nodeId: string | null) => void;
+  /** Stage 2.4 — the real `retrieval` SSE event's document_ids (live)
+   * or a past message's resolved retrieved_document_ids (replay). Null
+   * when nothing is currently pulsing. */
+  pulse?: GraphPulse | null;
   /** Test hook (Stage 2.3's "frame rate measured, not eyeballed" — see
    * graph/perf-test/page.tsx): called every second with the actual
    * measured frames-per-second, not an assumed/estimated number. */
@@ -48,6 +62,7 @@ export default function GraphCanvas({
   selectedNodeId,
   satellites,
   onNodeClick,
+  pulse,
   onFpsSample,
   onPositionsSample,
 }: GraphCanvasProps) {
@@ -59,6 +74,9 @@ export default function GraphCanvas({
   const onNodeClickRef = useRef(onNodeClick);
   const onFpsSampleRef = useRef(onFpsSample);
   const onPositionsSampleRef = useRef(onPositionsSample);
+  const pulseRef = useRef<GraphPulse | null | undefined>(pulse);
+  const pulseStartRef = useRef<number>(0);
+  const lastPulseKeyRef = useRef<number | null>(null);
 
   useEffect(() => {
     selectedIdRef.current = selectedNodeId;
@@ -72,6 +90,13 @@ export default function GraphCanvas({
   useEffect(() => {
     onPositionsSampleRef.current = onPositionsSample;
   }, [onPositionsSample]);
+  useEffect(() => {
+    pulseRef.current = pulse;
+    if (pulse && pulse.key !== lastPulseKeyRef.current) {
+      pulseStartRef.current = performance.now();
+      lastPulseKeyRef.current = pulse.key;
+    }
+  }, [pulse]);
 
   // Rebuild the simulation whenever the node/edge set itself changes —
   // not on every selection/satellite change, which would otherwise
@@ -130,6 +155,7 @@ export default function GraphCanvas({
     window.addEventListener("resize", resize);
 
     const draw = () => {
+      const now0 = performance.now();
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       ctx.clearRect(0, 0, width, height);
@@ -157,15 +183,36 @@ export default function GraphCanvas({
         ctx.stroke();
       }
 
+      // Retrieval pulse — the current pulse's node set, brightening
+      // then fading over PULSE_DURATION_MS. Computed once per frame so
+      // every pulsing node fades in lockstep.
+      const activePulse = pulseRef.current;
+      const pulseElapsed = activePulse ? now0 - pulseStartRef.current : Infinity;
+      const pulseActive = !!activePulse && pulseElapsed < PULSE_DURATION_MS;
+      const pulseIntensity = pulseActive ? 1 - pulseElapsed / PULSE_DURATION_MS : 0;
+      const pulsingIds = pulseActive ? new Set(activePulse!.nodeIds) : null;
+
       // Nodes.
       for (const n of simNodes) {
         if (n.x == null || n.y == null) continue;
         const isFocus = n.id === selectedIdRef.current || n.id === hoveredIdRef.current;
+        const isPulsing = pulsingIds?.has(n.id) ?? false;
+        const color = clusterColor(n.cluster_id);
+        const radius = isPulsing
+          ? NODE_RADIUS * (1.4 + 0.6 * pulseIntensity)
+          : isFocus
+            ? NODE_RADIUS * 1.4
+            : NODE_RADIUS;
         ctx.beginPath();
-        ctx.arc(n.x, n.y, isFocus ? NODE_RADIUS * 1.4 : NODE_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = clusterColor(n.cluster_id);
-        if (isFocus) {
-          ctx.shadowColor = clusterColor(n.cluster_id);
+        ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = isPulsing
+          ? `rgba(255,255,255,${0.5 + 0.5 * pulseIntensity})`
+          : color;
+        if (isPulsing) {
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 8 + 20 * pulseIntensity;
+        } else if (isFocus) {
+          ctx.shadowColor = color;
           ctx.shadowBlur = 12;
         } else {
           ctx.shadowBlur = 0;
@@ -195,11 +242,10 @@ export default function GraphCanvas({
       }
 
       frameCount++;
-      const now = performance.now();
-      if (now - lastFpsTime >= 1000) {
-        onFpsSampleRef.current?.(frameCount / ((now - lastFpsTime) / 1000));
+      if (now0 - lastFpsTime >= 1000) {
+        onFpsSampleRef.current?.(frameCount / ((now0 - lastFpsTime) / 1000));
         frameCount = 0;
-        lastFpsTime = now;
+        lastFpsTime = now0;
         if (onPositionsSampleRef.current) {
           const positions: Record<string, { x: number; y: number }> = {};
           for (const n of simNodes) {

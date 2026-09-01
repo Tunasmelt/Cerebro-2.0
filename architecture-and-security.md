@@ -309,6 +309,42 @@ documents. `GraphCanvas` exposes two test-only callback props
 (`onFpsSample`, `onPositionsSample`) that only this harness and its
 Playwright test consume — the real `/graph` page never passes them.
 
+### Retrieval-replay (detail, Stage 2.4)
+
+No chat frontend existed anywhere before this stage — Stage 1.7's exit
+criteria was correctly backend-only, and per ui-design-prompts.md §6
+the chat input belongs docked on the brain graph itself, not a separate
+earlier page, so building it here (not retroactively into 1.7) is the
+right order, not a gap.
+
+`/api/chat/sessions/{id}/stream` (the Next.js proxy) is the one proxy
+route in this app that does NOT buffer with `.text()` — it passes
+`upstream.body` straight through as the response body, since the whole
+point of Stage 2.4 is reacting to the `retrieval` event the instant it
+arrives, before any `token` event, not after the full answer streams
+in. Every other proxy route buffers; this is a deliberate exception,
+confirmed live by timing real SSE events from a fake local upstream
+through the real route and observing the same gaps between them, not
+one buffered burst.
+
+```
+GraphCanvas pulse prop: { nodeIds, key }
+  → live: page.tsx passes the retrieval event's document_ids straight
+    into the pulse trigger, unmodified
+  → replay: GET /chat/sessions/{id}/messages, one pulse per assistant
+    message with retrieved_document_ids, REPLAY_PULSE_INTERVAL_MS apart
+  → both paths converge on the same rendering code — brighten, fade
+    over PULSE_DURATION_MS (2000ms, per ui-design-prompts.md §6's "the
+    single most important animation in the product")
+```
+
+`chat_messages.retrieved_chunk_ids` only ever stored chunk ids, never
+document ids — `GET /chat/sessions/{id}/messages` resolves them via one
+extra `chunks` query per request rather than a denormalized column that
+could drift if a document were ever deleted; chunks from the same
+document collapse to one entry so a message with several chunks from
+one document doesn't produce a duplicate pulse.
+
 ---
 
 ## 2. Data model
