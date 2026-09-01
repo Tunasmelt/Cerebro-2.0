@@ -143,12 +143,15 @@ def test_decrypt_raises_sealed_storage_error_with_wrong_key():
 class _FakeSealedStorage:
     def __init__(self):
         self.sealed_calls = []
+        self.seal_error: SealedStorageError | None = None
         self.claim_to_issue: UnlockClaim | None = None
         self.unlock_error: SealedStorageError | None = None
         self.unseal_result: list | None = None
         self.unseal_error: SealedStorageError | None = None
 
     async def seal_document(self, *, user_jwt, user_id, document_id, chunks):
+        if self.seal_error:
+            raise self.seal_error
         self.sealed_calls.append((document_id, chunks))
 
     async def create_unlock_claim(self, *, user_jwt, user_id, document_id, key_b64):
@@ -189,6 +192,31 @@ def test_seal_requires_auth(client):
     sealed_storage_module.set_sealed_storage(_FakeSealedStorage())
     response = client.post("/api/v1/documents/doc-1/seal", json={"chunks": []})
     assert response.status_code == 401
+
+
+def test_seal_rejects_a_document_whose_ingest_isnt_finished_yet(client, keypair):
+    """Regression test for a real race found live in Stage 3.5's
+    adversarial testing: sealing a document immediately after
+    upload-confirm, before its background ingest pipeline finished,
+    let that pipeline finish afterward and re-write plaintext + a fresh
+    embedding into `chunks` — silently un-sealing content that had just
+    been sealed. seal_document now requires status='ready' (checked
+    atomically at the database level in the real SupabaseSealedStorage,
+    via a single conditional PATCH) before it will seal anything."""
+    private_key, _ = keypair
+    fake = _FakeSealedStorage()
+    fake.seal_error = SealedStorageError(
+        "not_ready", "Document must finish processing (status=ready) before it can be sealed"
+    )
+    sealed_storage_module.set_sealed_storage(fake)
+
+    response = client.post(
+        "/api/v1/documents/doc-1/seal",
+        headers=auth_headers(private_key),
+        json={"chunks": [{"ordinal": 0, "content_ciphertext": "Y3Q=", "salt": "c2FsdA==", "nonce": "bm9uY2U="}]},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "not_ready"
 
 
 # --- Route tests: /unlock ---------------------------------------------------
