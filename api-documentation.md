@@ -120,12 +120,20 @@ GET    /ingest-jobs/{id}           Poll status + current pipeline stage
 
 ```
 POST   /chat/sessions              Create a session.
-GET    /chat/sessions/{id}         History, including stored
-                                    retrieved_chunk_ids per message — used
-                                    to replay the graph pulse animation
-                                    for past conversations. (Not yet
-                                    implemented — Stage 1.7 built create +
-                                    stream only.)
+GET    /chat/sessions              List the caller's own sessions, most
+                                    recent first (Stage 2.4) — the "past
+                                    conversations" picker for replaying
+                                    a graph pulse.
+GET    /chat/sessions/{id}/messages  History (Stage 2.4), each message's
+                                    retrieved_chunk_ids resolved to
+                                    retrieved_document_ids server-side —
+                                    used to replay the graph pulse
+                                    animation for past conversations.
+                                    Chunks from the same document
+                                    collapse to one document id, not a
+                                    duplicate pulse entry. 404 if the
+                                    session doesn't exist or isn't the
+                                    caller's own.
 POST   /chat/sessions/{id}/stream  Body: { query }. SSE. Emits, in order:
                                       event: retrieval
                                         data: { chunk_ids, document_ids }

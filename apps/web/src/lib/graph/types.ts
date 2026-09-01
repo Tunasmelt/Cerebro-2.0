@@ -19,3 +19,17 @@ export type ChunkSatellite = {
   content: string;
   meta: Record<string, unknown>;
 };
+
+export type ChatSession = {
+  id: string;
+  created_at: string;
+};
+
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  retrieved_chunk_ids: string[];
+  retrieved_document_ids: string[];
+  created_at: string;
+};

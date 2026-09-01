@@ -78,3 +78,124 @@
   font-size: 14px;
   text-align: center;
 }
+
+/* ui-design-prompts.md §6: "a persistent but unobtrusive chat input
+   docks at the bottom center, pill-shaped, floating over the canvas". */
+.chatDock {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: min(560px, calc(100vw - 48px));
+}
+
+.chatForm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: #13131a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 8px 8px 8px 16px;
+}
+
+.chatInput {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: #f4f4f5;
+  font-size: 14px;
+}
+
+.chatInput::placeholder {
+  color: #71717a;
+}
+
+.chatSend {
+  background: #8b5cf6;
+  color: #f4f4f5;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chatSend:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sessionsButton {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #a1a1aa;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sessionsButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.chatAnswer {
+  max-width: 100%;
+  max-height: 160px;
+  overflow-y: auto;
+  background: #13131a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: #f4f4f5;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chatError {
+  color: #ef4444;
+  font-size: 13px;
+  background: #13131a;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 8px 14px;
+}
+
+.sessionsPanel {
+  width: 100%;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #13131a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 8px;
+}
+
+.sessionItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #a1a1aa;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.sessionItem:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f4f5;
+}

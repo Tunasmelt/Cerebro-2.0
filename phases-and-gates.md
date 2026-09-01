@@ -336,12 +336,45 @@ offers.
 ### Stage 2.4 — Retrieval-replay animation
 **Exit criteria:** The `retrieval` SSE event pulses exactly the returned
 document nodes; reopening a past conversation replays the same pulse
-from stored `retrieved_chunk_ids`.
+from stored `retrieved_chunk_ids`. This stage discovered that no chat
+frontend existed at all before it — Stage 1.7's exit criteria was
+correctly backend-only, and the chat UI legitimately belongs docked on
+the brain graph per ui-design-prompts.md §6, not as an earlier separate
+page — so this stage built the missing chat input, the SSE-consuming
+client, a real streaming Next.js proxy route (`/api/chat/sessions/{id}/stream`,
+passing `upstream.body` straight through — every other proxy route in
+this app buffers with `.text()` first, which would silently break SSE),
+and two new backend endpoints (`GET /chat/sessions`,
+`GET /chat/sessions/{id}/messages`) since `chat_messages` only ever
+stored chunk ids, never document ids, and nothing existed to resolve or
+list them for a "reopen a past conversation" picker.
 **Tests:**
 - Automated: pulsed node IDs in the frontend event log match the SSE
-  `retrieval` payload exactly, every run.
+  `retrieval` payload exactly, every run. `page.tsx` passes the
+  `retrieval` event's `document_ids` straight into the pulse trigger,
+  unmodified — verified in pieces, real end-to-end: (1) the streaming
+  proxy route genuinely passes SSE chunks through as they arrive rather
+  than buffering — confirmed by timing real events from a fake local
+  SSE server through the actual Next.js route and seeing the same
+  delays between them, not one buffered burst; (2) `parseSSEStream`
+  correctly parses real SSE bytes even split adversarially across
+  network chunk boundaries mid-line — real Node execution, not a
+  browser; (3) `GraphCanvas`'s `pulse` prop — separate code from Stage
+  2.3's click-highlight path — genuinely brightens the right nodes and
+  fades to nothing after 2s, confirmed via real Playwright screenshots
+  mid-fade and post-fade. A fully live version with a real signed-in
+  session asking a real question was blocked by the same Supabase
+  sandbox SMTP rate limit noted in Stage 2.3 — every individual link in
+  the chain was verified for real, but not yet chained through an
+  actual live browser session end to end.
 - Manual: reopen a conversation from yesterday, confirm the same nodes
-  pulse as pulsed live at the time.
+  pulse as pulsed live at the time. Backend resolution logic
+  (chunk_ids → document_ids, including multiple chunks from one
+  document collapsing to a single pulse entry, not a duplicate) is
+  pytest-verified; the frontend replay sequencing (one past message's
+  pulse at a time, `REPLAY_PULSE_INTERVAL_MS` apart) reuses the same
+  proven `pulse` mechanism. The actual "yesterday" manual check is
+  yours to run live once a real conversation exists to reopen.
 
 ### Stage 2.5 — Incremental clustering
 **Exit criteria:** New uploads get nearest-centroid placement without
