@@ -286,6 +286,29 @@ Stage 2.2 read routes:
   404 (not empty list) when the document doesn't exist or isn't the
   caller's own, distinguished from "exists, zero chunks."
 
+### Graph rendering (detail, Stage 2.3)
+
+`apps/web/src/app/graph/GraphCanvas.tsx` runs `d3-force` for physics
+only (headless — no DOM/SVG binding, which the library also offers) and
+draws every frame itself via native Canvas 2D. Same lean-dependency
+posture as Stage 2.1's hand-rolled k-means: a full graph-viz framework
+wasn't needed for force simulation + circles-and-lines rendering.
+
+Node screen position comes from the server's cluster centroid
+(`x`/`y` from `GET /graph/nodes`, scaled up — PCA output sits in a
+small float range, not pixel space) as the simulation's *initial*
+position, not a fixed one — d3-force's charge/collision forces then
+organically spread out documents that share one cluster's exact
+centroid, rather than needing bespoke jitter logic for that case.
+
+`/graph/perf-test` is a synthetic-data harness (no auth, no backend
+calls) mounting the same `GraphCanvas` component with 300 generated
+nodes / 900 edges, built specifically so the exit criteria's frame-rate
+requirement is reproducible on demand without seeding 300 real
+documents. `GraphCanvas` exposes two test-only callback props
+(`onFpsSample`, `onPositionsSample`) that only this harness and its
+Playwright test consume — the real `/graph` page never passes them.
+
 ---
 
 ## 2. Data model

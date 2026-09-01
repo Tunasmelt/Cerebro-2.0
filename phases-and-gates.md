@@ -309,12 +309,29 @@ edges are explicitly allowed to lag until the next recluster.
 
 ### Stage 2.3 — Graph rendering
 **Exit criteria:** Frontend renders nodes/edges, click-to-expand shows
-chunk satellites.
+chunk satellites. Hand-rolled with d3-force (physics only, headless) +
+native Canvas 2D (own rendering) — no full graph-viz framework, same
+lean-dependency posture as Stage 2.1's k-means; d3-force's own
+computation is what's actually used, not any DOM/SVG rendering it also
+offers.
 **Tests:**
 - Render performance holds at the 300-document seed scale (frame rate
-  measured, not eyeballed).
+  measured, not eyeballed). Real Playwright measurement against 300
+  synthetic nodes / 900 edges: 59–60fps sustained (display-refresh-
+  capped, not the bottleneck) — see `/graph/perf-test`, a synthetic-data
+  harness built specifically so this is reproducible without seeding
+  300 real documents.
 - Clicking a node reliably expands the correct chunk set, closes cleanly
-  on a second click.
+  on a second click. Real Playwright interaction test: click selects the
+  correct node with the correct satellite count, second click on the
+  same spot collapses back to none — verified against the real
+  `GraphCanvas` component (not a mock), with the actual
+  `GET /graph/nodes/{id}/chunks` fetch already live-verified separately
+  in Stage 2.2 (this test's synthetic satellites isolate the
+  click/toggle logic Stage 2.3 actually adds, since Supabase's sandbox
+  SMTP email rate limit blocked spinning up a fresh authenticated
+  session for a fully live version of this specific test in this
+  session).
 
 ### Stage 2.4 — Retrieval-replay animation
 **Exit criteria:** The `retrieval` SSE event pulses exactly the returned
