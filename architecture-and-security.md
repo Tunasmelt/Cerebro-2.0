@@ -312,10 +312,10 @@ Playwright test consume — the real `/graph` page never passes them.
 ### Retrieval-replay (detail, Stage 2.4)
 
 No chat frontend existed anywhere before this stage — Stage 1.7's exit
-criteria was correctly backend-only, and per ui-design-prompts.md §6
-the chat input belongs docked on the brain graph itself, not a separate
-earlier page, so building it here (not retroactively into 1.7) is the
-right order, not a gap.
+criteria was correctly backend-only, and per the brain mockup
+(`Mockups/ui_kits/brain/index.html`) the chat input belongs docked on
+the brain graph itself, not a separate earlier page, so building it
+here (not retroactively into 1.7) is the right order, not a gap.
 
 `/api/chat/sessions/{id}/stream` (the Next.js proxy) is the one proxy
 route in this app that does NOT buffer with `.text()` — it passes
@@ -334,8 +334,8 @@ GraphCanvas pulse prop: { nodeIds, key }
   → replay: GET /chat/sessions/{id}/messages, one pulse per assistant
     message with retrieved_document_ids, REPLAY_PULSE_INTERVAL_MS apart
   → both paths converge on the same rendering code — brighten, fade
-    over PULSE_DURATION_MS (2000ms, per ui-design-prompts.md §6's "the
-    single most important animation in the product")
+    over PULSE_DURATION_MS (2000ms, matching the retrieval-pulse
+    animation in Mockups/ui_kits/brain/index.html)
 ```
 
 `chat_messages.retrieved_chunk_ids` only ever stored chunk ids, never

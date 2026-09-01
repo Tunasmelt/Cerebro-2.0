@@ -77,10 +77,44 @@
   color: #a1a1aa;
   font-size: 14px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
 }
 
-/* ui-design-prompts.md §6: "a persistent but unobtrusive chat input
-   docks at the bottom center, pill-shaped, floating over the canvas". */
+.emptyStateCta {
+  font-family: var(--font-ui);
+  font-weight: var(--weight-medium);
+  font-size: var(--text-sm);
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-6);
+  cursor: pointer;
+  transition: background var(--duration-base) var(--ease-soft);
+}
+.emptyStateCta:hover {
+  background: var(--accent-primary-hover);
+}
+
+.docsLink {
+  position: absolute;
+  top: 20px;
+  left: 24px;
+  font-size: 13px;
+  color: #a1a1aa;
+  cursor: pointer;
+  z-index: 3;
+}
+.docsLink:hover {
+  color: #f4f4f5;
+}
+
+/* A persistent but unobtrusive chat input docks at the bottom center,
+   pill-shaped, floating over the canvas — see the chat dock in
+   Mockups/ui_kits/brain/index.html. */
 .chatDock {
   position: absolute;
   bottom: 24px;

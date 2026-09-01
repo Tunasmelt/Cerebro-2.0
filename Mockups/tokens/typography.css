@@ -1,0 +1,21 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-xs: 12px;  --leading-xs: 16px;
+  --text-sm: 13px;  --leading-sm: 18px;
+  --text-base: 14px; --leading-base: 20px;
+  --text-md: 16px;  --leading-md: 24px;
+  --text-lg: 18px;  --leading-lg: 26px;
+  --text-xl: 20px;  --leading-xl: 28px;
+  --text-2xl: 24px; --leading-2xl: 32px;
+  --text-3xl: 32px; --leading-3xl: 40px;
+  --text-4xl: 40px; --leading-4xl: 48px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+}

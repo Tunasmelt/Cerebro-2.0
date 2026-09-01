@@ -1,0 +1,202 @@
+<!-- @dsCard group="Landing" viewport="1440x900" subtitle="Token/Prompt Playground — editable prompt assembly, live cost/latency, run" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cerebro — Playground</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { margin: 0; height: 100%; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-mono); font-size: 13px; }
+  .shell { display: grid; grid-template-columns: 1fr 320px; height: 100vh; }
+
+  .left { overflow-y: auto; padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); border-right: 1px solid var(--border-subtle); }
+  .left-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
+  .left-head h1 { font-family: var(--font-ui); font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: 0; }
+  .reset-all { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 4px 10px; cursor: pointer; }
+  .reset-all:hover { background: var(--bg-elevated-hover); color: var(--text-primary); }
+
+  .section { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
+  .section-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); cursor: pointer; user-select: none; }
+  .section-head:hover { background: var(--bg-elevated-hover); }
+  .chevron { transition: transform var(--duration-base) var(--ease-soft); color: var(--text-secondary); flex-shrink: 0; }
+  .section.collapsed .chevron { transform: rotate(-90deg); }
+  .section-label { font-family: var(--font-ui); font-size: 12px; font-weight: var(--weight-medium); color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.03em; }
+  .section-citation { color: var(--text-secondary); font-size: 11px; }
+  .section-tokens { margin-left: auto; color: var(--text-disabled); font-size: 11px; flex-shrink: 0; }
+  .section-reset { color: var(--text-secondary); font-size: 11px; background: none; border: none; cursor: pointer; padding: 2px 6px; flex-shrink: 0; }
+  .section-reset:hover { color: var(--text-primary); }
+  .section-body { border-top: 1px solid var(--border-subtle); }
+  .section.collapsed .section-body { display: none; }
+  .section-body textarea {
+    display: block; width: 100%; box-sizing: border-box; background: var(--bg-base); border: none; outline: none;
+    color: var(--text-primary); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6;
+    padding: var(--space-3); resize: vertical; overflow: hidden; min-height: 100px;
+  }
+  .section.context .section-label { color: var(--accent-primary-hover); }
+
+  .right { background: var(--bg-elevated); padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-5); }
+  .stat-block { display: flex; flex-direction: column; gap: var(--space-1); }
+  .stat-label { font-family: var(--font-ui); font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em; }
+  .stat-value { font-size: 22px; color: var(--text-primary); }
+  .stat-value.cost { color: var(--accent-secondary); }
+  .stat-value.latency { color: var(--text-primary); }
+  .stat-divider { height: 1px; background: var(--border-subtle); }
+
+  .run-btn {
+    font-family: var(--font-ui); font-weight: var(--weight-medium); font-size: var(--text-sm);
+    background: var(--accent-primary); color: var(--text-on-accent); border: none; border-radius: var(--radius-md);
+    padding: var(--space-3); cursor: pointer; transition: background var(--duration-base) var(--ease-soft);
+  }
+  .run-btn:hover { background: var(--accent-primary-hover); }
+
+  .response-block { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-2); }
+  .response-label { font-family: var(--font-ui); font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em; }
+  .response-text { background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--space-3); font-size: 12.5px; line-height: 1.6; color: var(--text-primary); white-space: pre-wrap; min-height: 100px; }
+  .response-text.placeholder { color: var(--text-disabled); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="left">
+    <div class="left-head">
+      <h1>Prompt assembly</h1>
+      <button class="reset-all" onclick="resetAll()">Reset to original</button>
+    </div>
+
+    <div class="section" data-tokens="142">
+      <div class="section-head" onclick="toggle(this)">
+        <svg class="chevron" width="8" height="8" viewBox="0 0 8 8"><path d="M2 1L6 4L2 7" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="section-label">System instructions</span>
+        <span class="section-tokens">142 tok</span>
+        <button class="section-reset" onclick="resetSection(event, this)">reset</button>
+      </div>
+      <div class="section-body">
+        <textarea data-original="You are Cerebro's retrieval assistant. Answer only from the provided context. Cite every claim with the chunk it came from. If context is insufficient, say so plainly." oninput="recalc(); autosize(this)">You are Cerebro's retrieval assistant. Answer only from the provided context. Cite every claim with the chunk it came from. If context is insufficient, say so plainly.</textarea>
+      </div>
+    </div>
+
+    <div class="section context" data-tokens="88">
+      <div class="section-head" onclick="toggle(this)">
+        <svg class="chevron" width="8" height="8" viewBox="0 0 8 8"><path d="M2 1L6 4L2 7" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="section-label">Context</span>
+        <span class="section-citation">raft-paper.pdf · chk_4a1f</span>
+        <span class="section-tokens">88 tok</span>
+        <button class="section-reset" onclick="resetSection(event, this)">reset</button>
+      </div>
+      <div class="section-body">
+        <textarea data-original="Raft decomposes consensus into leader election, log replication, and safety. It favors understandability over Paxos's generality by electing a single leader responsible for managing the replicated log." oninput="recalc(); autosize(this)">Raft decomposes consensus into leader election, log replication, and safety. It favors understandability over Paxos's generality by electing a single leader responsible for managing the replicated log.</textarea>
+      </div>
+    </div>
+
+    <div class="section context" data-tokens="61">
+      <div class="section-head" onclick="toggle(this)">
+        <svg class="chevron" width="8" height="8" viewBox="0 0 8 8"><path d="M2 1L6 4L2 7" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="section-label">Context</span>
+        <span class="section-citation">note_2025-03-12.md · chk_0e91</span>
+        <span class="section-tokens">61 tok</span>
+        <button class="section-reset" onclick="resetSection(event, this)">reset</button>
+      </div>
+      <div class="section-body">
+        <textarea data-original="Raft's single-leader model is much easier to trace through when debugging a 3-node cluster than Paxos's multi-proposer flow." oninput="recalc(); autosize(this)">Raft's single-leader model is much easier to trace through when debugging a 3-node cluster than Paxos's multi-proposer flow.</textarea>
+      </div>
+    </div>
+
+    <div class="section" data-tokens="34">
+      <div class="section-head" onclick="toggle(this)">
+        <svg class="chevron" width="8" height="8" viewBox="0 0 8 8"><path d="M2 1L6 4L2 7" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="section-label">Chat history</span>
+        <span class="section-tokens">34 tok</span>
+        <button class="section-reset" onclick="resetSection(event, this)">reset</button>
+      </div>
+      <div class="section-body">
+        <textarea data-original="user: what have I read about consensus algorithms lately?
+assistant: three papers on Raft and Paxos, roughly March–April." oninput="recalc(); autosize(this)">user: what have I read about consensus algorithms lately?
+assistant: three papers on Raft and Paxos, roughly March–April.</textarea>
+      </div>
+    </div>
+
+    <div class="section" data-tokens="17">
+      <div class="section-head" onclick="toggle(this)">
+        <svg class="chevron" width="8" height="8" viewBox="0 0 8 8"><path d="M2 1L6 4L2 7" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="section-label">User query</span>
+        <span class="section-tokens">17 tok</span>
+        <button class="section-reset" onclick="resetSection(event, this)">reset</button>
+      </div>
+      <div class="section-body">
+        <textarea data-original="How does quorum size affect Raft's availability under node failure?" oninput="recalc(); autosize(this)">How does quorum size affect Raft's availability under node failure?</textarea>
+      </div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="stat-block">
+      <span class="stat-label">Total tokens</span>
+      <span class="stat-value" id="total-tokens">342</span>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-block">
+      <span class="stat-label">Est. cost</span>
+      <span class="stat-value cost" id="total-cost">$0.0041</span>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-block">
+      <span class="stat-label">Est. latency</span>
+      <span class="stat-value latency" id="total-latency">~640ms</span>
+    </div>
+    <div class="stat-divider"></div>
+
+    <button class="run-btn" onclick="runPrompt()">Run</button>
+
+    <div class="response-block">
+      <span class="response-label">Response</span>
+      <div class="response-text placeholder" id="response-text">Run the assembled prompt to see the model's response here.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggle(head) { head.parentElement.classList.toggle('collapsed'); }
+
+function estimateTokens(text) { return Math.max(1, Math.round(text.length / 4)); }
+
+function autosize(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = (textarea.scrollHeight) + 'px';
+}
+function recalc() {
+  let total = 0;
+  document.querySelectorAll('.section').forEach(section => {
+    const textarea = section.querySelector('textarea');
+    const tok = estimateTokens(textarea.value);
+    section.querySelector('.section-tokens').textContent = tok + ' tok';
+    total += tok;
+  });
+  document.getElementById('total-tokens').textContent = total;
+  document.getElementById('total-cost').textContent = '$' + (total * 0.000012).toFixed(4);
+  document.getElementById('total-latency').textContent = '~' + Math.round(300 + total * 1.1) + 'ms';
+}
+
+function resetSection(e, btn) {
+  e.stopPropagation();
+  const section = btn.closest('.section');
+  const textarea = section.querySelector('textarea');
+  textarea.value = textarea.dataset.original;
+  autosize(textarea);
+  recalc();
+}
+function resetAll() {
+  document.querySelectorAll('textarea').forEach(t => { t.value = t.dataset.original; autosize(t); });
+  recalc();
+}
+
+function runPrompt() {
+  const el = document.getElementById('response-text');
+  el.classList.remove('placeholder');
+  el.textContent = "Raft's availability depends on maintaining a majority: with quorum size N/2+1, the cluster tolerates floor((N-1)/2) node failures before it can no longer elect a leader or commit new entries.";
+}
+
+document.querySelectorAll('.section-body textarea').forEach(autosize);
+recalc();
+</script>
+</body>
+</html>

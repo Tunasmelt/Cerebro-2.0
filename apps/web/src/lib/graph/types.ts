@@ -33,3 +33,14 @@ export type ChatMessage = {
   retrieved_document_ids: string[];
   created_at: string;
 };
+
+export type DocumentStatus = "processing" | "ready" | "failed" | "sealed";
+
+export type DocumentRow = {
+  id: string;
+  title: string;
+  mime: string;
+  size_bytes: number;
+  status: DocumentStatus;
+  created_at: string;
+};

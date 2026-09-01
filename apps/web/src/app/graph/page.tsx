@@ -189,9 +189,16 @@ export default function GraphPage() {
         />
       </div>
 
+      <span className={styles.docsLink} onClick={() => router.push("/documents")}>
+        Documents
+      </span>
+
       {nodes.length === 0 && (
         <div className={styles.emptyState}>
-          No documents yet — upload something to see it here.
+          <p style={{ margin: 0 }}>Your graph will start forming as soon as it lands.</p>
+          <button className={styles.emptyStateCta} onClick={() => router.push("/documents")}>
+            Upload your first document
+          </button>
         </div>
       )}
 

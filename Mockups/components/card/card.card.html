@@ -1,0 +1,34 @@
+<!-- @dsCard group="Components" viewport="700x210" subtitle="Default and interactive (hover/active)" name="Card" -->
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="../../_ds_bundle.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; background: var(--bg-base); }
+  #root { padding: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { Card } = window.Cerebro;
+function Sheet() {
+  return (
+    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px'}}>
+      <Card title="Distributed systems reading list" meta="chk_a13f · 2.4kb · 3 links">
+        Notes on consensus, CRDTs, and vector clocks.
+      </Card>
+      <Card title="Retrieval log" meta="chk_9f2a · 812b · hover me" interactive>
+        Query matched 6 nodes in 118ms.
+      </Card>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Sheet />);
+</script>
+</body>
+</html>

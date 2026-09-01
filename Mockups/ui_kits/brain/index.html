@@ -1,0 +1,290 @@
+<!-- @dsCard group="Landing" viewport="1440x900" subtitle="Brain graph — retrieval pulse, node expand, sealed node, legend" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cerebro — Brain</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { margin: 0; height: 100%; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui); overflow: hidden; }
+  .screen { position: relative; width: 100vw; height: 100vh; }
+  svg#graph { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  .edge { stroke: rgba(244,244,245,0.10); stroke-width: 1; opacity: 0; transition: opacity var(--duration-base) var(--ease-soft); }
+  .edge.show { opacity: 1; }
+
+  .node circle.fill { transition: opacity var(--duration-base) var(--ease-soft), r var(--duration-base) var(--ease-soft); cursor: pointer; }
+  .node circle.halo { opacity: 0; transition: opacity var(--duration-base) var(--ease-soft); }
+  .node.selected circle.fill { stroke: var(--text-primary); stroke-width: 1.5; }
+  .node.dimmed circle.fill { opacity: 0.18; }
+  .node text.lockglyph { pointer-events: none; }
+
+  .node.retrieved circle.halo { opacity: 0.9; animation: haloPulse var(--duration-pulse) var(--ease-pulse); }
+  .node.retrieved circle.fill { filter: drop-shadow(0 0 6px rgba(139,92,246,0.7)); }
+  @keyframes haloPulse { 0% { r: 6; opacity: 0.9; } 100% { r: 22; opacity: 0; } }
+
+  .pulse-line { stroke: var(--accent-primary); stroke-width: 1.4; fill: none; opacity: 0; }
+  .pulse-line.animate { animation: pulseFade 2s var(--ease-soft) forwards; }
+  @keyframes pulseFade { 0% { opacity: 0.9; } 15% { opacity: 0.9; } 100% { opacity: 0; } }
+
+  /* ---- chat dock ---- */
+  .chat-dock { position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%); width: 480px; display: flex; align-items: center; gap: var(--space-2); background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5); box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
+  .chat-dock input { flex: 1; background: transparent; border: none; outline: none; color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-ui); }
+  .chat-dock input::placeholder { color: var(--text-disabled); }
+  .chat-send { width: 32px; height: 32px; border-radius: 50%; background: var(--accent-primary); border: none; color: var(--text-on-accent); cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background var(--duration-base) var(--ease-soft); }
+  .chat-send:hover { background: var(--accent-primary-hover); }
+
+  /* ---- legend ---- */
+  .legend { position: absolute; bottom: 24px; left: 24px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--space-6) var(--space-4) var(--space-3); font-size: var(--text-xs); color: var(--text-secondary); display: flex; flex-direction: column; gap: var(--space-2); width: 200px; box-sizing: border-box; }
+  .legend-row { display: flex; align-items: center; gap: var(--space-2); }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .legend-close { position: absolute; top: 8px; right: 8px; color: var(--text-disabled); cursor: pointer; font-size: 13px; background: none; border: none; line-height: 1; padding: 4px; }
+  .legend-close:hover { color: var(--text-primary); }
+  .legend-reopen { position: absolute; bottom: 24px; left: 24px; width: 28px; height: 28px; border-radius: 50%; background: var(--bg-elevated); border: 1px solid var(--border-default); color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; cursor: pointer; display: none; align-items: center; justify-content: center; }
+
+  /* ---- side panel ---- */
+  .side-panel { position: absolute; top: 0; right: -340px; width: 320px; height: 100%; background: var(--bg-elevated); border-left: 1px solid var(--border-subtle); padding: var(--space-6); box-sizing: border-box; display: flex; flex-direction: column; gap: var(--space-4); transition: right var(--duration-base) var(--ease-soft); overflow-y: auto; }
+  .side-panel.open { right: 0; }
+  .panel-close { align-self: flex-end; background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 16px; padding: 0; }
+  .panel-close:hover { color: var(--text-primary); }
+  .panel-icon-row { display: flex; align-items: center; gap: var(--space-3); }
+  .panel-title { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: 0; }
+  .panel-meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); }
+  .panel-btn {
+    font-family: var(--font-ui); font-weight: var(--weight-medium); font-size: var(--text-sm);
+    background: transparent; color: var(--text-primary); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-4); cursor: pointer; align-self: flex-start;
+    transition: background var(--duration-base) var(--ease-soft), border-color var(--duration-base) var(--ease-soft);
+  }
+  .panel-btn:hover { background: var(--bg-elevated-hover); border-color: var(--border-strong); }
+  .panel-divider { height: 1px; background: var(--border-subtle); margin: var(--space-1) 0; }
+  .chunk-label { font-size: var(--text-xs); color: var(--text-secondary); }
+  .lock-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: var(--weight-medium); color: var(--accent-locked); background: var(--accent-locked-subtle); border-radius: var(--radius-pill); padding: 2px var(--space-2); align-self: flex-start; }
+  .panel-field { display: flex; flex-direction: column; gap: var(--space-1); margin-top: var(--space-2); }
+  .panel-field label { font-size: var(--text-xs); color: var(--text-secondary); font-weight: var(--weight-medium); }
+  .panel-field input { background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--text-primary); padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
+  .panel-field input:focus { outline: none; border-color: var(--accent-locked); box-shadow: 0 0 0 3px var(--accent-locked-subtle); }
+  .panel-locked-note { font-size: var(--text-xs); color: var(--text-disabled); line-height: var(--leading-xs); }
+
+  /* demo-only */
+  .demo-controls { position: absolute; top: 20px; right: 20px; display: flex; gap: var(--space-2); z-index: 5; }
+  .demo-controls button { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: 4px 12px; cursor: pointer; }
+  .demo-controls button:hover { border-color: var(--border-strong); }
+</style>
+</head>
+<body>
+<div class="screen">
+  <svg id="graph" viewBox="0 0 1440 900" preserveAspectRatio="none"></svg>
+
+  <div class="legend" id="legend">
+    <button class="legend-close" onclick="dismissLegend()">✕</button>
+    <div class="legend-row"><span class="legend-dot" style="background:#9CA3AF;"></span>reading &amp; reference</div>
+    <div class="legend-row"><span class="legend-dot" style="background:#6FB8BE;"></span>systems &amp; infra</div>
+    <div class="legend-row"><span class="legend-dot" style="background:#A08CD1;"></span>projects &amp; drafts</div>
+    <div class="legend-row"><span class="legend-dot" style="background:#F59E0B;"></span>sealed</div>
+    <div class="panel-divider"></div>
+    <div class="legend-row" style="color: var(--text-disabled);">brightness = recently retrieved</div>
+  </div>
+  <button class="legend-reopen" id="legend-reopen" onclick="reopenLegend()">i</button>
+
+  <div class="chat-dock">
+    <input type="text" placeholder="Ask your vault anything…" id="chat-input" />
+    <button class="chat-send" onclick="runRetrievalPulse()">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7H11.5M11.5 7L7.5 3M11.5 7L7.5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+
+  <div class="side-panel" id="side-panel">
+    <button class="panel-close" onclick="closePanel()">✕</button>
+    <div id="panel-content"></div>
+  </div>
+
+  <div class="demo-controls">
+    <button onclick="runRetrievalPulse()">demo: retrieval pulse</button>
+  </div>
+</div>
+
+<script>
+const CLUSTER_COLOR = { a: '#9CA3AF', b: '#6FB8BE', c: '#A08CD1' };
+
+const nodes = [
+  { id:'n1', cx:220, cy:180, cluster:'a', title:'raft-paper.pdf', type:'PDF', size:'2.4mb', date:'2025-03-12', chunks:['leader election','log replication','safety'] },
+  { id:'n2', cx:330, cy:120, cluster:'a', title:'paxos-made-simple.pdf', type:'PDF', size:'1.1mb', date:'2025-03-18', chunks:['proposers','quorums'] },
+  { id:'n3', cx:150, cy:280, cluster:'a', title:'note_2025-03-12.md', type:'Note', size:'4kb', date:'2025-03-12', chunks:['raft vs paxos'] },
+  { id:'n4', cx:300, cy:260, cluster:'a', title:'crdt-survey.pdf', type:'PDF', size:'3.2mb', date:'2025-04-02', chunks:['g-counters','merge semantics'] },
+  { id:'n5', cx:420, cy:200, cluster:'a', title:'vector-clocks.md', type:'Note', size:'2kb', date:'2025-04-03', chunks:['causality'] },
+
+  { id:'n6', cx:820, cy:220, cluster:'b', title:'k8s-networking.pdf', type:'PDF', size:'1.8mb', date:'2025-05-10', chunks:['service mesh','CNI'] },
+  { id:'n7', cx:940, cy:170, cluster:'b', title:'terraform-modules.md', type:'Note', size:'6kb', date:'2025-05-14', chunks:['state backends'] },
+  { id:'n8', cx:1020, cy:260, cluster:'b', title:'infra-diagram.png', type:'Image', size:'820kb', date:'2025-05-15', chunks:[] },
+  { id:'n9', cx:880, cy:320, cluster:'b', title:'incident-postmortem.md', type:'Note', size:'9kb', date:'2025-06-01', chunks:['timeline','root cause'] },
+  { id:'n10', cx:760, cy:300, cluster:'b', title:'dns-notes.md', type:'Note', size:'3kb', date:'2025-05-18', chunks:[] },
+
+  { id:'n11', cx:500, cy:600, cluster:'c', title:'cerebro-spec-draft.md', type:'Note', size:'12kb', date:'2025-07-02', chunks:['retrieval design','ux notes'] },
+  { id:'n12', cx:620, cy:660, cluster:'c', title:'onboarding-flow.png', type:'Image', size:'1.4mb', date:'2025-07-05', chunks:[] },
+  { id:'n13', cx:420, cy:680, cluster:'c', title:'meeting-notes-07-10.md', type:'Note', size:'5kb', date:'2025-07-10', chunks:[] },
+  { id:'n14', cx:560, cy:560, cluster:'c', title:'roadmap.md', type:'Note', size:'7kb', date:'2025-07-01', chunks:['q3 goals'] },
+
+  { id:'n15', cx:1080, cy:600, cluster:'b', title:'tax-return-2024.pdf', type:'PDF', size:'640kb', date:'2025-02-01', sealed:true, chunks:[] },
+  { id:'n16', cx:200, cy:520, cluster:'a', title:'passport-scan.jpg', type:'Image', size:'2.1mb', date:'2025-01-14', sealed:true, chunks:[] },
+];
+
+const edges = [
+  ['n1','n2'],['n1','n3'],['n1','n4'],['n4','n5'],['n2','n5'],
+  ['n6','n7'],['n6','n8'],['n6','n9'],['n9','n10'],['n7','n8'],
+  ['n11','n12'],['n11','n13'],['n11','n14'],['n14','n12'],
+  ['n4','n11'],['n8','n15'],['n3','n16'],
+];
+
+const svg = document.getElementById('graph');
+const NS = 'http://www.w3.org/2000/svg';
+
+function el(tag, attrs) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+const nodeById = {};
+nodes.forEach(n => nodeById[n.id] = n);
+
+const edgeGroup = el('g', {});
+edges.forEach(([a,b]) => {
+  const na = nodeById[a], nb = nodeById[b];
+  const line = el('line', { x1:na.cx, y1:na.cy, x2:nb.cx, y2:nb.cy, class:'edge', 'data-a':a, 'data-b':b });
+  edgeGroup.appendChild(line);
+});
+svg.appendChild(edgeGroup);
+
+const nodeGroup = el('g', {});
+nodes.forEach(n => {
+  const g = el('g', { class:'node', 'data-id':n.id, transform:`translate(${n.cx},${n.cy})` });
+  const halo = el('circle', { class:'halo', r:6, fill:'none', stroke:'#8B5CF6', 'stroke-width':1.5 });
+  const fill = el('circle', { class:'fill', r: n.sealed ? 5 : 6, fill: n.sealed ? 'rgba(245,158,11,0.55)' : CLUSTER_COLOR[n.cluster], opacity: n.sealed ? 0.7 : 1 });
+  g.appendChild(halo);
+  g.appendChild(fill);
+  if (n.sealed) {
+    const shackle = el('path', { d:'M -2.5 -9 a 2.5 2.5 0 0 1 5 0 v 1.5 h -5 z', fill:'none', stroke:'#F59E0B', 'stroke-width':1.2, transform:'translate(9,0)' });
+    const body = el('rect', { x:5.5, y:-7.5, width:7, height:6, rx:1.2, fill:'#F59E0B' });
+    g.appendChild(shackle);
+    g.appendChild(body);
+  }
+  g.addEventListener('mouseenter', () => setEdgeVisibility(n.id, true));
+  g.addEventListener('mouseleave', () => { if (!g.classList.contains('selected')) setEdgeVisibility(n.id, false); });
+  g.addEventListener('click', () => selectNode(n.id));
+  nodeGroup.appendChild(g);
+});
+svg.appendChild(nodeGroup);
+
+function setEdgeVisibility(nodeId, show) {
+  edgeGroup.querySelectorAll('line').forEach(line => {
+    if (line.getAttribute('data-a') === nodeId || line.getAttribute('data-b') === nodeId) {
+      line.classList.toggle('show', show);
+    }
+  });
+}
+
+let selectedId = null;
+function selectNode(id) {
+  if (selectedId) {
+    nodeGroup.querySelector(`[data-id="${selectedId}"]`).classList.remove('selected');
+    setEdgeVisibility(selectedId, false);
+    clearSatellites();
+  }
+  selectedId = id;
+  const n = nodeById[id];
+  nodeGroup.querySelector(`[data-id="${id}"]`).classList.add('selected');
+  setEdgeVisibility(id, true);
+  renderSatellites(n);
+  renderPanel(n);
+  document.getElementById('side-panel').classList.add('open');
+}
+
+function closePanel() {
+  document.getElementById('side-panel').classList.remove('open');
+  if (selectedId) {
+    nodeGroup.querySelector(`[data-id="${selectedId}"]`).classList.remove('selected');
+    setEdgeVisibility(selectedId, false);
+    clearSatellites();
+  }
+  selectedId = null;
+}
+
+let satelliteEls = [];
+function clearSatellites() { satelliteEls.forEach(e => e.remove()); satelliteEls = []; }
+function renderSatellites(n) {
+  clearSatellites();
+  if (!n.chunks || n.chunks.length === 0) return;
+  const radius = 42;
+  n.chunks.forEach((label, i) => {
+    const angle = (i / n.chunks.length) * Math.PI * 2 - Math.PI / 2;
+    const x = n.cx + radius * Math.cos(angle);
+    const y = n.cy + radius * Math.sin(angle);
+    const line = el('line', { x1:n.cx, y1:n.cy, x2:x, y2:y, stroke:'rgba(244,244,245,0.15)', 'stroke-width':1 });
+    const dot = el('circle', { cx:x, cy:y, r:3, fill:'rgba(244,244,245,0.5)' });
+    svg.appendChild(line); svg.appendChild(dot);
+    satelliteEls.push(line, dot);
+  });
+}
+
+const TYPE_ICON = { PDF:'▮', Note:'▯', Image:'▭' };
+
+function renderPanel(n) {
+  const c = document.getElementById('panel-content');
+  if (n.sealed) {
+    c.innerHTML = `
+      <div class="panel-icon-row"><span class="lock-badge">Sealed</span></div>
+      <h2 class="panel-title">${n.title}</h2>
+      <div class="panel-meta">${n.type} · ${n.size} · ${n.date}</div>
+      <div class="panel-divider"></div>
+      <div class="panel-locked-note">This file's content isn't loaded into the graph while sealed — there's nothing here to retrieve or display until it's unlocked.</div>
+      <div class="panel-field">
+        <label>Passphrase</label>
+        <input type="password" placeholder="••••••••" />
+      </div>
+      <button class="panel-btn" style="margin-top: var(--space-2); border-color: var(--accent-locked-subtle); color: var(--accent-locked);">Unlock</button>
+    `;
+  } else {
+    const chunkList = (n.chunks||[]).map(ch => `<div class="chunk-label">· ${ch}</div>`).join('');
+    c.innerHTML = `
+      <div class="panel-icon-row" style="font-family: var(--font-mono); color: var(--text-secondary); font-size: var(--text-xs);">${n.type}</div>
+      <h2 class="panel-title">${n.title}</h2>
+      <div class="panel-meta">${n.size} · ${n.date}</div>
+      <button class="panel-btn">View source</button>
+      <div class="panel-divider"></div>
+      <div class="chunk-label" style="color: var(--text-primary); font-weight: var(--weight-medium); margin-bottom: 4px;">Chunks</div>
+      ${chunkList || '<div class="chunk-label">No chunk breakdown for this file.</div>'}
+    `;
+  }
+}
+
+function dismissLegend() {
+  document.getElementById('legend').style.display = 'none';
+  document.getElementById('legend-reopen').style.display = 'flex';
+}
+function reopenLegend() {
+  document.getElementById('legend').style.display = 'flex';
+  document.getElementById('legend-reopen').style.display = 'none';
+}
+
+function runRetrievalPulse() {
+  const candidates = ['n1','n3','n4'];
+  const dockX = 720, dockY = 868;
+  candidates.forEach(id => {
+    const n = nodeById[id];
+    const g = nodeGroup.querySelector(`[data-id="${id}"]`);
+    g.classList.add('retrieved');
+    setTimeout(() => g.classList.remove('retrieved'), 700);
+
+    const path = el('path', {
+      d: `M ${n.cx} ${n.cy} Q ${(n.cx+dockX)/2} ${(n.cy+dockY)/2 - 40} ${dockX} ${dockY}`,
+      class: 'pulse-line'
+    });
+    svg.appendChild(path);
+    requestAnimationFrame(() => path.classList.add('animate'));
+    setTimeout(() => path.remove(), 2100);
+  });
+}
+</script>
+</body>
+</html>

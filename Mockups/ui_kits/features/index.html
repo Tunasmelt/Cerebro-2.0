@@ -1,0 +1,233 @@
+<!-- @dsCard group="Landing" viewport="1440x900" subtitle="Features walkthrough — alternating rows: ingest, retrieval, graph, locking, traceability" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cerebro — features</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { margin: 0; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui); }
+  a { color: var(--accent-primary-hover); text-decoration: none; }
+  a:hover { color: var(--accent-primary); text-decoration: underline; }
+  .container { max-width: 1120px; margin: 0 auto; padding: 0 40px; }
+  .eyebrow { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase; }
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: var(--font-ui); font-weight: var(--weight-medium); font-size: var(--text-sm);
+    background: var(--accent-primary); color: var(--text-on-accent);
+    border: 1px solid transparent; border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-6); cursor: pointer;
+    transition: background var(--duration-base) var(--ease-soft);
+  }
+  .btn-primary:hover { background: var(--accent-primary-hover); }
+  .btn-primary:active { background: var(--accent-primary-active); }
+
+  .page-head { padding: 100px 0 40px; }
+  .page-head h1 { font-size: 44px; font-weight: var(--weight-semibold); letter-spacing: -0.01em; margin: var(--space-3) 0 0; }
+
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 72px; align-items: center; padding: 88px 0; }
+  .row.reverse .row-visual { order: 2; }
+  .row.reverse .row-text { order: 1; }
+  .row-text h2 { font-size: var(--text-2xl); font-weight: var(--weight-semibold); margin: var(--space-2) 0 var(--space-4); letter-spacing: -0.005em; }
+  .row-text p { font-size: var(--text-md); color: var(--text-secondary); line-height: var(--leading-md); max-width: 420px; margin: 0; }
+  .row-visual { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-6); min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+  .row-visual.large { min-height: 380px; }
+  .visual-caption { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); margin-top: var(--space-4); text-align: center; }
+
+  /* mini document + photo icons for row 1 */
+  .doc-icon { width: 40px; height: 52px; background: var(--bg-elevated-hover); border: 1px solid var(--border-default); border-radius: 3px; position: relative; }
+  .doc-icon::before { content: ''; position: absolute; top: 0; right: 0; width: 12px; height: 12px; background: var(--bg-base); clip-path: polygon(0 0, 100% 0, 100% 100%); border-bottom-left-radius: 3px; }
+  .photo-icon { width: 40px; height: 40px; background: var(--bg-elevated-hover); border: 1px solid var(--border-default); border-radius: 6px; position: relative; overflow: hidden; }
+  .photo-icon::after { content: ''; position: absolute; bottom: 4px; left: 4px; width: 32px; height: 14px; border-radius: 50% 50% 0 0; background: var(--border-default); }
+  .photo-icon::before { content: ''; position: absolute; top: 6px; left: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-locked-subtle); }
+
+  /* hybrid retrieval lanes */
+  .lane { display: flex; align-items: center; gap: var(--space-3); width: 100%; max-width: 380px; }
+  .lane-label { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); width: 64px; flex-shrink: 0; }
+  .lane-track { flex: 1; height: 8px; border-radius: var(--radius-pill); background: var(--bg-base); border: 1px solid var(--border-default); overflow: hidden; }
+  .lane-fill { height: 100%; border-radius: var(--radius-pill); }
+
+  /* sealed before/after frames */
+  .seal-flow { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
+  .seal-frame { background: var(--bg-elevated-hover); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-3); width: 118px; display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
+  .seal-arrow { color: var(--text-disabled); font-size: 16px; }
+  .lock-glyph { width: 14px; height: 12px; position: relative; margin-top: 4px; }
+  .lock-glyph .shackle { position: absolute; top: -5px; left: 2px; width: 9px; height: 7px; border: 1.6px solid var(--accent-locked); border-bottom: none; border-radius: 5px 5px 0 0; }
+  .lock-glyph .body { position: absolute; bottom: 0; width: 14px; height: 9px; background: var(--accent-locked); border-radius: 2.5px; }
+  .lock-badge { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-ui); font-size: 10px; font-weight: var(--weight-medium); color: var(--accent-locked); background: var(--accent-locked-subtle); border-radius: var(--radius-pill); padding: 1px var(--space-2); }
+  .dot-mask { display: flex; gap: 4px; }
+  .dot-mask span { width: 5px; height: 5px; border-radius: 50%; background: var(--text-secondary); }
+  .unlocked-badge { font-family: var(--font-mono); font-size: 10px; color: var(--accent-secondary); }
+
+  /* traceability mockup */
+  .screenshot { width: 100%; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden; }
+  .screenshot-bar { height: 26px; background: var(--bg-elevated-hover); display: flex; align-items: center; gap: 5px; padding: 0 10px; }
+  .screenshot-bar span { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); }
+  .screenshot-body { padding: var(--space-4); font-size: var(--text-sm); line-height: var(--leading-sm); color: var(--text-primary); }
+  .cite { color: var(--accent-primary-hover); font-family: var(--font-mono); font-size: 0.82em; }
+
+  /* callout on brain graph */
+  .callout { position: absolute; background: var(--bg-elevated-hover); border: 1px solid var(--accent-primary-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); font-size: var(--text-xs); color: var(--text-primary); max-width: 180px; }
+
+  .cta-band { text-align: center; padding: 110px 0; border-top: 1px solid var(--border-subtle); }
+  .cta-band h2 { font-size: var(--text-3xl); font-weight: var(--weight-semibold); margin: 0 0 var(--space-6); }
+</style>
+</head>
+<body>
+
+<div class="page-head container">
+  <div class="eyebrow">Features</div>
+  <h1>How Cerebro actually works.</h1>
+</div>
+
+<div class="container">
+
+  <!-- 1. Multimodal ingest -->
+  <div class="row">
+    <div class="row-visual">
+      <svg viewBox="0 0 400 220" width="100%" height="220">
+        <g transform="translate(20,70)"><rect width="40" height="52" fill="none"/></g>
+        <foreignObject x="20" y="60" width="40" height="52"><div xmlns="http://www.w3.org/1999/xhtml" class="doc-icon"></div></foreignObject>
+        <foreignObject x="20" y="130" width="40" height="40"><div xmlns="http://www.w3.org/1999/xhtml" class="photo-icon"></div></foreignObject>
+        <line x1="65" y1="86" x2="200" y2="110" stroke="rgba(244,244,245,0.15)" stroke-width="1" stroke-dasharray="3 4"/>
+        <line x1="65" y1="150" x2="200" y2="120" stroke="rgba(244,244,245,0.15)" stroke-width="1" stroke-dasharray="3 4"/>
+        <line x1="200" y1="110" x2="260" y2="80" stroke="rgba(139,92,246,0.35)" stroke-width="1.2"/>
+        <line x1="200" y1="115" x2="260" y2="150" stroke="rgba(139,92,246,0.35)" stroke-width="1.2"/>
+        <line x1="200" y1="112" x2="310" y2="115" stroke="rgba(139,92,246,0.35)" stroke-width="1.2"/>
+        <line x1="260" y1="80" x2="310" y2="115" stroke="rgba(244,244,245,0.1)" stroke-width="1"/>
+        <line x1="260" y1="150" x2="310" y2="115" stroke="rgba(244,244,245,0.1)" stroke-width="1"/>
+        <circle cx="200" cy="112" r="7" fill="#8B5CF6"/>
+        <circle cx="260" cy="80" r="4.5" fill="#A1A1AA" opacity="0.7"/>
+        <circle cx="260" cy="150" r="4.5" fill="#A1A1AA" opacity="0.7"/>
+        <circle cx="310" cy="115" r="5" fill="#2DD4BF"/>
+      </svg>
+    </div>
+    <div class="row-text">
+      <div class="eyebrow">01 · Ingest</div>
+      <h2>One index for documents and images</h2>
+      <p>Drop in PDFs, notes, and photos of whiteboards or printed pages — they all land in the same graph. Cerebro reads text and images alike, so a scanned diagram and a typed note can end up in the same retrieved cluster.</p>
+    </div>
+  </div>
+
+  <!-- 2. Hybrid retrieval -->
+  <div class="row reverse">
+    <div class="row-visual">
+      <div class="lane" style="margin-bottom: var(--space-4);">
+        <span class="lane-label">vector</span>
+        <div class="lane-track"><div class="lane-fill" style="width: 72%; background: var(--accent-primary);"></div></div>
+      </div>
+      <div class="lane" style="margin-bottom: var(--space-6);">
+        <span class="lane-label">full-text</span>
+        <div class="lane-track"><div class="lane-fill" style="width: 54%; background: var(--accent-secondary);"></div></div>
+      </div>
+      <svg width="40" height="24"><line x1="20" y1="0" x2="20" y2="24" stroke="var(--border-strong)" stroke-width="1"/></svg>
+      <div class="lane" style="margin-top: var(--space-2);">
+        <span class="lane-label">ranked</span>
+        <div class="lane-track"><div class="lane-fill" style="width: 88%; background: var(--text-primary);"></div></div>
+      </div>
+      <div class="visual-caption">reciprocal rank fusion</div>
+    </div>
+    <div class="row-text">
+      <div class="eyebrow">02 · Retrieval</div>
+      <h2>Search finds it two ways, then merges</h2>
+      <p>Every query runs as both a meaning-based vector search and a plain keyword search. The two result lists get merged into a single ranking, so an exact term match and a conceptually related note can both surface — whichever actually answers you.</p>
+    </div>
+  </div>
+
+  <!-- 3. The brain graph -->
+  <div class="row">
+    <div class="row-visual large">
+      <svg viewBox="0 0 520 380" width="100%" height="380">
+        <!-- cluster A -->
+        <line x1="90" y1="70" x2="140" y2="100" stroke="rgba(244,244,245,0.1)" stroke-width="1"/>
+        <line x1="140" y1="100" x2="100" y2="140" stroke="rgba(244,244,245,0.1)" stroke-width="1"/>
+        <line x1="90" y1="70" x2="100" y2="140" stroke="rgba(244,244,245,0.1)" stroke-width="1"/>
+        <line x1="140" y1="100" x2="170" y2="60" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <circle cx="90" cy="70" r="5" fill="#A1A1AA" opacity="0.7"/>
+        <circle cx="140" cy="100" r="6" fill="#A1A1AA" opacity="0.8"/>
+        <circle cx="100" cy="140" r="4.5" fill="#A1A1AA" opacity="0.65"/>
+        <circle cx="170" cy="60" r="4" fill="#A1A1AA" opacity="0.6"/>
+        <!-- cluster B (active) -->
+        <line x1="290" y1="190" x2="340" y2="160" stroke="rgba(139,92,246,0.35)" stroke-width="1.2"/>
+        <line x1="290" y1="190" x2="320" y2="240" stroke="rgba(139,92,246,0.35)" stroke-width="1.2"/>
+        <line x1="340" y1="160" x2="380" y2="200" stroke="rgba(139,92,246,0.25)" stroke-width="1"/>
+        <line x1="320" y1="240" x2="380" y2="200" stroke="rgba(139,92,246,0.25)" stroke-width="1"/>
+        <circle cx="290" cy="190" r="8" fill="#8B5CF6"/>
+        <circle cx="340" cy="160" r="5" fill="#A78BFA" opacity="0.8"/>
+        <circle cx="320" cy="240" r="5" fill="#A78BFA" opacity="0.8"/>
+        <circle cx="380" cy="200" r="4.5" fill="#A1A1AA" opacity="0.6"/>
+        <!-- cluster C (teal) -->
+        <line x1="380" y1="300" x2="430" y2="280" stroke="rgba(45,212,191,0.3)" stroke-width="1.1"/>
+        <line x1="430" y1="280" x2="440" y2="330" stroke="rgba(45,212,191,0.3)" stroke-width="1.1"/>
+        <circle cx="380" cy="300" r="5" fill="#2DD4BF"/>
+        <circle cx="430" cy="280" r="4.5" fill="#5EEAD4" opacity="0.8"/>
+        <circle cx="440" cy="330" r="4" fill="#A1A1AA" opacity="0.6"/>
+        <!-- loose connectors between clusters -->
+        <line x1="170" y1="60" x2="290" y2="190" stroke="rgba(244,244,245,0.06)" stroke-width="1"/>
+        <line x1="380" y1="200" x2="380" y2="300" stroke="rgba(244,244,245,0.06)" stroke-width="1"/>
+      </svg>
+      <div class="callout" style="left: 300px; top: 30px;">Position reflects real embedding similarity — not a layout decoration.</div>
+    </div>
+    <div class="row-text">
+      <div class="eyebrow">03 · The graph</div>
+      <h2>The whole vault, laid out by meaning</h2>
+      <p>Documents that discuss similar ideas sit close together; unrelated ones drift apart. The clustering comes directly from embedding distance, so the shape of your vault is a rough map of what you've actually been thinking about.</p>
+    </div>
+  </div>
+
+  <!-- 4. Sealed files -->
+  <div class="row reverse">
+    <div class="row-visual">
+      <div class="seal-flow">
+        <div class="seal-frame">
+          <span class="lock-badge">Sealed</span>
+          <div class="lock-glyph"><div class="shackle"></div><div class="body"></div></div>
+        </div>
+        <span class="seal-arrow">→</span>
+        <div class="seal-frame">
+          <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);">passphrase</span>
+          <div class="dot-mask"><span></span><span></span><span></span><span></span></div>
+        </div>
+        <span class="seal-arrow">→</span>
+        <div class="seal-frame">
+          <span style="font-size: 10px; color: var(--text-primary); font-weight: var(--weight-medium);">Unlocked</span>
+          <span class="unlocked-badge">14:59 left</span>
+        </div>
+      </div>
+      <div class="visual-caption">locked → passphrase → unlocked, session-timed</div>
+    </div>
+    <div class="row-text">
+      <div class="eyebrow">04 · Sealed files</div>
+      <h2>Unlock only for as long as you need</h2>
+      <p>A sealed note asks for its passphrase once per session and starts a visible countdown. When the timer runs out, it locks itself again automatically — no separate step to remember.</p>
+    </div>
+  </div>
+
+  <!-- 5. Full traceability -->
+  <div class="row">
+    <div class="row-visual">
+      <div class="screenshot">
+        <div class="screenshot-bar"><span></span><span></span><span></span></div>
+        <div class="screenshot-body">
+          Raft favors a strong single leader<span class="cite"> [1]</span>, while Paxos allows multiple proposers to compete for a slot<span class="cite"> [2]</span>. Your own notes call the leader-based model easier to debug in small clusters<span class="cite"> [3]</span>.
+        </div>
+      </div>
+    </div>
+    <div class="row-text">
+      <div class="eyebrow">05 · Traceability</div>
+      <h2>Every claim traces back</h2>
+      <p>Each sentence in an answer links to the exact chunk it came from — a paragraph, a page, a captioned region of an image. Click a citation and you're looking at the source, not a paraphrase of it.</p>
+    </div>
+  </div>
+
+</div>
+
+<section class="cta-band">
+  <div class="container">
+    <h2>Start building your vault.</h2>
+    <button class="btn-primary">Try it</button>
+  </div>
+</section>
+
+</body>
+</html>

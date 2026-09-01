@@ -1,0 +1,67 @@
+:root {
+  /* base palette */
+  --color-black: #0A0A0F;
+  --color-surface: #13131A;
+  --color-surface-hover: #1B1B24;
+
+  --color-violet: #8B5CF6;
+  --color-violet-hover: #A78BFA;
+  --color-violet-active: #7C3AED;
+
+  --color-teal: #2DD4BF;
+  --color-teal-hover: #5EEAD4;
+  --color-teal-active: #14B8A6;
+
+  --color-amber: #F59E0B;
+  --color-amber-hover: #FBBF24;
+  --color-amber-active: #D97706;
+
+  --color-red: #EF4444;
+  --color-red-hover: #F87171;
+  --color-red-active: #DC2626;
+
+  --color-white: #F4F4F5;
+  --color-gray: #A1A1AA;
+  --color-gray-dim: #71717A;
+
+  /* surfaces */
+  --bg-base: var(--color-black);
+  --bg-elevated: var(--color-surface);
+  --bg-elevated-hover: var(--color-surface-hover);
+
+  /* borders — always low-opacity white, never harsh black lines */
+  --border-subtle: rgba(244, 244, 245, 0.08);
+  --border-default: rgba(244, 244, 245, 0.12);
+  --border-strong: rgba(244, 244, 245, 0.18);
+
+  /* text */
+  --text-primary: var(--color-white);
+  --text-secondary: var(--color-gray);
+  --text-disabled: var(--color-gray-dim);
+  --text-on-accent: #0A0A0F;
+
+  /* primary accent — violet. Sparingly: active/live states, retrieval pulses, primary CTAs */
+  --accent-primary: var(--color-violet);
+  --accent-primary-hover: var(--color-violet-hover);
+  --accent-primary-active: var(--color-violet-active);
+  --accent-primary-subtle: rgba(139, 92, 246, 0.12);
+  --accent-primary-border: rgba(139, 92, 246, 0.4);
+
+  /* secondary accent — teal. Secondary actions, success states */
+  --accent-secondary: var(--color-teal);
+  --accent-secondary-hover: var(--color-teal-hover);
+  --accent-secondary-active: var(--color-teal-active);
+  --accent-secondary-subtle: rgba(45, 212, 191, 0.12);
+
+  /* locked accent — amber. Reserved EXCLUSIVELY for encryption/lock-related UI. */
+  --accent-locked: var(--color-amber);
+  --accent-locked-hover: var(--color-amber-hover);
+  --accent-locked-active: var(--color-amber-active);
+  --accent-locked-subtle: rgba(245, 158, 11, 0.12);
+
+  /* danger — destructive actions only, never reused for lock states */
+  --danger: var(--color-red);
+  --danger-hover: var(--color-red-hover);
+  --danger-active: var(--color-red-active);
+  --danger-subtle: rgba(239, 68, 68, 0.12);
+}
