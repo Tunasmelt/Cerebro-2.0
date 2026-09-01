@@ -21,11 +21,14 @@ centroid, all at once, k-means from scratch. Stage 2.5 adds incremental
 nearest-centroid placement for new uploads so a single new document
 doesn't reshuffle the whole graph; that's explicitly out of scope here.
 """
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 MAX_KMEANS_ITERATIONS = 100
 
@@ -188,17 +191,32 @@ def set_graph_storage(storage: GraphStorage) -> None:
 
 
 async def run_clustering_job(*, user_jwt: str, user_id: str) -> int:
-    """Returns the number of documents clustered. Full recompute every
-    run (see module docstring) — safe to call repeatedly, e.g. after
-    every embed job completes, since it always replaces the prior
-    cluster set rather than accumulating."""
-    storage = get_graph_storage()
-    documents = await storage.get_ready_documents_with_chunk_embeddings(user_jwt=user_jwt)
-    result = cluster_documents(documents)
-    await storage.replace_clusters(
-        user_jwt=user_jwt,
-        user_id=user_id,
-        cluster_positions=result.cluster_positions,
-        assignments=result.assignments,
-    )
-    return len(result.assignments)
+    """Returns the number of documents clustered, or -1 if the job
+    failed. Full recompute every run (see module docstring) — safe to
+    call repeatedly, e.g. after every embed job completes, since it
+    always replaces the prior cluster set rather than accumulating.
+
+    Runs as a FastAPI BackgroundTask (routes/graph.py) — no client is
+    waiting on it, so a failure here has no natural place to surface
+    except the logs. Caught live: a real failure (chunks.embedding
+    coming back from PostgREST as a JSON string, not an array — see
+    storage.py) produced *no* traceback in Render's logs at all, not
+    even an unhandled-exception one — so this is now wrapped explicitly
+    rather than trusted to the framework's default background-task
+    exception handling."""
+    try:
+        storage = get_graph_storage()
+        documents = await storage.get_ready_documents_with_chunk_embeddings(
+            user_jwt=user_jwt
+        )
+        result = cluster_documents(documents)
+        await storage.replace_clusters(
+            user_jwt=user_jwt,
+            user_id=user_id,
+            cluster_positions=result.cluster_positions,
+            assignments=result.assignments,
+        )
+        return len(result.assignments)
+    except Exception:
+        logger.exception("run_clustering_job failed for user %s", user_id)
+        return -1

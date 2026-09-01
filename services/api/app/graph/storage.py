@@ -5,6 +5,16 @@ embedding (`select=id,chunks(embedding)`) to fetch every ready
 document's chunk embeddings in one request — not N+1 queries per
 document, which matters once a user has hundreds of documents.
 
+Caught live: PostgREST serializes a `halfvec` column as a JSON *string*
+containing the vector's text representation (`"[-0.045,0.03,...]"`),
+not a real JSON array of numbers — confirmed by a direct curl against
+the live API after a real recluster run silently produced zero
+clusters. Stage 1.5's retrieval never hit this, because its RPC
+computes distance server-side and never returns raw embedding values
+through PostgREST — this is the first code path that actually reads
+one back. Each embedding string is parsed with json.loads before it
+reaches numpy.
+
 replace_clusters inserts new cluster rows one at a time, not as a
 single bulk INSERT — a bulk multi-row INSERT's returned rows are not
 guaranteed by Postgres/PostgREST to come back in submission order, and
@@ -13,12 +23,21 @@ id exactly. One request per cluster (there are only ever a few dozen)
 avoids that ambiguity entirely instead of relying on an ordering
 guarantee that doesn't actually exist.
 """
+import json
 import os
 from typing import Any
 
 import httpx
 
 from app.graph.cluster import ClusterAssignment
+
+
+def _parse_embedding(raw: Any) -> list[float] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        return raw
+    return json.loads(raw)
 
 
 class GraphStorageError(Exception):
@@ -52,9 +71,9 @@ class SupabaseGraphStorage:
             {
                 "id": row["id"],
                 "chunk_embeddings": [
-                    c["embedding"]
+                    parsed
                     for c in row.get("chunks", []) or []
-                    if c.get("embedding") is not None
+                    if (parsed := _parse_embedding(c.get("embedding"))) is not None
                 ],
             }
             for row in rows

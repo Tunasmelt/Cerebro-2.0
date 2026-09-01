@@ -211,6 +211,31 @@ async def test_run_clustering_job_replaces_clusters_and_returns_count():
     assert len(storage.replace_calls[0]["assignments"]) == 2
 
 
+# --- failures are logged, not lost (regression: no traceback appeared -----------
+# --- in production logs for a real failure until this was added) ---------------
+
+
+class _FailingGraphStorage:
+    async def get_ready_documents_with_chunk_embeddings(self, *, user_jwt):
+        raise ValueError("could not convert string to float: '[-0.045, 0.03]'")
+
+    async def replace_clusters(self, **kwargs):
+        raise AssertionError("should never be reached")
+
+
+@pytest.mark.asyncio
+async def test_run_clustering_job_returns_sentinel_and_logs_on_failure(caplog):
+    cluster_module.set_graph_storage(_FailingGraphStorage())
+
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        count = await run_clustering_job(user_jwt="t", user_id="u1")
+
+    assert count == -1
+    assert any("run_clustering_job failed" in r.message for r in caplog.records)
+
+
 # --- timing: 300-document seed set ----------------------------------------------
 
 
