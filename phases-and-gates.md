@@ -451,7 +451,17 @@ All stages 2.1–2.5 pass their tests, **and** you confirm live:
       path instead of a separate hover-preview mechanism. Live-verified
       locally end to end: real answer, real citation, chip renders and
       resolves, click opens the correct node's chunk panel.
-- [ ] You reopened an old conversation and the replay looked right.
+- [x] You reopened an old conversation and the replay looked right.
+      Live-verified against real production: signed in, opened the
+      "history" panel (lists real past sessions via
+      `GET /api/v1/chat/sessions`), clicked one, watched the
+      "replaying…" state take over the ask button and a graph pulse
+      fire from that session's real `retrieved_document_ids`, then
+      return to idle when the replay finished. Zero console errors.
+      One earlier attempt hit a stream timeout — traced to Render
+      free-tier cold start (documented in CLAUDE.md's 30-60s cold-start
+      note), not a code defect; a retry against the now-warm instance
+      completed in ~5s and every subsequent run was clean.
 
 ---
 
