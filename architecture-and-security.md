@@ -182,6 +182,20 @@ The `retrieval` event is yielded from a fully-awaited `retrieve()` call
 before the generate client is ever touched — the ordering is structural,
 not a race that happens to usually resolve correctly.
 
+Stage 1.7's exit criteria stops at the `citation` event being correct
+— it never covered frontend rendering, and until the Phase 0-2 UI audit
+`/graph`'s chat bubble showed the raw `[[chunk:<id>]]` marker text
+verbatim. `apps/web/src/lib/graph/citations.ts` (pure, no React) now
+parses `answer` against the real `citation` events collected during the
+stream into numbered chips (matching `Mockups/ui_kits/chat/index.html`'s
+cite-chip pattern) — clicking one reuses the existing click-to-expand
+path to select that document node. Markers are stripped entirely while
+`streaming` is still true: `citation` events only arrive after the full
+token stream completes per the ordering above, so a marker visible
+mid-stream can't yet be told apart from one that will end up dropped
+(same "never trust the marker alone" principle as `extract_citations`
+itself).
+
 ### Tracing (detail, Stage 1.8)
 
 `core/tracing.py` wraps the Langfuse Python SDK (`get_client()`,
@@ -308,6 +322,17 @@ requirement is reproducible on demand without seeding 300 real
 documents. `GraphCanvas` exposes two test-only callback props
 (`onFpsSample`, `onPositionsSample`) that only this harness and its
 Playwright test consume — the real `/graph` page never passes them.
+
+`page.tsx` polls `GET /graph/nodes` and `/graph/edges` together every
+`GRAPH_POLL_INTERVAL_MS` (5s — a UI gap closed after the Phase 0-2 UI
+audit found the original one-shot fetch-on-mount meant a document
+uploaded elsewhere needed a full reload to appear). Each poll's payload
+is compared via `JSON.stringify` against the last-seen one in a ref
+(not state) before calling `setNodes`/`setEdges`, specifically so an
+unchanged tick doesn't hand `GraphCanvas` a new array reference — its
+simulation-rebuild effect keys on `[nodes, edges]` (see above), and a
+fresh reference every 5s would restart d3-force and visibly jitter an
+already-settled graph.
 
 ### Retrieval-replay (detail, Stage 2.4)
 

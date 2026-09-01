@@ -197,6 +197,29 @@
   line-height: 1.5;
 }
 
+.citeChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--bg-elevated-hover);
+  border: 1px solid var(--border-default);
+  color: var(--accent-primary-hover);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+  margin: 0 2px;
+  position: relative;
+  top: -1px;
+  transition: background var(--duration-fast) var(--ease-soft);
+}
+.citeChip:hover {
+  background: var(--accent-primary-subtle);
+  border-color: var(--accent-primary-border);
+}
+
 .chatError {
   color: #ef4444;
   font-size: 13px;

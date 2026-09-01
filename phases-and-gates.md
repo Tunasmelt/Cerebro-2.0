@@ -427,8 +427,30 @@ after a successful retry-ingest) — no new route was needed.
 All stages 2.1–2.5 pass their tests, **and** you confirm live:
 - [ ] You uploaded a new document and watched the graph update without a
       full reload, and it landed somewhere that made sense to you.
+      **UI gap closed:** `/graph` originally fetched nodes/edges once on
+      mount only — a document uploaded elsewhere needed a manual reload
+      to appear, contradicting this checklist item's own wording. Now
+      polls both every `GRAPH_POLL_INTERVAL_MS` (5s, well under the
+      "graph" rate-limit class's 60/min), comparing payloads before
+      calling `setNodes`/`setEdges` so an unchanged poll tick doesn't
+      hand `GraphCanvas` a new array reference and restart its d3-force
+      simulation. Live-verified locally: request count increases every
+      poll cycle while the page sits open.
 - [ ] You asked a question and watched the correct nodes pulse in real
       time, matching the answer's citations.
+      **UI gap closed:** the chat bubble rendered raw `[[chunk:<id>]]`
+      marker syntax verbatim — Stage 1.7's exit criteria only covered
+      the `citation` *event* being correct, never frontend rendering.
+      Markers are now resolved against the real `citation` events into
+      numbered chips (`Mockups/ui_kits/chat/index.html`'s cite-chip
+      pattern), stripped entirely while still streaming since
+      `citation` events only arrive after the full token stream
+      completes (a marker visible mid-stream can't yet be told apart
+      from one that will end up dropped). Clicking a chip selects that
+      document node on the graph, reusing the existing click-to-expand
+      path instead of a separate hover-preview mechanism. Live-verified
+      locally end to end: real answer, real citation, chip renders and
+      resolves, click opens the correct node's chunk panel.
 - [ ] You reopened an old conversation and the replay looked right.
 
 ---
