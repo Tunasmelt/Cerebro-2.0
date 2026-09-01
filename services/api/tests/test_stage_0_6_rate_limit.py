@@ -3,12 +3,13 @@
 Exit criteria: limits from architecture-and-security.md's rate-limit table
 are enforced per user, per route class.
 
-Real chat/upload/seal/graph endpoints don't exist yet (Phase 1/3), so these
-tests hit the documented future paths directly (e.g. POST /api/v1/documents)
-— RateLimitMiddleware runs before routing, so a request within budget still
+seal/unseal endpoints don't exist yet (Phase 3), so that test hits the
+documented future path directly (POST /api/v1/documents/{id}/seal) —
+RateLimitMiddleware runs before routing, so a request within budget still
 reaches routing (404, since no handler exists yet) while a request over
-budget never gets that far (429). That 404-vs-429 distinction is exactly
-how we prove the limiter is doing the gating, not the router.
+budget never gets that far (429). Chat/upload/graph routes are real now
+(Phase 1/2) and get a real fake storage seam wired in below so they can
+be hit directly too, instead of relying on that 404-vs-429 distinction.
 
 Uses the same JWKS test seam as Stage 0.5 so this is deterministic and
 network-free, plus an injectable clock so the "resets after the window
@@ -27,6 +28,7 @@ from app.core import documents_storage as documents_storage_module
 from app.core import rate_limit as rate_limit_module
 from app.core.documents_storage import SignedUpload
 from app.core.rate_limit import RateLimiter
+from app.graph import cluster as graph_cluster_module
 from app.main import app
 
 TEST_ISSUER = "https://test-project.supabase.co/auth/v1"
@@ -80,6 +82,27 @@ class _FakeDocumentsStorage:
         raise NotImplementedError
 
 
+class _FakeGraphStorage:
+    """Just enough to let /graph/nodes's real handler succeed without
+    any network — this test is about the rate limiter, not the graph
+    API (covered by test_graph_routes.py)."""
+
+    async def get_ready_documents_with_chunk_embeddings(self, *, user_jwt):
+        return []
+
+    async def replace_graph(self, **kwargs):
+        pass
+
+    async def get_nodes(self, *, user_jwt):
+        return []
+
+    async def get_edges(self, *, user_jwt):
+        return []
+
+    async def get_node_chunks(self, *, user_jwt, document_id):
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _wire_test_seams(keypair, fake_clock, monkeypatch):
     _private_key, public_key = keypair
@@ -87,12 +110,14 @@ def _wire_test_seams(keypair, fake_clock, monkeypatch):
     auth_module.set_jwks_client(_StubJWKClient(public_key))
     rate_limit_module.set_rate_limiter(RateLimiter(clock=fake_clock))
     documents_storage_module.set_documents_storage(_FakeDocumentsStorage())
+    graph_cluster_module.set_graph_storage(_FakeGraphStorage())
     yield
     auth_module.set_jwks_client(None)
     rate_limit_module.set_rate_limiter(RateLimiter())
     documents_storage_module.set_documents_storage(
         documents_storage_module.SupabaseDocumentsStorage()
     )
+    graph_cluster_module.set_graph_storage(None)
 
 
 @pytest.fixture

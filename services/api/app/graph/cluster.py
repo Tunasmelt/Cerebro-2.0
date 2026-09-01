@@ -122,9 +122,48 @@ class ClusterAssignment:
 
 
 @dataclass
+class Edge:
+    document_id: str
+    neighbor_document_id: str
+    distance: float
+    rank: int  # 1..NEIGHBORS_PER_DOCUMENT, nearest first
+
+
+@dataclass
 class ClusterResult:
     cluster_positions: list[tuple[float, float]]  # index-aligned with cluster labels
     assignments: list[ClusterAssignment]
+    edges: list[Edge]
+
+
+NEIGHBORS_PER_DOCUMENT = 3  # per api-documentation.md's "3 nearest neighbors"
+
+
+def compute_knn_edges(
+    document_ids: list[str], centroids_by_doc: np.ndarray, *, k: int = NEIGHBORS_PER_DOCUMENT
+) -> list[Edge]:
+    """True nearest neighbors in embedding space (the real 1024-dim
+    document centroids), not the lossy 2D projection — two documents can
+    sit far apart in the PCA projection while still being genuinely
+    close in the original space, especially once there are more than 2
+    clusters and a 2D projection can't preserve every pairwise
+    distance."""
+    n = centroids_by_doc.shape[0]
+    edges: list[Edge] = []
+    for i in range(n):
+        distances = np.linalg.norm(centroids_by_doc - centroids_by_doc[i], axis=1)
+        distances[i] = np.inf  # exclude self
+        nearest_indices = np.argsort(distances)[: min(k, n - 1)]
+        for rank, j in enumerate(nearest_indices, start=1):
+            edges.append(
+                Edge(
+                    document_id=document_ids[i],
+                    neighbor_document_id=document_ids[j],
+                    distance=float(distances[j]),
+                    rank=rank,
+                )
+            )
+    return edges
 
 
 def cluster_documents(
@@ -135,11 +174,13 @@ def cluster_documents(
     callers should already have filtered to status=ready documents."""
     clusterable = [d for d in documents if d["chunk_embeddings"]]
     if not clusterable:
-        return ClusterResult(cluster_positions=[], assignments=[])
+        return ClusterResult(cluster_positions=[], assignments=[], edges=[])
 
     centroids_by_doc = np.array(
         [compute_document_centroid(d["chunk_embeddings"]) for d in clusterable]
     )
+    document_ids = [d["id"] for d in clusterable]
+
     k = choose_k(len(clusterable))
     labels, cluster_centroids = kmeans(centroids_by_doc, k, seed=seed)
     positions = project_2d(cluster_centroids)
@@ -152,9 +193,15 @@ def cluster_documents(
         )
         for i, (doc, label) in enumerate(zip(clusterable, labels))
     ]
+    edges = (
+        compute_knn_edges(document_ids, centroids_by_doc)
+        if len(clusterable) > 1
+        else []
+    )
     return ClusterResult(
         cluster_positions=[(float(x), float(y)) for x, y in positions],
         assignments=assignments,
+        edges=edges,
     )
 
 
@@ -162,14 +209,20 @@ class GraphStorage(Protocol):
     async def get_ready_documents_with_chunk_embeddings(
         self, *, user_jwt: str
     ) -> list[dict[str, Any]]: ...
-    async def replace_clusters(
+    async def replace_graph(
         self,
         *,
         user_jwt: str,
         user_id: str,
         cluster_positions: list[tuple[float, float]],
         assignments: list[ClusterAssignment],
+        edges: list[Edge],
     ) -> None: ...
+    async def get_nodes(self, *, user_jwt: str) -> list[dict[str, Any]]: ...
+    async def get_edges(self, *, user_jwt: str) -> list[dict[str, Any]]: ...
+    async def get_node_chunks(
+        self, *, user_jwt: str, document_id: str
+    ) -> list[dict[str, Any]] | None: ...
 
 
 _storage: GraphStorage | None = None
@@ -210,11 +263,12 @@ async def run_clustering_job(*, user_jwt: str, user_id: str) -> int:
             user_jwt=user_jwt
         )
         result = cluster_documents(documents)
-        await storage.replace_clusters(
+        await storage.replace_graph(
             user_jwt=user_jwt,
             user_id=user_id,
             cluster_positions=result.cluster_positions,
             assignments=result.assignments,
+            edges=result.edges,
         )
         return len(result.assignments)
     except Exception:
