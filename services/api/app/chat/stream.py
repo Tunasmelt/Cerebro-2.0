@@ -32,6 +32,7 @@ retrieval, generation, storage — surfaces as a real `error` SSE event
 before the connection closes, instead of dying silently.
 """
 import json
+import logging
 from typing import AsyncIterator
 
 from app.chat.generate import get_generate_client
@@ -39,6 +40,8 @@ from app.chat.prompt import build_system_instruction, extract_citations
 from app.chat.storage import get_chat_storage
 from app.core.tracing import get_tracer
 from app.retrieve.retrieve import retrieve
+
+logger = logging.getLogger(__name__)
 
 
 def _sse(event: str, data: dict) -> str:
@@ -117,7 +120,17 @@ async def stream_chat(
                 output={"answer": full_text, "citation_count": len(citations)}
             )
     except Exception as exc:
-        yield _sse("error", {"code": "chat_turn_failed", "message": str(exc)})
+        # Caught here instead of left to propagate, so the client always
+        # gets a real terminal event instead of a dead connection — but
+        # that means Starlette never gets to log the traceback it would
+        # have for an unhandled exception, so log it ourselves. str(exc)
+        # is often empty for things like httpx.ReadTimeout (no message
+        # was ever set), so the exception's type name is included too —
+        # confirmed live: a real production error came back as
+        # {"message": ""} until this was added.
+        logger.exception("chat_turn failed for session %s", session_id)
+        message = str(exc) or type(exc).__name__
+        yield _sse("error", {"code": "chat_turn_failed", "message": message})
         return
 
     yield _sse("done", {})
