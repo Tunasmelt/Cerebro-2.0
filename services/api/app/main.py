@@ -1,12 +1,23 @@
 import os
 
-from fastapi import FastAPI, Request
+from dotenv import load_dotenv
 
-from app.core.middleware import AuthMiddleware
-from app.core.rate_limit_middleware import RateLimitMiddleware
-from app.routes.chat import router as chat_router
-from app.routes.documents import router as documents_router
-from app.routes.graph import router as graph_router
+# Must run before any app.* import below — several modules construct a
+# storage singleton at import time (e.g. documents_storage.py's
+# `_storage = SupabaseDocumentsStorage()`) whose __init__ reads
+# SUPABASE_URL/SUPABASE_ANON_KEY from os.environ immediately. Render sets
+# real env vars directly so this is a no-op there; locally it loads
+# services/api/.env for `uvicorn app.main:app` to work without exporting
+# vars by hand.
+load_dotenv()
+
+from fastapi import FastAPI, Request  # noqa: E402
+
+from app.core.middleware import AuthMiddleware  # noqa: E402
+from app.core.rate_limit_middleware import RateLimitMiddleware  # noqa: E402
+from app.routes.chat import router as chat_router  # noqa: E402
+from app.routes.documents import router as documents_router  # noqa: E402
+from app.routes.graph import router as graph_router  # noqa: E402
 
 app = FastAPI()
 app.include_router(documents_router)
