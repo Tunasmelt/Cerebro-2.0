@@ -465,13 +465,25 @@ All stages 2.1–2.5 pass their tests, **and** you confirm live:
 
 ---
 
-## Phase 3 — Sealed tier *(planned — stages defined now, not built this window)*
+## Phase 3 — Sealed tier
 
-### Stage 3.1 — Schema isolation
+### Stage 3.1 — Schema isolation ✅
 **Exit criteria:** `sealed_chunks` exists, fully isolated from `chunks`,
 no embedding column.
 **Tests:** Migration test confirms no foreign key or view joins
 `sealed_chunks` content into any retrieval-path query.
+**Done:** `supabase/migrations/0011_phase3_1_sealed_chunks.sql` — applied
+to the live Supabase project (migration `phase3_1_sealed_chunks`,
+confirmed via `list_migrations`). `document_id`/`user_id` are plain uuid
+FKs to `documents`/`auth.users`, never to `chunks`; no embedding column
+(sealed content is never vectorized outside an active unlock — that's
+Stage 3.2+). RLS enabled with the same flat `auth.uid() = user_id`
+pattern as every other table. `get_advisors(type=security)` shows no new
+lint from this migration. Static structural tests in
+`services/api/tests/test_stage_3_1_sealed_schema.py` (5 tests, passing)
+assert the table exists, has no embedding column, has no FK either
+direction with `chunks`, has RLS enabled, and that `retrieve.py` never
+references `sealed_chunks`.
 
 ### Stage 3.2 — Client-side crypto
 **Exit criteria:** WebCrypto derives a key from passphrase (Argon2id),
