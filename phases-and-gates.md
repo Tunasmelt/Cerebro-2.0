@@ -510,11 +510,33 @@ wired into CI as a new step in the existing `web (lint + build)` job
 (kept that exact job name — it's a required branch-protection status
 check, renaming it would break the merge gate).
 
-### Stage 3.3 — Seal/unseal API & unlock claims
+### Stage 3.3 — Seal/unseal API & unlock claims ✅
 **Exit criteria:** Unlock issues a 15-minute session-scoped claim; expiry
 is enforced server-side, not just client-side.
 **Tests:** A claim used after 15 minutes is rejected; a claim reused past
 its stated scope is rejected.
+**Done:** `services/api/app/core/sealed_storage.py` +
+`app/routes/sealed.py`, new `unlock_claims` table (migration
+`0012_phase3_3_unlock_claims`, applied to the live Supabase project).
+Three routes: `POST /documents/{id}/seal` (stores client-supplied
+ciphertext into `sealed_chunks`, deletes the now-redundant plaintext +
+embedding rows from `chunks`, sets `documents.status='sealed'`),
+`POST /documents/{id}/unlock` (receives the Argon2id-derived key for
+that one request only, test-decrypts a real `sealed_chunks` row to
+prove it's correct, issues a claim — a plain DB row, not a signed
+token — scoped to exactly one `document_id` with `expires_at = now() +
+15m`), `POST /documents/{id}/unseal` (validates the claim's scope and
+expiry against Postgres's own clock *before* touching any ciphertext,
+then decrypts and returns plaintext in the response body only — never
+persisted). `is_claim_expired` is a pure, storage-free function so
+expiry logic is unit-tested directly rather than only through route
+wiring. All Supabase calls use the caller's own JWT (RLS-scoped), never
+a service-role key. 15 new tests in
+`services/api/tests/test_stage_3_3_sealed_api.py`, including the two
+exit-criteria-required cases (claim rejected after 15 minutes; claim
+issued for one document rejected when replayed against a different
+one) — 169/169 backend tests passing, `ruff` clean. Security review
+subagent: no high-confidence findings.
 
 ### Stage 3.4 — Metadata-only search filtering
 **Exit criteria:** Sealed content never enters retrieval results; only
