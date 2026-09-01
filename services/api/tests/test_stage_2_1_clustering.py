@@ -165,6 +165,64 @@ def test_empty_document_set_returns_empty_result():
     result = cluster_documents([], seed=0)
     assert result.assignments == []
     assert result.cluster_positions == []
+    assert result.edges == []
+
+
+# --- compute_knn_edges (Stage 2.2) ----------------------------------------------
+
+
+def test_knn_edges_finds_true_nearest_neighbors_in_embedding_space():
+    # doc-0 and doc-1 are close; doc-2 is far from both.
+    centroids = np.array(
+        [
+            [0.0] * EMBEDDING_DIM,
+            [0.1] * EMBEDDING_DIM,
+            [50.0] * EMBEDDING_DIM,
+        ]
+    )
+    edges = cluster_module.compute_knn_edges(["doc-0", "doc-1", "doc-2"], centroids, k=1)
+
+    by_doc = {e.document_id: e.neighbor_document_id for e in edges}
+    assert by_doc["doc-0"] == "doc-1"
+    assert by_doc["doc-1"] == "doc-0"
+    assert by_doc["doc-2"] in ("doc-0", "doc-1")  # only two other docs to choose from
+
+
+def test_knn_edges_never_include_self():
+    centroids = np.random.default_rng(0).normal(size=(5, EMBEDDING_DIM))
+    ids = [f"doc-{i}" for i in range(5)]
+    edges = cluster_module.compute_knn_edges(ids, centroids, k=3)
+    for e in edges:
+        assert e.document_id != e.neighbor_document_id
+
+
+def test_knn_edges_ranked_nearest_first():
+    centroids = np.random.default_rng(1).normal(size=(6, EMBEDDING_DIM))
+    ids = [f"doc-{i}" for i in range(6)]
+    edges = cluster_module.compute_knn_edges(ids, centroids, k=3)
+    edges_for_doc0 = [e for e in edges if e.document_id == "doc-0"]
+    assert [e.rank for e in edges_for_doc0] == [1, 2, 3]
+    assert edges_for_doc0[0].distance <= edges_for_doc0[1].distance <= edges_for_doc0[2].distance
+
+
+def test_cluster_documents_includes_edges_for_multiple_documents():
+    documents = [
+        {"id": f"doc-{i}", "chunk_embeddings": [[float(i)] * EMBEDDING_DIM]}
+        for i in range(5)
+    ]
+    result = cluster_documents(documents, seed=0)
+    assert len(result.edges) > 0
+    # Every document should have up to 3 outgoing edges.
+    from collections import Counter
+
+    counts = Counter(e.document_id for e in result.edges)
+    assert all(c <= 3 for c in counts.values())
+
+
+def test_single_document_has_no_edges():
+    documents = [{"id": "doc-1", "chunk_embeddings": [[0.1] * EMBEDDING_DIM]}]
+    result = cluster_documents(documents, seed=0)
+    assert result.edges == []
 
 
 # --- run_clustering_job orchestration -------------------------------------------
@@ -178,12 +236,13 @@ class _FakeGraphStorage:
     async def get_ready_documents_with_chunk_embeddings(self, *, user_jwt):
         return self.documents
 
-    async def replace_clusters(self, *, user_jwt, user_id, cluster_positions, assignments):
+    async def replace_graph(self, *, user_jwt, user_id, cluster_positions, assignments, edges):
         self.replace_calls.append(
             {
                 "user_id": user_id,
                 "cluster_positions": cluster_positions,
                 "assignments": assignments,
+                "edges": edges,
             }
         )
 
@@ -209,6 +268,7 @@ async def test_run_clustering_job_replaces_clusters_and_returns_count():
     assert len(storage.replace_calls) == 1
     assert storage.replace_calls[0]["user_id"] == "u1"
     assert len(storage.replace_calls[0]["assignments"]) == 2
+    assert len(storage.replace_calls[0]["edges"]) == 2  # each doc -> the other
 
 
 # --- failures are logged, not lost (regression: no traceback appeared -----------

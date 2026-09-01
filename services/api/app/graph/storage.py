@@ -15,13 +15,15 @@ through PostgREST — this is the first code path that actually reads
 one back. Each embedding string is parsed with json.loads before it
 reaches numpy.
 
-replace_clusters inserts new cluster rows one at a time, not as a
-single bulk INSERT — a bulk multi-row INSERT's returned rows are not
+replace_graph inserts new cluster rows one at a time, not as a single
+bulk INSERT — a bulk multi-row INSERT's returned rows are not
 guaranteed by Postgres/PostgREST to come back in submission order, and
 this code needs to map each numpy cluster index to its real database
 id exactly. One request per cluster (there are only ever a few dozen)
 avoids that ambiguity entirely instead of relying on an ordering
-guarantee that doesn't actually exist.
+guarantee that doesn't actually exist. document_edges rows carry real
+document ids on both ends already (no index-mapping problem), so those
+go in as one bulk INSERT.
 """
 import json
 import os
@@ -29,7 +31,7 @@ from typing import Any
 
 import httpx
 
-from app.graph.cluster import ClusterAssignment
+from app.graph.cluster import ClusterAssignment, Edge
 
 
 def _parse_embedding(raw: Any) -> list[float] | None:
@@ -79,25 +81,30 @@ class SupabaseGraphStorage:
             for row in rows
         ]
 
-    async def replace_clusters(
+    async def replace_graph(
         self,
         *,
         user_jwt: str,
         user_id: str,
         cluster_positions: list[tuple[float, float]],
         assignments: list[ClusterAssignment],
+        edges: list[Edge],
     ) -> None:
         headers = self._headers(user_jwt)
         async with httpx.AsyncClient() as client:
-            # document_clusters first — it references clusters, so it
-            # must go before clusters is cleared, not after.
-            del_dc = await client.delete(
-                f"{self._supabase_url}/rest/v1/document_clusters",
-                headers=headers,
-                params={"user_id": f"eq.{user_id}"},
-            )
-            if del_dc.status_code >= 400:
-                raise GraphStorageError("delete_document_clusters_failed", del_dc.text)
+            # document_clusters before clusters — it references clusters,
+            # so it must be cleared first, not after. document_edges has
+            # no such ordering constraint (both ends reference documents
+            # directly) but is cleared alongside for the same full-replace
+            # semantics.
+            for table in ("document_clusters", "document_edges"):
+                del_resp = await client.delete(
+                    f"{self._supabase_url}/rest/v1/{table}",
+                    headers=headers,
+                    params={"user_id": f"eq.{user_id}"},
+                )
+                if del_resp.status_code >= 400:
+                    raise GraphStorageError(f"delete_{table}_failed", del_resp.text)
 
             del_c = await client.delete(
                 f"{self._supabase_url}/rest/v1/clusters",
@@ -140,3 +147,102 @@ class SupabaseGraphStorage:
             )
             if dc_insert.status_code >= 400:
                 raise GraphStorageError("insert_document_clusters_failed", dc_insert.text)
+
+            if edges:
+                edges_insert = await client.post(
+                    f"{self._supabase_url}/rest/v1/document_edges",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json=[
+                        {
+                            "document_id": e.document_id,
+                            "neighbor_document_id": e.neighbor_document_id,
+                            "user_id": user_id,
+                            "distance": e.distance,
+                            "rank": e.rank,
+                        }
+                        for e in edges
+                    ],
+                )
+                if edges_insert.status_code >= 400:
+                    raise GraphStorageError(
+                        "insert_document_edges_failed", edges_insert.text
+                    )
+
+    async def get_nodes(self, *, user_jwt: str) -> list[dict[str, Any]]:
+        """Every status=ready document, left-joined to its cluster
+        position — a document uploaded since the last recluster still
+        appears (cluster_id/x/y come back null), matching the exit
+        criteria's "no stale/missing nodes after an upload" directly:
+        node presence tracks documents.status live, not the last
+        recluster snapshot the way edges/positions do."""
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers=self._headers(user_jwt),
+                params={
+                    "status": "eq.ready",
+                    "select": "id,title,document_clusters(cluster_id,distance,clusters(centroid_x,centroid_y))",
+                },
+            )
+        if response.status_code >= 400:
+            raise GraphStorageError("fetch_nodes_failed", response.text)
+        nodes = []
+        for row in response.json():
+            dc = row.get("document_clusters")
+            # PostgREST embeds a to-one relationship (document_clusters'
+            # primary key is document_id, a genuine 1:1) as a single
+            # object when present, not a list — confirmed live, not
+            # assumed, same lesson as the halfvec string-vs-array find.
+            cluster = (dc or {}).get("clusters") or {}
+            nodes.append(
+                {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "cluster_id": (dc or {}).get("cluster_id"),
+                    "x": cluster.get("centroid_x"),
+                    "y": cluster.get("centroid_y"),
+                }
+            )
+        return nodes
+
+    async def get_edges(self, *, user_jwt: str) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/document_edges",
+                headers=self._headers(user_jwt),
+                params={"select": "document_id,neighbor_document_id,distance,rank"},
+            )
+        if response.status_code >= 400:
+            raise GraphStorageError("fetch_edges_failed", response.text)
+        return response.json()
+
+    async def get_node_chunks(
+        self, *, user_jwt: str, document_id: str
+    ) -> list[dict[str, Any]] | None:
+        """None if the document doesn't exist or isn't the caller's own
+        (RLS already scopes the query — this just distinguishes "not
+        found" from "found, zero chunks") vs. an empty list once it's
+        confirmed to exist."""
+        async with httpx.AsyncClient() as client:
+            doc_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers=self._headers(user_jwt),
+                params={"id": f"eq.{document_id}", "select": "id"},
+            )
+            if doc_resp.status_code >= 400:
+                raise GraphStorageError("fetch_document_failed", doc_resp.text)
+            if not doc_resp.json():
+                return None
+
+            chunks_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/chunks",
+                headers=self._headers(user_jwt),
+                params={
+                    "document_id": f"eq.{document_id}",
+                    "select": "id,ordinal,content,meta",
+                    "order": "ordinal",
+                },
+            )
+        if chunks_resp.status_code >= 400:
+            raise GraphStorageError("fetch_chunks_failed", chunks_resp.text)
+        return chunks_resp.json()

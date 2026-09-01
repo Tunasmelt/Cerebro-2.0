@@ -246,8 +246,10 @@ POST /graph/recluster
     chosen as a reasonable easy-to-retune default — same category as
     retrieve.py's RRF_K)
   → project cluster centroids to 2D via PCA/SVD
-  → full replace: delete this user's existing clusters +
-    document_clusters rows, insert the new set
+  → top-3 nearest-neighbor edges per document (Stage 2.2), computed
+    from the same real 1024-dim centroids, NOT the lossy 2D projection
+  → full replace: delete this user's existing clusters,
+    document_clusters, and document_edges rows, insert the new set
 ```
 
 Full recompute every run, not incremental — Stage 2.5 adds
@@ -260,6 +262,29 @@ returned rows come back in submission order, and this code needs to map
 each numpy cluster index to its real database id exactly. One request
 per cluster (there are only ever a few dozen) sidesteps an ordering
 guarantee that doesn't actually exist, rather than relying on it.
+document_edges rows carry real document ids on both ends already, so
+those go in as one bulk INSERT with no such ordering concern.
+
+Caught live: PostgREST embeds a to-one relationship
+(`document_clusters` → `clusters`, since `document_clusters`'s primary
+key is `document_id`, a genuine 1:1) as a single object when queried
+via resource embedding, not a list — confirmed against the real API
+before relying on it in `GET /graph/nodes`'s query shape, same lesson
+as the `halfvec`-as-string find above.
+
+Stage 2.2 read routes:
+- `GET /graph/nodes` — every `status=ready` document, live, left-joined
+  to its cluster position. A document uploaded since the last recluster
+  still appears (`cluster_id`/`x`/`y` null) rather than being missing —
+  node presence tracks `documents.status` directly, not a stale
+  recluster snapshot.
+- `GET /graph/edges` — a flat read of `document_edges`, which DOES lag
+  behind new uploads until the next recluster, unlike nodes — the exit
+  criteria's "true nearest neighbors per the **last cluster run**"
+  accepts that staleness explicitly, nodes' wording doesn't.
+- `GET /graph/nodes/{id}/chunks` — chunk satellites for one document;
+  404 (not empty list) when the document doesn't exist or isn't the
+  caller's own, distinguished from "exists, zero chunks."
 
 ---
 
@@ -302,6 +327,9 @@ clusters (
   method, computed_at
 )
 document_clusters ( document_id, cluster_id, distance )
+document_edges (                -- Stage 2.2, undocumented before this
+  document_id, neighbor_document_id, distance, rank  -- rank 1..3
+)
 
 ingest_jobs (
   id, document_id, user_id,      -- denormalized for flat RLS, avoids a

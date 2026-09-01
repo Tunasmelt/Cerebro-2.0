@@ -290,7 +290,17 @@ Gate checklist above), the gate itself is still yours to confirm live.
 
 ### Stage 2.2 — Graph API
 **Exit criteria:** `/graph/nodes`, `/graph/edges`, `/graph/nodes/{id}/chunks`
-return correct, current data.
+return correct, current data. No `edges` table existed anywhere in the
+docs before this stage — resolved in conversation: extended Stage 2.1's
+clustering job to compute and persist top-3 nearest-neighbor edges
+(`document_edges`, new table) from the same document centroid vectors
+in the same run, rather than recomputing them live on every GET
+request. Nodes deliberately don't share that same-run staleness:
+`/graph/nodes` reflects every `status=ready` document live, left-joined
+to its cluster position — a document uploaded since the last recluster
+still appears (with `cluster_id`/`x`/`y` null) instead of being
+missing, matching "no stale/missing nodes" for nodes specifically;
+edges are explicitly allowed to lag until the next recluster.
 **Tests:**
 - Node list matches the current document set exactly (no stale/missing
   nodes after an upload or delete).

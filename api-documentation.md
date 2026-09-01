@@ -173,13 +173,21 @@ POST   /graph/recluster            No body. Triggers a full re-cluster
                                     full recompute for now — Stage 2.5
                                     adds incremental placement.
 GET    /graph/nodes                Document nodes + cluster_id + 2D
-                                    centroid position. (Not yet built —
-                                    Stage 2.2.)
+                                    centroid position. Reflects every
+                                    status=ready document live —
+                                    uploaded-since-last-recluster
+                                    documents still appear, with
+                                    cluster_id/x/y null rather than
+                                    being missing.
 GET    /graph/edges                kNN edges (3 nearest neighbors per
-                                    document at last cluster run). (Not
-                                    yet built — Stage 2.2.)
+                                    document at last cluster run) —
+                                    computed and stored during
+                                    /graph/recluster, not live; this one
+                                    DOES lag new uploads until the next
+                                    recluster, unlike /graph/nodes.
 GET    /graph/nodes/{id}/chunks    Chunk satellites for an expanded node.
-                                    (Not yet built — Stage 2.2.)
+                                    404 if the document doesn't exist or
+                                    isn't the caller's own.
 ```
 
 ### Playground (Phase 4)
