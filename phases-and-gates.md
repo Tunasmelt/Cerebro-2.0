@@ -538,11 +538,51 @@ issued for one document rejected when replayed against a different
 one) — 169/169 backend tests passing, `ruff` clean. Security review
 subagent: no high-confidence findings.
 
-### Stage 3.4 — Metadata-only search filtering
+### Stage 3.4 — Metadata-only search filtering ✅
 **Exit criteria:** Sealed content never enters retrieval results; only
 metadata (title, tags, cluster position) is searchable while sealed.
 **Tests:** Query using exact phrasing from sealed content returns zero
 matches on that content pre-unlock; returns it post-unlock.
+**Done:** Two layers. (1) Defense-in-depth: migration
+`0013_phase3_4_seal_retrieval_filter` adds an explicit
+`documents.status <> 'sealed'` filter to both `match_chunks_vector` and
+(newly joined to `documents`) `match_chunks_fts` — belt-and-suspenders,
+since sealing already deletes a document's `chunks` rows entirely
+(Stage 3.3), so these RPCs structurally have nothing sealed to exclude
+today; this guards against a future bug ever leaving one behind. (2)
+`retrieve()` gained optional `user_id` and `unlocked: list[UnlockedDocument]`
+params — when the caller supplies an `UnlockedDocument`
+(`document_id`/`claim_id`/`key_b64`, the same shape `unseal()` itself
+takes), a new `_sealed_exact_matches` helper calls Stage 3.3's real
+`unseal_document` (which independently re-validates claim ownership,
+document scope, and server-side expiry — retrieve.py never duplicates
+or bypasses those checks) and does a case-insensitive exact-phrase
+match against the returned plaintext, since sealed content has no
+embedding to rank semantically. An invalid/expired/mis-scoped claim
+degrades that document to zero matches rather than failing the whole
+call. Not yet wired to the chat SSE route — `stream_chat` still calls
+`retrieve()` with no `unlocked` argument — that integration is future
+scope, not required by this stage's exit criteria. 6 new tests in
+`services/api/tests/test_stage_3_4_metadata_only_search.py`, including
+both exit-criteria-required cases — 176/176 backend tests passing,
+`ruff` clean. Migration applied to the live Supabase project; security
+review subagent found no high-confidence findings.
+
+**Bonus fix while wiring this stage:** `services/api/app/core/rate_limit.py`'s
+`classify_route` regex for the "seal_unseal" 5/hour class was written
+before Stage 3.3 built the real routes and only matched `/seal` and
+`/unseal` — missing `/unlock`, the actual passphrase-verification
+endpoint an attacker would brute force a derived key against, which was
+silently falling through to the unlimited "general" class. Fixed the
+regex to include `/unlock`; regression test
+`test_unlock_class_uses_the_5_per_hour_limit` added to
+`test_stage_0_6_rate_limit.py`. This also surfaced a latent test-
+isolation issue — `test_stage_3_3_sealed_api.py`'s route tests share the
+global rate-limiter singleton with every other test file in the same
+pytest session, and that file alone makes more seal/unlock/unseal calls
+than the real 5/hour limit allows; it now installs a fresh `RateLimiter`
+per test, since it's testing route logic, not rate limiting (that's
+`test_stage_0_6_rate_limit.py`'s job).
 
 ### Stage 3.5 — Adversarial security testing
 **Exit criteria:** Sealed content cannot be extracted via prompt
