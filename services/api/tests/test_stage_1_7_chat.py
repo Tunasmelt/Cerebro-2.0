@@ -57,13 +57,16 @@ class _FakeRetrieveStorage:
 
 
 class _FakeGenerateClient:
-    def __init__(self, text_chunks: list[str]):
+    def __init__(self, text_chunks: list[str], *, fail_after: int | None = None):
         self.text_chunks = text_chunks
         self.calls: list[dict] = []
+        self.fail_after = fail_after  # raise after yielding this many chunks
 
     async def stream_text(self, *, system_instruction, input_text):
         self.calls.append({"system_instruction": system_instruction, "input_text": input_text})
-        for chunk in self.text_chunks:
+        for i, chunk in enumerate(self.text_chunks):
+            if self.fail_after is not None and i >= self.fail_after:
+                raise TimeoutError("simulated network timeout")
             yield chunk
 
 
@@ -178,6 +181,48 @@ async def test_full_event_sequence_order_retrieval_tokens_citations_done():
     event_names = [name for name, _ in events]
     assert event_names == ["retrieval", "token", "token", "citation", "done"]
     assert events[-2][1] == {"chunk_id": "c1111111-1111-1111-1111-111111111111", "document_id": "d1111111-1111-1111-1111-111111111111"}
+
+
+# --- generation failures surface as a real error event, not a dead connection --
+# Regression: a live production request hit httpx.ReadTimeout mid-generation;
+# the exception propagated unhandled and the connection just died after
+# `retrieval` with no error event and no `done` — the client had no way to
+# tell "failed" from "still working". See chat/stream.py's module docstring.
+
+
+@pytest.mark.asyncio
+async def test_generation_failure_yields_an_error_event_not_a_dead_stream():
+    _wire_retrieve([_chunk("c1111111-1111-1111-1111-111111111111", "relevant content")])
+    set_generate_client(_FakeGenerateClient(["partial ", "more"], fail_after=1))
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    events = await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query="q"
+        )
+    )
+
+    event_names = [name for name, _ in events]
+    assert event_names == ["retrieval", "token", "error"]
+    assert "done" not in event_names
+    assert events[-1][1]["code"] == "chat_turn_failed"
+
+
+@pytest.mark.asyncio
+async def test_generation_failure_does_not_persist_a_partial_assistant_message():
+    _wire_retrieve([_chunk("c1111111-1111-1111-1111-111111111111", "relevant content")])
+    set_generate_client(_FakeGenerateClient(["partial ", "more"], fail_after=1))
+    chat_storage = _FakeChatStorage()
+    chat_storage_module.set_chat_storage(chat_storage)
+
+    await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query="q"
+        )
+    )
+
+    assistant_messages = [m for m in chat_storage.messages if m["role"] == "assistant"]
+    assert assistant_messages == []
 
 
 # --- citations must resolve to real retrieved chunks ---------------------------

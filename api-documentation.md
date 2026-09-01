@@ -134,6 +134,20 @@ POST   /chat/sessions/{id}/stream  Body: { query }. SSE. Emits, in order:
                                       event: citation        (repeated)
                                         data: { chunk_id, document_id }
                                       event: done
+                                    ...or, if anything fails partway
+                                    through (retrieval, generation,
+                                    storage), in place of the rest:
+                                      event: error
+                                        data: { code, message }
+                                    (no done after an error — the stream
+                                    just ends). Added after a live audit
+                                    caught a real production case: a
+                                    Gemini call that timed out mid-
+                                    generation used to just kill the
+                                    connection with nothing after
+                                    `retrieval` — no error, no done, no
+                                    way for the client to tell "failed"
+                                    from "still working".
                                     The retrieval event MUST arrive before
                                     the first token event — the graph
                                     pulse depends on this ordering; this

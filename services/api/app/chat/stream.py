@@ -19,6 +19,17 @@ extract_citations docstring.
 The turn's real trace_id (None when tracing is unconfigured — see
 core/tracing.py) is stored on the assistant's chat_messages row, so a
 past conversation can link back to its own Langfuse trace later.
+
+Error handling (added after a live Phase 1 audit caught this the hard
+way): a real production request hit httpx.ReadTimeout mid-generation —
+Gemini took longer than the client's timeout from Render's network on
+that occasion. The exception propagated unhandled straight through this
+generator and Starlette's StreamingResponse, which just closes the
+connection — the client saw `retrieval` and then nothing: no error
+event, no `done`, no way to tell "the server failed" from "still
+working." The whole body is now wrapped in try/except so any failure —
+retrieval, generation, storage — surfaces as a real `error` SSE event
+before the connection closes, instead of dying silently.
 """
 import json
 from typing import AsyncIterator
@@ -41,66 +52,72 @@ async def stream_chat(
     generate_client = get_generate_client()
     tracer = get_tracer()
 
-    with tracer.start_as_current_observation(
-        as_type="span", name="chat_turn", input={"query": query}
-    ) as root_span:
-        trace_id = tracer.get_current_trace_id()
-
-        await storage.save_message(
-            user_jwt=user_jwt,
-            session_id=session_id,
-            user_id=user_id,
-            role="user",
-            content=query,
-            retrieved_chunk_ids=[],
-        )
-
-        chunks = await retrieve(user_jwt=user_jwt, query=query)
-
-        # Must be yielded before any token event — the frontend's graph
-        # pulse animation depends on this ordering, and it's asserted by
-        # an automated test (see test_stage_1_7_chat.py), not just
-        # documented.
-        yield _sse(
-            "retrieval",
-            {
-                "chunk_ids": [c.chunk_id for c in chunks],
-                "document_ids": list({c.document_id for c in chunks}),
-            },
-        )
-
-        system_instruction = build_system_instruction(chunks)
-        full_text = ""
+    try:
         with tracer.start_as_current_observation(
-            as_type="generation",
-            name="generate",
-            model=getattr(generate_client, "model", None),
-            input={"system_instruction": system_instruction, "query": query},
-        ) as gen_span:
-            async for delta in generate_client.stream_text(
-                system_instruction=system_instruction, input_text=query
-            ):
-                full_text += delta
-                yield _sse("token", {"text": delta})
-            gen_span.update(output=full_text)
+            as_type="span", name="chat_turn", input={"query": query}
+        ) as root_span:
+            trace_id = tracer.get_current_trace_id()
 
-        citations = extract_citations(full_text, chunks)
-        for citation in citations:
-            yield _sse(
-                "citation",
-                {"chunk_id": citation.chunk_id, "document_id": citation.document_id},
+            await storage.save_message(
+                user_jwt=user_jwt,
+                session_id=session_id,
+                user_id=user_id,
+                role="user",
+                content=query,
+                retrieved_chunk_ids=[],
             )
 
-        await storage.save_message(
-            user_jwt=user_jwt,
-            session_id=session_id,
-            user_id=user_id,
-            role="assistant",
-            content=full_text,
-            retrieved_chunk_ids=[c.chunk_id for c in chunks],
-            trace_id=trace_id,
-        )
+            chunks = await retrieve(user_jwt=user_jwt, query=query)
 
-        root_span.update(output={"answer": full_text, "citation_count": len(citations)})
+            # Must be yielded before any token event — the frontend's
+            # graph pulse animation depends on this ordering, and it's
+            # asserted by an automated test (see test_stage_1_7_chat.py),
+            # not just documented.
+            yield _sse(
+                "retrieval",
+                {
+                    "chunk_ids": [c.chunk_id for c in chunks],
+                    "document_ids": list({c.document_id for c in chunks}),
+                },
+            )
+
+            system_instruction = build_system_instruction(chunks)
+            full_text = ""
+            with tracer.start_as_current_observation(
+                as_type="generation",
+                name="generate",
+                model=getattr(generate_client, "model", None),
+                input={"system_instruction": system_instruction, "query": query},
+            ) as gen_span:
+                async for delta in generate_client.stream_text(
+                    system_instruction=system_instruction, input_text=query
+                ):
+                    full_text += delta
+                    yield _sse("token", {"text": delta})
+                gen_span.update(output=full_text)
+
+            citations = extract_citations(full_text, chunks)
+            for citation in citations:
+                yield _sse(
+                    "citation",
+                    {"chunk_id": citation.chunk_id, "document_id": citation.document_id},
+                )
+
+            await storage.save_message(
+                user_jwt=user_jwt,
+                session_id=session_id,
+                user_id=user_id,
+                role="assistant",
+                content=full_text,
+                retrieved_chunk_ids=[c.chunk_id for c in chunks],
+                trace_id=trace_id,
+            )
+
+            root_span.update(
+                output={"answer": full_text, "citation_count": len(citations)}
+            )
+    except Exception as exc:
+        yield _sse("error", {"code": "chat_turn_failed", "message": str(exc)})
+        return
 
     yield _sse("done", {})
