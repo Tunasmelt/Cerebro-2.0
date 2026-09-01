@@ -1,0 +1,46 @@
+<!-- @dsCard group="Components" viewport="700x230" subtitle="Primary / secondary / ghost / danger, default and disabled" name="Button" -->
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="../../_ds_bundle.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; background: var(--bg-base); }
+  #root { padding: 24px; font-family: var(--font-ui); }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  .label { color: var(--text-secondary); font-size: var(--text-xs); width: 90px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { Button } = window.Cerebro;
+function Sheet() {
+  return (
+    <div>
+      <div className="row"><span className="label">Default</span>
+        <Button variant="primary">New capture</Button>
+        <Button variant="secondary">Save changes</Button>
+        <Button variant="ghost">Cancel</Button>
+        <Button variant="danger">Delete vault</Button>
+      </div>
+      <div className="row"><span className="label">Disabled</span>
+        <Button variant="primary" disabled>New capture</Button>
+        <Button variant="secondary" disabled>Save changes</Button>
+        <Button variant="ghost" disabled>Cancel</Button>
+        <Button variant="danger" disabled>Delete vault</Button>
+      </div>
+      <div className="row"><span className="label">Small</span>
+        <Button variant="primary" size="sm">Run retrieval</Button>
+        <Button variant="ghost" size="sm">Filter</Button>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Sheet />);
+</script>
+</body>
+</html>

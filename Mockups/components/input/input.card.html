@@ -1,0 +1,32 @@
+<!-- @dsCard group="Components" viewport="700x180" subtitle="Default, focus, disabled, and mono mode" name="Input" -->
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="../../_ds_bundle.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; background: var(--bg-base); }
+  #root { padding: 24px; display: flex; gap: 16px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { Input } = window.Cerebro;
+function Sheet() {
+  return (
+    <div style={{display: 'flex', gap: '16px', flexWrap: 'wrap'}}>
+      <Input label="Vault name" placeholder="My second brain" />
+      <Input label="Search query" defaultValue="synaptic retrieval" />
+      <Input label="Chunk ID" mono defaultValue="chk_9f2a1c4e" />
+      <Input label="Disabled" placeholder="Locked field" disabled />
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Sheet />);
+</script>
+</body>
+</html>

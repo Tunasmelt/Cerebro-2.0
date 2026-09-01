@@ -1,0 +1,151 @@
+<!-- @dsCard group="Landing" viewport="1000x760" subtitle="Sign-in / sign-up card — default, error, and loading states" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cerebro — sign in</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { margin: 0; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui); }
+  .screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 40px; }
+  .wrap { width: 380px; display: flex; flex-direction: column; gap: var(--space-8); }
+  .brand { text-align: center; font-weight: var(--weight-semibold); font-size: var(--text-lg); letter-spacing: -0.01em; }
+  .card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-8); display: flex; flex-direction: column; gap: var(--space-5); }
+  .card h1 { font-size: var(--text-xl); font-weight: var(--weight-semibold); margin: 0; }
+  .card .lede { font-size: var(--text-sm); color: var(--text-secondary); margin: -8px 0 0; }
+
+  .oauth-btn {
+    display: flex; align-items: center; justify-content: center; gap: var(--space-2);
+    font-family: var(--font-ui); font-weight: var(--weight-medium); font-size: var(--text-sm);
+    background: transparent; color: var(--text-primary);
+    border: 1px solid var(--border-default); border-radius: var(--radius-md);
+    padding: var(--space-3); cursor: pointer; width: 100%;
+    transition: background var(--duration-base) var(--ease-soft), border-color var(--duration-base) var(--ease-soft);
+  }
+  .oauth-btn:hover { background: var(--bg-elevated-hover); border-color: var(--border-strong); }
+  .oauth-btn:active { background: var(--border-subtle); }
+
+  .divider { display: flex; align-items: center; gap: var(--space-3); color: var(--text-disabled); font-size: var(--text-xs); font-family: var(--font-mono); }
+  .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--border-subtle); }
+
+  .field { display: flex; flex-direction: column; gap: var(--space-1); }
+  .field label { font-size: var(--text-xs); color: var(--text-secondary); font-weight: var(--weight-medium); }
+  .field input {
+    background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+    color: var(--text-primary); padding: var(--space-2) var(--space-3); font-size: var(--text-sm); font-family: var(--font-ui);
+    transition: border-color var(--duration-base) var(--ease-soft), box-shadow var(--duration-base) var(--ease-soft);
+  }
+  .field input::placeholder { color: var(--text-disabled); }
+  .field input:hover { border-color: var(--border-strong); }
+  .field input:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px var(--accent-primary-subtle); }
+  .field.error input { border-color: var(--danger); }
+  .field.error input:focus { box-shadow: 0 0 0 3px var(--danger-subtle); }
+  .field-error-msg { font-size: var(--text-xs); color: var(--danger-hover); }
+
+  .row-between { display: flex; justify-content: space-between; align-items: center; }
+  .link { font-size: var(--text-xs); color: var(--accent-primary-hover); cursor: pointer; text-decoration: none; }
+  .link:hover { color: var(--accent-primary); text-decoration: underline; }
+
+  .btn-primary {
+    display: flex; align-items: center; justify-content: center; gap: var(--space-2);
+    font-family: var(--font-ui); font-weight: var(--weight-medium); font-size: var(--text-sm);
+    background: var(--accent-primary); color: var(--text-on-accent);
+    border: 1px solid transparent; border-radius: var(--radius-md);
+    padding: var(--space-3); cursor: pointer; width: 100%;
+    transition: background var(--duration-base) var(--ease-soft), opacity var(--duration-base) var(--ease-soft);
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-primary-hover); }
+  .btn-primary:active:not(:disabled) { background: var(--accent-primary-active); }
+  .btn-primary:disabled { opacity: 0.7; cursor: not-allowed; }
+
+  .spinner {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid rgba(10,10,15,0.3); border-top-color: var(--text-on-accent);
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .switch-line { text-align: center; font-size: var(--text-sm); color: var(--text-secondary); }
+
+  /* demo-only state switcher, not part of the product UI */
+  .demo-controls { display: flex; gap: var(--space-2); justify-content: center; margin-top: var(--space-4); }
+  .demo-controls button {
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); background: var(--bg-elevated);
+    border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: 4px 12px; cursor: pointer;
+  }
+  .demo-controls button.active { color: var(--text-primary); border-color: var(--accent-primary-border); }
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="wrap">
+    <div class="brand">Cerebro</div>
+
+    <!-- SIGN IN -->
+    <div class="card" id="signin-card">
+      <h1>Sign in</h1>
+      <button class="oauth-btn">Continue with GitHub</button>
+      <div class="divider">or</div>
+
+      <div class="field" id="signin-email-field">
+        <label>Email</label>
+        <input type="email" placeholder="you@domain.com" />
+      </div>
+
+      <div class="field error" id="signin-password-field">
+        <label>Password</label>
+        <input type="password" placeholder="••••••••" />
+        <span class="field-error-msg" id="signin-password-error">Incorrect email or password.</span>
+      </div>
+
+      <div class="row-between" style="margin-top: -4px;">
+        <span></span>
+        <a class="link">Forgot password?</a>
+      </div>
+
+      <button class="btn-primary" id="signin-btn">
+        <span id="signin-spinner" class="spinner" style="display:none;"></span>
+        <span id="signin-label">Sign in</span>
+      </button>
+
+      <div class="switch-line">Don't have an account? <a class="link">Sign up</a></div>
+    </div>
+
+    <div class="demo-controls">
+      <button class="active" onclick="setState('default')">default</button>
+      <button onclick="setState('error')">error</button>
+      <button onclick="setState('loading')">loading</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function setState(s) {
+  document.querySelectorAll('.demo-controls button').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+
+  const pwField = document.getElementById('signin-password-field');
+  const btn = document.getElementById('signin-btn');
+  const spinner = document.getElementById('signin-spinner');
+  const label = document.getElementById('signin-label');
+
+  if (s === 'default') {
+    pwField.classList.remove('error');
+    btn.disabled = false;
+    spinner.style.display = 'none';
+    label.textContent = 'Sign in';
+  } else if (s === 'error') {
+    pwField.classList.add('error');
+    btn.disabled = false;
+    spinner.style.display = 'none';
+    label.textContent = 'Sign in';
+  } else if (s === 'loading') {
+    pwField.classList.remove('error');
+    btn.disabled = true;
+    spinner.style.display = 'inline-block';
+    label.textContent = 'Signing in…';
+  }
+}
+</script>
+</body>
+</html>

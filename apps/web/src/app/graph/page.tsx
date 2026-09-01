@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { authedFetch } from "@/lib/api";
+import { parseAnswerSegments, stripCitationMarkers } from "@/lib/graph/citations";
 import { clusterColor } from "@/lib/graph/clusterColor";
 import { parseSSEStream } from "@/lib/graph/sse";
 import type {
@@ -21,6 +22,15 @@ import styles from "./graph.module.css";
 // pulses in order, one at a time — this is the pause between them.
 const REPLAY_PULSE_INTERVAL_MS = 2400;
 
+// UI gap #2 (Phase 0-2 audit): nodes/edges were only ever fetched once
+// on mount, so a document uploaded elsewhere needed a full reload to
+// show up — contra the Phase 2 Gate's own "watched the graph update
+// without a full reload" wording. Polling both together stays well
+// under the "graph" rate-limit class (60/min per user; this is 24/min).
+const GRAPH_POLL_INTERVAL_MS = 5000;
+
+type Citation = { chunk_id: string; document_id: string };
+
 export default function GraphPage() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
@@ -33,6 +43,7 @@ export default function GraphPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [answer, setAnswer] = useState("");
+  const [citations, setCitations] = useState<Citation[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [pulse, setPulse] = useState<GraphPulse | null>(null);
@@ -53,19 +64,38 @@ export default function GraphPage() {
     });
   }, [router]);
 
+  // Refs, not state, for the last-seen payloads — comparing here avoids
+  // handing GraphCanvas a new array reference (which restarts its
+  // d3-force simulation, see GraphCanvas.tsx) on every poll tick when
+  // nothing actually changed.
+  const lastNodesJsonRef = useRef<string>("");
+  const lastEdgesJsonRef = useRef<string>("");
+
+  const fetchGraph = useCallback(async () => {
+    const [nodesRes, edgesRes] = await Promise.all([
+      authedFetch("/api/graph/nodes"),
+      authedFetch("/api/graph/edges"),
+    ]);
+    const nodesBody = await nodesRes.json();
+    const edgesBody = await edgesRes.json();
+    const nodesJson = JSON.stringify(nodesBody.nodes ?? []);
+    const edgesJson = JSON.stringify(edgesBody.edges ?? []);
+    if (nodesJson !== lastNodesJsonRef.current) {
+      lastNodesJsonRef.current = nodesJson;
+      setNodes(nodesBody.nodes ?? []);
+    }
+    if (edgesJson !== lastEdgesJsonRef.current) {
+      lastEdgesJsonRef.current = edgesJson;
+      setEdges(edgesBody.edges ?? []);
+    }
+  }, []);
+
   useEffect(() => {
     if (checking) return;
-    (async () => {
-      const [nodesRes, edgesRes] = await Promise.all([
-        authedFetch("/api/graph/nodes"),
-        authedFetch("/api/graph/edges"),
-      ]);
-      const nodesBody = await nodesRes.json();
-      const edgesBody = await edgesRes.json();
-      setNodes(nodesBody.nodes ?? []);
-      setEdges(edgesBody.edges ?? []);
-    })();
-  }, [checking]);
+    fetchGraph();
+    const interval = setInterval(fetchGraph, GRAPH_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [checking, fetchGraph]);
 
   const handleNodeClick = useCallback(
     (nodeId: string | null) => {
@@ -109,6 +139,7 @@ export default function GraphPage() {
 
     setChatError(null);
     setAnswer("");
+    setCitations([]);
     setStreaming(true);
     setQuery("");
 
@@ -134,6 +165,9 @@ export default function GraphPage() {
         } else if (evt.event === "token") {
           const data = evt.data as { text: string };
           setAnswer((prev) => prev + data.text);
+        } else if (evt.event === "citation") {
+          const data = evt.data as Citation;
+          setCitations((prev) => [...prev, data]);
         } else if (evt.event === "error") {
           const data = evt.data as { message: string };
           setChatError(data.message || "Something went wrong");
@@ -176,6 +210,33 @@ export default function GraphPage() {
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
 
+  // While streaming, citation events (the only source of truth for
+  // which markers are real) haven't all arrived yet — show clean prose
+  // rather than raw [[chunk:...]] syntax. Once done, resolve each
+  // marker against the real citations collected during the stream;
+  // clicking one selects that node on the graph, same as clicking it
+  // directly.
+  function renderAnswer() {
+    if (streaming) return stripCitationMarkers(answer) || "…";
+    return parseAnswerSegments(answer).map((seg, i) => {
+      if (seg.type === "text") return <span key={i}>{seg.text}</span>;
+      const index = citations.findIndex((c) => c.chunk_id === seg.chunkId);
+      if (index === -1) return null; // dropped marker, not a real citation
+      const citation = citations[index];
+      return (
+        <button
+          key={i}
+          type="button"
+          className={styles.citeChip}
+          onClick={() => handleNodeClick(citation.document_id)}
+          title={`Jump to source ${index + 1}`}
+        >
+          {index + 1}
+        </button>
+      );
+    });
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.canvasWrap}>
@@ -189,9 +250,16 @@ export default function GraphPage() {
         />
       </div>
 
+      <span className={styles.docsLink} onClick={() => router.push("/documents")}>
+        Documents
+      </span>
+
       {nodes.length === 0 && (
         <div className={styles.emptyState}>
-          No documents yet — upload something to see it here.
+          <p style={{ margin: 0 }}>Your graph will start forming as soon as it lands.</p>
+          <button className={styles.emptyStateCta} onClick={() => router.push("/documents")}>
+            Upload your first document
+          </button>
         </div>
       )}
 
@@ -249,7 +317,7 @@ export default function GraphPage() {
       <div className={styles.chatDock}>
         {chatError && <div className={styles.chatError}>{chatError}</div>}
         {(streaming || answer) && (
-          <div className={styles.chatAnswer}>{answer || "…"}</div>
+          <div className={styles.chatAnswer}>{renderAnswer()}</div>
         )}
         <form className={styles.chatForm} onSubmit={handleSend}>
           <button

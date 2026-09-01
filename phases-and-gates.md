@@ -163,7 +163,7 @@ see architecture-and-security.md §1 "Retrieval pipeline" for the design.
 
 ### Stage 1.6 — Sign-in & sign-up UI
 **Exit criteria:** Real Supabase Auth-backed sign-in/sign-up pages exist
-(per the Auth mockup in ui-design-prompts.md), session persists client-side,
+(per the Auth mockups in `Mockups/ui_kits/auth/`), session persists client-side,
 and that session's JWT is what actually authenticates requests to
 services/api — not a separate token obtained some other way. This stage
 was missing from the original plan entirely (every prior stage tested
@@ -339,8 +339,8 @@ document nodes; reopening a past conversation replays the same pulse
 from stored `retrieved_chunk_ids`. This stage discovered that no chat
 frontend existed at all before it — Stage 1.7's exit criteria was
 correctly backend-only, and the chat UI legitimately belongs docked on
-the brain graph per ui-design-prompts.md §6, not as an earlier separate
-page — so this stage built the missing chat input, the SSE-consuming
+the brain graph per `Mockups/ui_kits/brain/index.html`'s chat dock, not
+as an earlier separate page — so this stage built the missing chat input, the SSE-consuming
 client, a real streaming Next.js proxy route (`/api/chat/sessions/{id}/stream`,
 passing `upstream.body` straight through — every other proxy route in
 this app buffers with `.text()` first, which would silently break SSE),
@@ -427,8 +427,30 @@ after a successful retry-ingest) — no new route was needed.
 All stages 2.1–2.5 pass their tests, **and** you confirm live:
 - [ ] You uploaded a new document and watched the graph update without a
       full reload, and it landed somewhere that made sense to you.
+      **UI gap closed:** `/graph` originally fetched nodes/edges once on
+      mount only — a document uploaded elsewhere needed a manual reload
+      to appear, contradicting this checklist item's own wording. Now
+      polls both every `GRAPH_POLL_INTERVAL_MS` (5s, well under the
+      "graph" rate-limit class's 60/min), comparing payloads before
+      calling `setNodes`/`setEdges` so an unchanged poll tick doesn't
+      hand `GraphCanvas` a new array reference and restart its d3-force
+      simulation. Live-verified locally: request count increases every
+      poll cycle while the page sits open.
 - [ ] You asked a question and watched the correct nodes pulse in real
       time, matching the answer's citations.
+      **UI gap closed:** the chat bubble rendered raw `[[chunk:<id>]]`
+      marker syntax verbatim — Stage 1.7's exit criteria only covered
+      the `citation` *event* being correct, never frontend rendering.
+      Markers are now resolved against the real `citation` events into
+      numbered chips (`Mockups/ui_kits/chat/index.html`'s cite-chip
+      pattern), stripped entirely while still streaming since
+      `citation` events only arrive after the full token stream
+      completes (a marker visible mid-stream can't yet be told apart
+      from one that will end up dropped). Clicking a chip selects that
+      document node on the graph, reusing the existing click-to-expand
+      path instead of a separate hover-preview mechanism. Live-verified
+      locally end to end: real answer, real citation, chip renders and
+      resolves, click opens the correct node's chunk panel.
 - [ ] You reopened an old conversation and the replay looked right.
 
 ---

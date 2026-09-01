@@ -78,6 +78,10 @@ class DocumentsStorage(Protocol):
         self, *, user_jwt: str, user_id: str, document_id: str
     ) -> ConfirmedUpload: ...
 
+    async def list_documents(
+        self, *, user_jwt: str, user_id: str
+    ) -> list[dict[str, Any]]: ...
+
 
 class SupabaseDocumentsStorage:
     def __init__(self) -> None:
@@ -209,6 +213,23 @@ class SupabaseDocumentsStorage:
         return ConfirmedUpload(
             document_id=document_id, state=new_state, size_bytes=size_bytes
         )
+
+    async def list_documents(
+        self, *, user_jwt: str, user_id: str
+    ) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers=self._headers(user_jwt),
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "select": "id,title,mime,size_bytes,status,created_at",
+                    "order": "created_at.desc",
+                },
+            )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="documents_list_failed")
+        return response.json()
 
 
 _storage: DocumentsStorage = SupabaseDocumentsStorage()

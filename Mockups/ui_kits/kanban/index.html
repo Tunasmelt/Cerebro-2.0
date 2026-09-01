@@ -1,0 +1,176 @@
+<!-- @dsCard group="Landing" viewport="1440x900" subtitle="Kanban — columns, cards with linked-doc chips, drag states, inline add" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cerebro — Kanban</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { margin: 0; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui); }
+  .page { max-width: 1200px; margin: 0 auto; padding: 40px; }
+  .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6); }
+  .page-header h1 { font-size: var(--text-2xl); font-weight: var(--weight-semibold); margin: 0; }
+
+  .board { display: flex; gap: var(--space-5); align-items: flex-start; }
+  .column { flex: 1; min-width: 0; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); transition: border-color var(--duration-base) var(--ease-soft), background var(--duration-base) var(--ease-soft); }
+  .column.drag-over { border-color: var(--border-strong); background: var(--bg-elevated-hover); box-shadow: inset 0 0 0 1px var(--border-default); }
+  .column-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-2) var(--space-1); }
+  .column-head .name { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+  .column-head .count { font-family: var(--font-mono); font-size: 11px; color: var(--text-disabled); }
+
+  .card { background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); cursor: grab; transition: box-shadow var(--duration-fast) var(--ease-soft), border-color var(--duration-fast) var(--ease-soft), transform var(--duration-fast) var(--ease-soft); }
+  .card:hover { border-color: var(--border-strong); }
+  .card.dragging { opacity: 0.5; }
+  .card.lifted { box-shadow: 0 10px 24px rgba(0,0,0,0.35); border-color: var(--border-strong); transform: rotate(-1deg); cursor: grabbing; }
+  .card-title { font-size: var(--text-sm); font-weight: var(--weight-medium); line-height: var(--leading-sm); }
+  .card-desc { font-size: var(--text-xs); color: var(--text-secondary); line-height: var(--leading-xs); }
+  .card-meta-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+  .doc-chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 2px 6px; max-width: 140px; }
+  .doc-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .doc-chip svg { flex-shrink: 0; color: var(--text-disabled); }
+
+  .due-badge { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 10px; font-weight: var(--weight-medium); border-radius: var(--radius-pill); padding: 2px var(--space-2); }
+  .due-badge.normal { color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-default); }
+  .due-badge.soon { color: var(--accent-locked); background: var(--accent-locked-subtle); }
+
+  .add-card-row { padding: var(--space-1); }
+  .add-card-trigger { font-size: var(--text-xs); color: var(--text-secondary); background: none; border: none; padding: var(--space-2); cursor: pointer; width: 100%; text-align: left; border-radius: var(--radius-md); }
+  .add-card-trigger:hover { background: var(--bg-elevated-hover); color: var(--text-primary); }
+  .add-card-input-wrap { display: none; flex-direction: column; gap: var(--space-2); }
+  .add-card-input-wrap.open { display: flex; }
+  .add-card-input-wrap input { background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--text-primary); padding: var(--space-2) var(--space-3); font-size: var(--text-sm); font-family: var(--font-ui); }
+  .add-card-input-wrap input:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px var(--accent-primary-subtle); }
+  .add-card-actions { display: flex; gap: var(--space-2); }
+  .add-card-confirm { font-family: var(--font-ui); font-size: var(--text-xs); font-weight: var(--weight-medium); background: var(--accent-primary); color: var(--text-on-accent); border: none; border-radius: var(--radius-sm); padding: 4px var(--space-3); cursor: pointer; }
+  .add-card-cancel { font-family: var(--font-ui); font-size: var(--text-xs); color: var(--text-secondary); background: none; border: none; cursor: pointer; padding: 4px var(--space-2); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="page-header"><h1>Kanban</h1></div>
+
+  <div class="board" id="board">
+    <div class="column" data-col="backlog">
+      <div class="column-head"><span class="name">Backlog</span><span class="count">3</span></div>
+      <div class="cards">
+        <div class="card" draggable="true">
+          <div class="card-title">Read up on CRDT merge strategies</div>
+          <div class="card-desc">Compare state-based vs op-based approaches for the sync layer.</div>
+          <div class="card-meta-row">
+            <span class="doc-chip"><svg width="9" height="11" viewBox="0 0 9 11"><path d="M1 1H6L8 3V10H1V1Z" stroke="currentColor" stroke-width="0.8" fill="none"/></svg><span class="name">crdt-survey.pdf</span></span>
+          </div>
+        </div>
+        <div class="card" draggable="true">
+          <div class="card-title">Draft onboarding copy</div>
+          <div class="card-meta-row">
+            <span class="due-badge normal">Sep 12</span>
+          </div>
+        </div>
+        <div class="card" draggable="true">
+          <div class="card-title">Audit sealed-file passphrase flow</div>
+          <div class="card-desc">Check the countdown timer resets correctly across tabs.</div>
+        </div>
+      </div>
+      <div class="add-card-row">
+        <button class="add-card-trigger" onclick="openAdd(this)">+ Add card</button>
+        <div class="add-card-input-wrap">
+          <input type="text" placeholder="Card title" />
+          <div class="add-card-actions">
+            <button class="add-card-confirm">Add</button>
+            <button class="add-card-cancel" onclick="closeAdd(this)">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="column" data-col="progress">
+      <div class="column-head"><span class="name">In Progress</span><span class="count">2</span></div>
+      <div class="cards">
+        <div class="card" draggable="true">
+          <div class="card-title">Wire up retrieval-pulse animation</div>
+          <div class="card-desc">Nodes should fade over ~2s once the answer finishes streaming.</div>
+          <div class="card-meta-row">
+            <span class="doc-chip"><svg width="9" height="11" viewBox="0 0 9 11"><path d="M1 1H6L8 3V10H1V1Z" stroke="currentColor" stroke-width="0.8" fill="none"/></svg><span class="name">cerebro-spec-draft.md</span></span>
+            <span class="due-badge soon">Tomorrow</span>
+          </div>
+        </div>
+        <div class="card" draggable="true">
+          <div class="card-title">Fix kebab menu z-index on Documents view</div>
+        </div>
+      </div>
+      <div class="add-card-row">
+        <button class="add-card-trigger" onclick="openAdd(this)">+ Add card</button>
+        <div class="add-card-input-wrap">
+          <input type="text" placeholder="Card title" />
+          <div class="add-card-actions">
+            <button class="add-card-confirm">Add</button>
+            <button class="add-card-cancel" onclick="closeAdd(this)">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="column" data-col="done">
+      <div class="column-head"><span class="name">Done</span><span class="count">2</span></div>
+      <div class="cards">
+        <div class="card" draggable="true">
+          <div class="card-title">Ship sign-in / sign-up screens</div>
+        </div>
+        <div class="card" draggable="true">
+          <div class="card-title">Set up hybrid vector + full-text search</div>
+          <div class="card-desc">Reciprocal rank fusion merges the two ranked lists.</div>
+        </div>
+      </div>
+      <div class="add-card-row">
+        <button class="add-card-trigger" onclick="openAdd(this)">+ Add card</button>
+        <div class="add-card-input-wrap">
+          <input type="text" placeholder="Card title" />
+          <div class="add-card-actions">
+            <button class="add-card-confirm">Add</button>
+            <button class="add-card-cancel" onclick="closeAdd(this)">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function openAdd(btn) {
+  btn.style.display = 'none';
+  const wrap = btn.nextElementSibling;
+  wrap.classList.add('open');
+  wrap.querySelector('input').focus();
+}
+function closeAdd(cancelBtn) {
+  const wrap = cancelBtn.closest('.add-card-input-wrap');
+  wrap.classList.remove('open');
+  wrap.previousElementSibling.style.display = 'block';
+  wrap.querySelector('input').value = '';
+}
+
+let draggedCard = null;
+document.querySelectorAll('.card').forEach(card => {
+  card.addEventListener('dragstart', () => {
+    draggedCard = card;
+    requestAnimationFrame(() => card.classList.add('dragging'));
+    card.classList.add('lifted');
+  });
+  card.addEventListener('dragend', () => {
+    card.classList.remove('dragging', 'lifted');
+    document.querySelectorAll('.column').forEach(c => c.classList.remove('drag-over'));
+  });
+});
+document.querySelectorAll('.column').forEach(col => {
+  col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('drag-over'); });
+  col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+  col.addEventListener('drop', (e) => {
+    e.preventDefault();
+    col.classList.remove('drag-over');
+    if (draggedCard) col.querySelector('.cards').appendChild(draggedCard);
+  });
+});
+</script>
+</body>
+</html>

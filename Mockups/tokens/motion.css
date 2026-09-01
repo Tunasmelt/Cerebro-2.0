@@ -1,0 +1,11 @@
+:root {
+  /* default — soft, physics-based, never bouncy */
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 120ms;
+  --duration-base: 220ms;
+  --duration-slow: 360ms;
+
+  /* reserved exclusively for the retrieval-pulse animation — fast, sharp, decisive */
+  --ease-pulse: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-pulse: 480ms;
+}

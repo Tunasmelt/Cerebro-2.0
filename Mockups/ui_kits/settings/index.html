@@ -1,0 +1,207 @@
+<!-- @dsCard group="Landing" viewport="1440x900" subtitle="Settings — Account, Security (sealed docs + sessions), Data & Storage, API Usage" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cerebro — Settings</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { margin: 0; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui); }
+  .shell { display: flex; min-height: 100vh; }
+  .subnav { width: 200px; flex-shrink: 0; padding: 40px 0; border-right: 1px solid var(--border-subtle); }
+  .subnav-item { padding: var(--space-2) var(--space-5); font-size: var(--text-sm); color: var(--text-secondary); cursor: pointer; border-left: 2px solid transparent; }
+  .subnav-item:hover { color: var(--text-primary); }
+  .subnav-item.active { color: var(--text-primary); font-weight: var(--weight-medium); border-left-color: var(--accent-primary); background: var(--accent-primary-subtle); }
+
+  .content { flex: 1; max-width: 760px; padding: 48px 48px 100px; }
+  .pane { display: none; flex-direction: column; gap: var(--space-8); }
+  .pane.active { display: flex; }
+  .pane h1 { font-size: var(--text-2xl); font-weight: var(--weight-semibold); margin: 0; }
+
+  .card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); }
+  .card h2 { font-size: var(--text-md); font-weight: var(--weight-semibold); margin: 0; }
+  .card .desc { font-size: var(--text-sm); color: var(--text-secondary); margin: -8px 0 0; }
+
+  .field { display: flex; flex-direction: column; gap: var(--space-1); max-width: 380px; }
+  .field label { font-size: var(--text-xs); color: var(--text-secondary); font-weight: var(--weight-medium); }
+  .field input { background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--text-primary); padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
+  .field input:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px var(--accent-primary-subtle); }
+
+  .btn { font-family: var(--font-ui); font-weight: var(--weight-medium); font-size: var(--text-sm); border-radius: var(--radius-md); padding: var(--space-2) var(--space-4); cursor: pointer; align-self: flex-start; transition: background var(--duration-base) var(--ease-soft), opacity var(--duration-base) var(--ease-soft); }
+  .btn-primary { background: var(--accent-primary); color: var(--text-on-accent); border: none; }
+  .btn-primary:hover { background: var(--accent-primary-hover); }
+  .btn-ghost { background: transparent; color: var(--text-primary); border: 1px solid var(--border-default); }
+  .btn-ghost:hover { background: var(--bg-elevated-hover); }
+  .btn-danger { background: transparent; color: var(--danger-hover); border: 1px solid rgba(239,68,68,0.35); }
+  .btn-danger:hover { background: var(--danger-subtle); }
+  .btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .danger-zone { border-color: rgba(239,68,68,0.25); }
+  .danger-zone h2 { color: var(--danger-hover); }
+
+  /* sealed docs list */
+  .row-list { display: flex; flex-direction: column; }
+  .doc-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+  .doc-row:last-child { border-bottom: none; }
+  .lock-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: var(--weight-medium); color: var(--accent-locked); background: var(--accent-locked-subtle); border-radius: var(--radius-pill); padding: 2px var(--space-2); }
+  .doc-name { flex: 1; font-size: var(--text-sm); }
+  .doc-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+
+  /* session rows */
+  .session-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+  .session-row:last-child { border-bottom: none; }
+  .session-dot-wrap { position: relative; width: 7px; height: 7px; flex-shrink: 0; }
+  .session-dot { position: absolute; inset: 0; border-radius: 50%; background: var(--accent-secondary); }
+  .session-ping { position: absolute; inset: 0; border-radius: 50%; background: var(--accent-secondary); animation: pulse-ring var(--duration-pulse) var(--ease-pulse) infinite; }
+  @keyframes pulse-ring { 0% { transform: scale(1); opacity: 0.9; } 100% { transform: scale(2.6); opacity: 0; } }
+  .session-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .session-name { font-size: var(--text-sm); }
+  .session-timer { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+
+  /* storage bars */
+  .storage-block { display: flex; flex-direction: column; gap: var(--space-2); }
+  .storage-label-row { display: flex; justify-content: space-between; font-size: var(--text-sm); }
+  .storage-value { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+  .storage-track { height: 8px; border-radius: var(--radius-pill); background: var(--bg-base); border: 1px solid var(--border-default); overflow: hidden; }
+  .storage-fill { height: 100%; border-radius: var(--radius-pill); }
+
+  table { width: 100%; border-collapse: collapse; }
+  thead th { text-align: left; font-family: var(--font-mono); font-size: 11px; color: var(--text-disabled); text-transform: uppercase; letter-spacing: 0.04em; font-weight: var(--weight-regular); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); }
+  tbody td { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); border-bottom: 1px solid var(--border-subtle); }
+  tbody tr:last-child td { border-bottom: none; }
+  .mono-cell { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); }
+
+  .confirm-row { display: flex; align-items: center; gap: var(--space-3); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="subnav">
+    <div class="subnav-item active" data-pane="account" onclick="switchPane(this)">Account</div>
+    <div class="subnav-item" data-pane="security" onclick="switchPane(this)">Security</div>
+    <div class="subnav-item" data-pane="storage" onclick="switchPane(this)">Data &amp; Storage</div>
+    <div class="subnav-item" data-pane="api" onclick="switchPane(this)">API Usage</div>
+  </div>
+
+  <div class="content">
+
+    <div class="pane active" id="pane-account">
+      <h1>Account</h1>
+      <div class="card">
+        <h2>Email</h2>
+        <div class="field"><label>Email address</label><input type="email" value="jordan@domain.com" /></div>
+        <button class="btn btn-ghost">Save changes</button>
+      </div>
+      <div class="card">
+        <h2>Password</h2>
+        <div class="field"><label>Current password</label><input type="password" placeholder="••••••••" /></div>
+        <div class="field"><label>New password</label><input type="password" placeholder="At least 8 characters" /></div>
+        <button class="btn btn-primary">Update password</button>
+      </div>
+      <div class="card danger-zone">
+        <h2>Delete account</h2>
+        <p class="desc">Permanently deletes your vault and everything in it, including sealed documents. This cannot be undone.</p>
+        <div class="confirm-row">
+          <div class="field"><label>Type DELETE to confirm</label><input type="text" id="delete-confirm-input" oninput="checkDeleteConfirm()" /></div>
+          <button class="btn btn-danger" id="delete-btn" disabled>Delete account</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-security">
+      <h1>Security</h1>
+      <div class="card">
+        <h2>Sealed documents</h2>
+        <p class="desc">Files sealed behind a passphrase. Unsealing starts a session below.</p>
+        <div class="row-list">
+          <div class="doc-row">
+            <span class="lock-badge">Sealed</span>
+            <span class="doc-name">tax-return-2024.pdf</span>
+            <span class="doc-meta">sealed 2025-02-01</span>
+            <button class="btn btn-ghost" style="align-self:center;">Unseal</button>
+          </div>
+          <div class="doc-row">
+            <span class="lock-badge">Sealed</span>
+            <span class="doc-name">passport-scan.jpg</span>
+            <span class="doc-meta">sealed 2025-01-14</span>
+            <button class="btn btn-ghost" style="align-self:center;">Unseal</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Active unlock sessions</h2>
+        <p class="desc">These documents are currently unlocked and visible to retrieval. They'll reseal automatically when the timer runs out.</p>
+        <div class="row-list">
+          <div class="session-row">
+            <span class="session-dot-wrap"><span class="session-dot"></span><span class="session-ping"></span></span>
+            <div class="session-info">
+              <span class="session-name">tax-return-2024.pdf</span>
+              <span class="session-timer">14:59 remaining</span>
+            </div>
+            <button class="btn btn-danger">Lock now</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-storage">
+      <h1>Data &amp; Storage</h1>
+      <div class="card">
+        <h2>Usage</h2>
+        <div class="storage-block">
+          <div class="storage-label-row"><span>Indexed content</span><span class="storage-value">2.8gb / 5gb</span></div>
+          <div class="storage-track"><div class="storage-fill" style="width: 56%; background: var(--accent-primary);"></div></div>
+        </div>
+        <div class="storage-block">
+          <div class="storage-label-row"><span>Original files</span><span class="storage-value">4.1gb / 10gb</span></div>
+          <div class="storage-track"><div class="storage-fill" style="width: 41%; background: var(--accent-secondary);"></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Storage by document</h2>
+        <table>
+          <thead><tr><th>Document</th><th>Original</th><th>Indexed</th></tr></thead>
+          <tbody>
+            <tr><td>distributed-systems-notes.pdf</td><td class="mono-cell">2.4mb</td><td class="mono-cell">890kb</td></tr>
+            <tr><td>whiteboard-photo.jpg</td><td class="mono-cell">3.1mb</td><td class="mono-cell">410kb</td></tr>
+            <tr><td>crdt-survey.pdf</td><td class="mono-cell">3.2mb</td><td class="mono-cell">1.1mb</td></tr>
+            <tr><td>tax-return-2024.pdf</td><td class="mono-cell">640kb</td><td class="mono-cell">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-api">
+      <h1>API Usage</h1>
+      <div class="card">
+        <h2>This billing period</h2>
+        <table>
+          <thead><tr><th>Date</th><th>Type</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
+          <tbody>
+            <tr><td class="mono-cell">2025-08-14</td><td>Embedding</td><td class="mono-cell">142</td><td class="mono-cell">88,400</td><td class="mono-cell">$0.62</td></tr>
+            <tr><td class="mono-cell">2025-08-14</td><td>Generation</td><td class="mono-cell">9</td><td class="mono-cell">4,120</td><td class="mono-cell">$0.31</td></tr>
+            <tr><td class="mono-cell">2025-08-12</td><td>Embedding</td><td class="mono-cell">64</td><td class="mono-cell">31,900</td><td class="mono-cell">$0.22</td></tr>
+            <tr><td class="mono-cell">2025-08-09</td><td>Generation</td><td class="mono-cell">22</td><td class="mono-cell">11,300</td><td class="mono-cell">$0.84</td></tr>
+          </tbody>
+        </table>
+        <div class="storage-label-row" style="max-width: 240px; margin-top: var(--space-2);"><span style="color: var(--text-secondary); font-size: var(--text-sm);">Total this period</span><span class="storage-value">$1.99</span></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function switchPane(el) {
+  document.querySelectorAll('.subnav-item').forEach(i => i.classList.remove('active'));
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('pane-' + el.dataset.pane).classList.add('active');
+}
+function checkDeleteConfirm() {
+  const val = document.getElementById('delete-confirm-input').value;
+  document.getElementById('delete-btn').disabled = val !== 'DELETE';
+}
+</script>
+</body>
+</html>

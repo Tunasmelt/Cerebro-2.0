@@ -125,6 +125,15 @@ async def upload_confirm(request: Request, document_id: str, background_tasks: B
     )
 
 
+@router.get("/api/v1/documents")
+async def list_documents(request: Request):
+    storage = get_documents_storage()
+    documents = await storage.list_documents(
+        user_jwt=request.state.user_jwt, user_id=request.state.user["sub"]
+    )
+    return JSONResponse({"documents": documents}, status_code=200)
+
+
 @router.post("/api/v1/documents/{document_id}/retry-ingest")
 async def retry_ingest(request: Request, document_id: str, background_tasks: BackgroundTasks):
     """Retries a document whose embed stage failed. Scoped to embed-stage

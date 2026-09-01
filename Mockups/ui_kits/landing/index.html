@@ -1,0 +1,240 @@
+<!-- @dsCard group="Landing" viewport="1440x900" subtitle="Marketing landing page — hero graph, retrieval, lock, features" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cerebro — query your documents like a graph</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { margin: 0; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui); }
+  a { color: var(--accent-primary-hover); text-decoration: none; }
+  a:hover { color: var(--accent-primary); text-decoration: underline; }
+  .container { max-width: 1120px; margin: 0 auto; padding: 0 40px; }
+  section { padding: 96px 0; border-bottom: 1px solid var(--border-subtle); }
+  section:last-of-type { border-bottom: none; }
+  .eyebrow { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase; }
+  .section-title { font-size: var(--text-3xl); font-weight: var(--weight-semibold); margin: var(--space-2) 0 var(--space-2); letter-spacing: -0.01em; }
+  .section-sub { font-size: var(--text-md); color: var(--text-secondary); max-width: 560px; line-height: var(--leading-md); margin: 0; }
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: var(--font-ui); font-weight: var(--weight-medium); font-size: var(--text-sm);
+    background: var(--accent-primary); color: var(--text-on-accent);
+    border: 1px solid transparent; border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-6); cursor: pointer;
+    transition: background var(--duration-base) var(--ease-soft);
+  }
+  .btn-primary:hover { background: var(--accent-primary-hover); }
+  .btn-primary:active { background: var(--accent-primary-active); }
+
+  /* ---- hero ---- */
+  .hero { padding-top: 120px; padding-bottom: 100px; border-bottom: 1px solid var(--border-subtle); }
+  .hero-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
+  .hero h1 { font-size: 52px; line-height: 1.05; font-weight: var(--weight-semibold); letter-spacing: -0.015em; margin: var(--space-3) 0 var(--space-5); }
+  .hero p.sub { font-size: var(--text-lg); color: var(--text-secondary); line-height: var(--leading-lg); max-width: 480px; margin: 0 0 var(--space-8); }
+  .graph-wrap { position: relative; width: 100%; aspect-ratio: 560/440; }
+  .pulse-dot { animation: pulse-ping var(--duration-pulse) var(--ease-pulse) infinite; }
+  @keyframes pulse-ping { 0% { r: 9; opacity: 0.9; } 100% { r: 26; opacity: 0; } }
+
+  /* ---- chat mockup ---- */
+  .chat-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-8); margin-top: var(--space-10); }
+  .bubble { border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); font-size: var(--text-sm); line-height: var(--leading-sm); max-width: 640px; }
+  .bubble.query { background: var(--bg-elevated-hover); color: var(--text-primary); margin-left: auto; border: 1px solid var(--border-default); }
+  .bubble.answer { background: transparent; color: var(--text-primary); padding-left: 0; margin-top: var(--space-5); }
+  .cite { color: var(--accent-primary-hover); font-family: var(--font-mono); font-size: 0.85em; }
+  .chips { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-5); }
+  .chip { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3); }
+
+  /* ---- watch it think ---- */
+  .think-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 48px; align-items: center; margin-top: var(--space-8); }
+  .think-frame { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-6); position: relative; height: 320px; }
+  .think-bubble { position: absolute; right: 28px; top: 28px; background: var(--bg-elevated-hover); border: 1px solid var(--accent-primary-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); font-size: var(--text-xs); color: var(--text-primary); max-width: 170px; }
+  .think-caption { font-size: var(--text-sm); color: var(--text-secondary); }
+
+  /* ---- lock section ---- */
+  .lock-grid { display: grid; grid-template-columns: 0.85fr 1.15fr; gap: 60px; align-items: center; margin-top: var(--space-8); }
+  .lock-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); }
+  .lock-card-top { display: flex; align-items: flex-start; justify-content: space-between; }
+  .lock-glyph { width: 16px; height: 14px; position: relative; margin-bottom: 2px; }
+  .lock-glyph .shackle { position: absolute; top: -6px; left: 3px; width: 10px; height: 8px; border: 2px solid var(--accent-locked); border-bottom: none; border-radius: 6px 6px 0 0; }
+  .lock-glyph .body { position: absolute; bottom: 0; width: 16px; height: 10px; background: var(--accent-locked); border-radius: 3px; }
+  .lock-badge { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-ui); font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--accent-locked); background: var(--accent-locked-subtle); border-radius: var(--radius-pill); padding: 2px var(--space-3); }
+  .lock-filename { font-size: var(--text-md); font-weight: var(--weight-medium); }
+  .lock-meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); }
+
+  /* ---- feature strip ---- */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; margin-top: var(--space-8); }
+  .feature h3 { font-size: var(--text-md); font-weight: var(--weight-semibold); margin: 0 0 var(--space-2); }
+  .feature p { font-size: var(--text-sm); color: var(--text-secondary); line-height: var(--leading-sm); margin: 0; }
+  .feature .dot { width: 8px; height: 8px; border-radius: 50%; margin-bottom: var(--space-4); }
+
+  /* ---- closing cta ---- */
+  .cta-band { text-align: center; padding: 100px 0; }
+  .cta-band h2 { font-size: var(--text-3xl); font-weight: var(--weight-semibold); margin: 0 0 var(--space-6); }
+
+  /* ---- footer ---- */
+  footer { padding: 48px 0 64px; }
+  .footer-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-4); }
+  .footer-links { display: flex; gap: var(--space-6); font-size: var(--text-sm); color: var(--text-secondary); }
+  .footer-note { font-size: var(--text-xs); color: var(--text-disabled); margin-top: var(--space-6); font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="container hero-grid">
+    <div>
+      <div class="eyebrow">Personal knowledge vault</div>
+      <h1>Your documents,<br/>as a graph you<br/>can query.</h1>
+      <p class="sub">Ask a question in plain language. Cerebro retrieves the exact nodes it used to answer — not a black box, not a decorative animation.</p>
+      <button class="btn-primary">Try it</button>
+    </div>
+    <div class="graph-wrap">
+      <svg viewBox="0 0 560 440" width="100%" height="100%">
+        <line x1="80" y1="60" x2="180" y2="40" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="180" y1="40" x2="260" y2="110" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="260" y1="110" x2="340" y2="70" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="340" y1="70" x2="420" y2="130" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="80" y1="60" x2="120" y2="180" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="120" y1="180" x2="220" y2="220" stroke="rgba(139,92,246,0.35)" stroke-width="1.2"/>
+        <line x1="260" y1="110" x2="220" y2="220" stroke="rgba(139,92,246,0.35)" stroke-width="1.2"/>
+        <line x1="220" y1="220" x2="320" y2="260" stroke="rgba(139,92,246,0.35)" stroke-width="1.2"/>
+        <line x1="320" y1="260" x2="400" y2="220" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="120" y1="180" x2="150" y2="300" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="150" y1="300" x2="280" y2="340" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="280" y1="340" x2="380" y2="320" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="380" y1="320" x2="460" y2="280" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+        <line x1="400" y1="220" x2="460" y2="280" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+
+        <circle cx="220" cy="220" r="30" fill="rgba(139,92,246,0.10)"/>
+
+        <circle cx="80" cy="60" r="4" fill="#A1A1AA" opacity="0.7"/>
+        <circle cx="180" cy="40" r="3.5" fill="#A1A1AA" opacity="0.6"/>
+        <circle cx="260" cy="110" r="6" fill="#2DD4BF"/>
+        <circle cx="340" cy="70" r="4" fill="#A1A1AA" opacity="0.6"/>
+        <circle cx="420" cy="130" r="4.5" fill="#A1A1AA" opacity="0.7"/>
+        <circle cx="120" cy="180" r="5" fill="#A1A1AA" opacity="0.7"/>
+        <circle cx="320" cy="260" r="4.5" fill="#A1A1AA" opacity="0.6"/>
+        <circle cx="400" cy="220" r="4" fill="#A1A1AA" opacity="0.6"/>
+        <circle cx="150" cy="300" r="4.5" fill="#A1A1AA" opacity="0.65"/>
+        <circle cx="280" cy="340" r="4" fill="#A1A1AA" opacity="0.6"/>
+        <circle cx="380" cy="320" r="5.5" fill="#2DD4BF" opacity="0.9"/>
+        <circle cx="460" cy="280" r="4" fill="#A1A1AA" opacity="0.6"/>
+
+        <circle class="pulse-dot" cx="220" cy="220" r="9" fill="none" stroke="#8B5CF6" stroke-width="1.5"/>
+        <circle cx="220" cy="220" r="9" fill="#8B5CF6"/>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="eyebrow">01</div>
+    <h2 class="section-title">Ask it anything you've stored</h2>
+    <p class="section-sub">Every answer is grounded in nodes from your own vault, with citations back to source.</p>
+    <div class="chat-card">
+      <div class="bubble query">What did I read about consensus algorithms last spring?</div>
+      <div class="bubble answer">You went through three papers on Raft and Paxos between March and April<span class="cite"> [1][2]</span>, and your own notes flag Raft as easier to reason about for small clusters<span class="cite"> [3]</span>.</div>
+      <div class="chips">
+        <span class="chip">[1] raft-paper.pdf · chk_4a1f</span>
+        <span class="chip">[2] paxos-made-simple.pdf · chk_88c2</span>
+        <span class="chip">[3] note_2025-03-12.md · chk_0e91</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="eyebrow">02</div>
+    <h2 class="section-title">Watch it think</h2>
+    <p class="section-sub">Every query lights up the nodes it actually pulled from.</p>
+    <div class="think-grid">
+      <div class="think-frame">
+        <svg viewBox="0 0 480 280" width="100%" height="100%" style="position:absolute; inset:24px; width:calc(100% - 48px); height:calc(100% - 48px);">
+          <line x1="60" y1="40" x2="140" y2="90" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+          <line x1="140" y1="90" x2="220" y2="60" stroke="rgba(139,92,246,0.4)" stroke-width="1.4"/>
+          <line x1="220" y1="60" x2="300" y2="120" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+          <line x1="140" y1="90" x2="170" y2="180" stroke="rgba(139,92,246,0.4)" stroke-width="1.4"/>
+          <line x1="170" y1="180" x2="260" y2="200" stroke="rgba(139,92,246,0.4)" stroke-width="1.4"/>
+          <line x1="260" y1="200" x2="340" y2="160" stroke="rgba(244,244,245,0.08)" stroke-width="1"/>
+          <line x1="140" y1="90" x2="330" y2="90" stroke="rgba(139,92,246,0.4)" stroke-width="1.4" stroke-dasharray="2 4"/>
+          <circle cx="60" cy="40" r="4" fill="#A1A1AA" opacity="0.5"/>
+          <circle cx="140" cy="90" r="7" fill="#8B5CF6"/>
+          <circle cx="220" cy="60" r="4" fill="#A1A1AA" opacity="0.5"/>
+          <circle cx="300" cy="120" r="4" fill="#A1A1AA" opacity="0.5"/>
+          <circle cx="170" cy="180" r="7" fill="#8B5CF6"/>
+          <circle cx="260" cy="200" r="6" fill="#8B5CF6"/>
+          <circle cx="340" cy="160" r="4" fill="#A1A1AA" opacity="0.5"/>
+        </svg>
+        <div class="think-bubble">"Retrieved 3 nodes in 118ms — matched on Raft, Paxos, leader election."</div>
+      </div>
+      <p class="think-caption">These are the real documents retrieved for this answer — not a decorative animation. The graph only lights up what the query actually touched.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="eyebrow">03</div>
+    <h2 class="section-title">Lock what matters</h2>
+    <p class="section-sub">Seal a note behind a passphrase. It stays sealed for the session — even to Cerebro's own retrieval — until you unlock it again.</p>
+    <div class="lock-grid">
+      <div class="lock-card">
+        <div class="lock-card-top">
+          <div class="lock-glyph"><div class="shackle"></div><div class="body"></div></div>
+          <span class="lock-badge">Sealed</span>
+        </div>
+        <div class="lock-filename">distributed-systems-notes.pdf</div>
+        <div class="lock-meta">sealed · session-scoped · passphrase required</div>
+      </div>
+      <p class="section-sub" style="max-width: 460px;">Sealed files are excluded from search and retrieval until unlocked with your passphrase for that session. No passphrase is stored, and no answer will ever cite a sealed node.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="features">
+      <div class="feature">
+        <div class="dot" style="background: var(--accent-primary);"></div>
+        <h3>Multimodal search</h3>
+        <p>Query across PDFs, images, and handwritten scans with the same plain-language search.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--accent-secondary);"></div>
+        <h3>Real retrieval visualization</h3>
+        <p>See the actual nodes and edges behind every answer, rendered live — not simulated for effect.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--accent-locked);"></div>
+        <h3>Session-scoped locked files</h3>
+        <p>Passphrase-seal anything. It stays sealed, even from retrieval, until you unlock it again.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta-band" style="border-bottom: none;">
+  <div class="container">
+    <h2>Start building your vault.</h2>
+    <button class="btn-primary">Try it</button>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div class="footer-row">
+      <div style="font-weight: var(--weight-semibold); font-size: var(--text-md);">Cerebro</div>
+      <div class="footer-links">
+        <a href="#">Docs</a>
+        <a href="#">GitHub</a>
+        <a href="#">How data protection works</a>
+      </div>
+    </div>
+    <div class="footer-note">passphrase-gated locking, explained in full at the link above.</div>
+  </div>
+</footer>
+
+</body>
+</html>

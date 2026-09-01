@@ -22,10 +22,10 @@ const SATELLITE_ORBIT = 26;
 // well under ±5) — scaled up so nodes actually spread across the
 // canvas instead of clustering in a few pixels at the center.
 const POSITION_SCALE = 60;
-// ui-design-prompts.md §6: "brightening... then fading over roughly 2
-// seconds" — the single most important animation in the product, per
-// that doc, so this duration is a deliberate design value, not a
-// placeholder.
+// Brightening then fading over roughly 2 seconds is the single most
+// important animation in the product (see the retrieval-pulse animation
+// in Mockups/ui_kits/brain/index.html), so this duration is a
+// deliberate design value, not a placeholder.
 const PULSE_DURATION_MS = 2000;
 
 type SimNode = SimulationNodeDatum & GraphNode;

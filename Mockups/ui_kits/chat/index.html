@@ -1,0 +1,151 @@
+<!-- @dsCard group="Landing" viewport="1440x900" subtitle="Chat — inline citations, streaming, empty-context state, token estimate" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cerebro — Chat</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { margin: 0; height: 100%; background: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui); }
+  .shell { display: flex; flex-direction: column; height: 100vh; max-width: 760px; margin: 0 auto; }
+  .messages { flex: 1; overflow-y: auto; padding: 48px 8px 24px; display: flex; flex-direction: column; gap: var(--space-6); }
+
+  .msg-user { align-self: flex-end; max-width: 70%; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); font-size: var(--text-sm); }
+  .msg-assistant { max-width: 100%; font-size: var(--text-sm); line-height: var(--leading-md); }
+  .msg-assistant p { margin: 0 0 var(--space-3); }
+
+  .cite-chip { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border-radius: 50%; background: var(--bg-elevated-hover); border: 1px solid var(--border-default); color: var(--accent-primary-hover); font-family: var(--font-mono); font-size: 10px; cursor: pointer; margin-left: 3px; position: relative; top: -1px; transition: background var(--duration-fast) var(--ease-soft); }
+  .cite-chip:hover { background: var(--accent-primary-subtle); border-color: var(--accent-primary-border); }
+
+  .cite-preview { position: absolute; width: 260px; background: var(--bg-elevated-hover); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-3); box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: none; z-index: 20; font-size: var(--text-xs); }
+  .cite-preview.show { display: block; }
+  .cite-preview .p-title { font-size: var(--text-sm); font-weight: var(--weight-medium); margin-bottom: var(--space-1); }
+  .cite-preview .p-snippet { color: var(--text-secondary); line-height: var(--leading-xs); margin-bottom: var(--space-1); }
+  .cite-preview .p-page { font-family: var(--font-mono); color: var(--text-disabled); }
+
+  .no-source-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: var(--weight-medium); color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: 2px var(--space-2); margin-top: var(--space-2); }
+
+  .cursor-blink { display: inline-block; width: 6px; height: 14px; background: var(--text-primary); margin-left: 2px; animation: blink 1s step-end infinite; vertical-align: -2px; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .composer { border-top: 1px solid var(--border-subtle); padding: var(--space-4) 8px var(--space-6); }
+  .input-wrap { display: flex; align-items: center; gap: var(--space-2); background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5); }
+  .input-wrap input { flex: 1; background: transparent; border: none; outline: none; color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-ui); }
+  .input-wrap input::placeholder { color: var(--text-disabled); }
+  .send-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--accent-primary); border: none; color: var(--text-on-accent); cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background var(--duration-base) var(--ease-soft); }
+  .send-btn:hover { background: var(--accent-primary-hover); }
+  .token-readout { font-family: var(--font-mono); font-size: 11px; color: var(--text-disabled); padding: var(--space-2) var(--space-4) 0; }
+
+  .demo-controls { position: fixed; top: 20px; right: 20px; display: flex; gap: var(--space-2); }
+  .demo-controls button { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-pill); padding: 4px 12px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="demo-controls">
+  <button onclick="runStreamDemo()">demo: streaming answer</button>
+  <button onclick="runEmptyDemo()">demo: no sources found</button>
+</div>
+
+<div class="shell">
+  <div class="messages" id="messages">
+    <div class="msg-user">What did I read about consensus algorithms last spring?</div>
+    <div class="msg-assistant">
+      <p>You went through three papers on Raft and Paxos between March and April<span class="cite-chip" data-title="raft-paper.pdf" data-snippet="Raft decomposes consensus into leader election, log replication, and safety, favoring understandability over Paxos's generality." data-page="p. 4">1</span>, and your own notes flag Raft as easier to reason about for small clusters<span class="cite-chip" data-title="note_2025-03-12.md" data-snippet="Raft's single-leader model is much easier to trace through when debugging a 3-node cluster than Paxos's multi-proposer flow." data-page="">2</span>.</p>
+    </div>
+  </div>
+
+  <div class="composer">
+    <div class="input-wrap">
+      <input type="text" id="chat-input" placeholder="Ask your vault anything…" oninput="updateTokenEstimate()" />
+      <button class="send-btn"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7H11.5M11.5 7L7.5 3M11.5 7L7.5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <div class="token-readout" id="token-readout">~0 tokens for this draft</div>
+  </div>
+</div>
+
+<div class="cite-preview" id="cite-preview">
+  <div class="p-title" id="cp-title"></div>
+  <div class="p-snippet" id="cp-snippet"></div>
+  <div class="p-page" id="cp-page"></div>
+</div>
+
+<script>
+function updateTokenEstimate() {
+  const v = document.getElementById('chat-input').value;
+  const est = Math.max(0, Math.round(v.length / 4));
+  document.getElementById('token-readout').textContent = `~${est} tokens for this draft`;
+}
+
+function attachChipHandlers(scope) {
+  scope.querySelectorAll('.cite-chip').forEach(chip => {
+    chip.addEventListener('mouseenter', () => {
+      const p = document.getElementById('cite-preview');
+      document.getElementById('cp-title').textContent = chip.dataset.title;
+      document.getElementById('cp-snippet').textContent = chip.dataset.snippet;
+      document.getElementById('cp-page').textContent = chip.dataset.page || 'no page reference';
+      const r = chip.getBoundingClientRect();
+      p.style.left = (r.left - 100) + 'px';
+      p.style.top = (r.bottom + 8) + 'px';
+      p.classList.add('show');
+    });
+    chip.addEventListener('mouseleave', () => document.getElementById('cite-preview').classList.remove('show'));
+    chip.addEventListener('click', () => alert('Jumping to "' + chip.dataset.title + '" in the Brain view.'));
+  });
+}
+attachChipHandlers(document);
+
+function runStreamDemo() {
+  const messages = document.getElementById('messages');
+  const userMsg = document.createElement('div');
+  userMsg.className = 'msg-user';
+  userMsg.textContent = 'How does quorum size affect Raft availability?';
+  messages.appendChild(userMsg);
+
+  const assistantMsg = document.createElement('div');
+  assistantMsg.className = 'msg-assistant';
+  const p = document.createElement('p');
+  const cursor = document.createElement('span');
+  cursor.className = 'cursor-blink';
+  p.appendChild(cursor);
+  assistantMsg.appendChild(p);
+  messages.appendChild(assistantMsg);
+  messages.scrollTop = messages.scrollHeight;
+
+  const fullText = "A Raft cluster stays available as long as a majority of nodes can reach each other, so larger clusters tolerate more failures but need more nodes to agree on every write.";
+  let i = 0;
+  const interval = setInterval(() => {
+    i += 3;
+    p.textContent = fullText.slice(0, i);
+    p.appendChild(cursor);
+    messages.scrollTop = messages.scrollHeight;
+    if (i >= fullText.length) {
+      clearInterval(interval);
+      cursor.remove();
+      const chip1 = document.createElement('span');
+      chip1.className = 'cite-chip';
+      chip1.textContent = '1';
+      chip1.dataset.title = 'raft-paper.pdf';
+      chip1.dataset.snippet = 'Availability requires a majority (N/2 + 1) of servers to be up and communicating.';
+      chip1.dataset.page = 'p. 6';
+      p.appendChild(chip1);
+      attachChipHandlers(p);
+    }
+  }, 30);
+}
+
+function runEmptyDemo() {
+  const messages = document.getElementById('messages');
+  const userMsg = document.createElement('div');
+  userMsg.className = 'msg-user';
+  userMsg.textContent = 'What did I write about quantum error correction?';
+  messages.appendChild(userMsg);
+
+  const assistantMsg = document.createElement('div');
+  assistantMsg.className = 'msg-assistant';
+  assistantMsg.innerHTML = `<p>Nothing in your vault matches this closely enough to answer from. Try uploading a document on the topic, or rephrase the question.</p><span class="no-source-tag">no matching documents</span>`;
+  messages.appendChild(assistantMsg);
+  messages.scrollTop = messages.scrollHeight;
+}
+</script>
+</body>
+</html>
