@@ -459,6 +459,14 @@ sealed_chunks (                 -- Phase 3, isolated from chunks
   -- outside an active unlock
 )
 
+unlock_claims (                 -- Stage 3.3 — a plain DB row, not a
+  id, document_id, user_id,     -- signed token. Issued by POST
+  expires_at, created_at        -- /unlock after a server-side
+)                                -- test-decrypt proves the caller's key
+                                 -- is correct; scoped to one document_id;
+                                 -- expires_at checked against Postgres's
+                                 -- own clock, never the client's.
+
 clusters (
   id, user_id, label, centroid_x, centroid_y,
   method, computed_at,
