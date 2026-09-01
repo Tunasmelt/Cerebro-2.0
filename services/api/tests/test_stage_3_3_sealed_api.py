@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi.testclient import TestClient
 
 from app.core import auth as auth_module
+from app.core import rate_limit as rate_limit_module
 from app.core import sealed_storage as sealed_storage_module
 from app.core.sealed_storage import (
     SealedStorageError,
@@ -56,9 +57,18 @@ def _wire_test_seams(keypair, monkeypatch):
     _private_key, public_key = keypair
     monkeypatch.setenv("SUPABASE_URL", "https://test-project.supabase.co")
     auth_module.set_jwks_client(_StubJWKClient(public_key))
+    # These tests exercise route logic, not rate limiting, and this
+    # file alone makes more /seal, /unlock, /unseal calls per user than
+    # the real 5/hour "seal_unseal" limit allows — a fresh limiter per
+    # test avoids coupling this file's pass/fail to the global
+    # rate-limiter singleton's state (shared across the whole pytest
+    # session; test_stage_0_6_rate_limit.py is what actually tests the
+    # real limit).
+    rate_limit_module.set_rate_limiter(rate_limit_module.RateLimiter())
     yield
     auth_module.set_jwks_client(None)
     sealed_storage_module.set_sealed_storage(sealed_storage_module.SupabaseSealedStorage())
+    rate_limit_module.set_rate_limiter(rate_limit_module.RateLimiter())
 
 
 @pytest.fixture

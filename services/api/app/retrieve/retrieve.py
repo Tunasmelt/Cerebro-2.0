@@ -32,6 +32,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from app.core.sealed_storage import SealedStorageError, get_sealed_storage
 from app.core.tracing import get_tracer
 from app.ingest.embed import get_embed_client
 
@@ -66,6 +67,17 @@ class RetrievedChunk:
     content: str
     meta: dict[str, Any]
     relevance_score: float
+
+
+@dataclass
+class UnlockedDocument:
+    """Stage 3.4 — the caller's proof of an active unlock for one sealed
+    document, re-supplied for this single retrieve() call. Mirrors
+    unseal()'s own inputs exactly (Stage 3.3): a claim_id plus the
+    derived key, never anything persisted server-side."""
+    document_id: str
+    claim_id: str
+    key_b64: str
 
 
 def rrf_fuse(*ranked_lists: list[str], k: int = RRF_K) -> list[str]:
@@ -204,7 +216,59 @@ def set_retrieve_storage(storage: RetrieveStorage) -> None:
     _storage = storage
 
 
-async def retrieve(*, user_jwt: str, query: str) -> list[RetrievedChunk]:
+async def _sealed_exact_matches(
+    *,
+    user_jwt: str,
+    user_id: str,
+    query: str,
+    unlocked: list[UnlockedDocument],
+) -> list[RetrievedChunk]:
+    """Stage 3.4 — the only path by which sealed content can ever appear
+    in a retrieval result at all: the caller must hold a currently-valid
+    unlock claim (Stage 3.3 enforces scope + server-side expiry there,
+    not here) and re-supply the derived key for this call, same as a
+    direct unseal(). Matching is exact-phrase (case-insensitive
+    substring), not semantic — sealed content is never vectorized (Stage
+    3.1), so there is no embedding to rank it against. An invalid,
+    expired, or mis-scoped claim yields zero matches for that document
+    rather than failing the whole turn — same "degrade, don't crash"
+    posture as clustering placement elsewhere in this codebase."""
+    storage = get_sealed_storage()
+    query_lower = query.lower()
+    matches: list[RetrievedChunk] = []
+    for doc in unlocked:
+        try:
+            chunks = await storage.unseal_document(
+                user_jwt=user_jwt,
+                user_id=user_id,
+                document_id=doc.document_id,
+                claim_id=doc.claim_id,
+                key_b64=doc.key_b64,
+            )
+        except SealedStorageError:
+            continue
+        for chunk in chunks:
+            if query_lower in chunk["content"].lower():
+                matches.append(
+                    RetrievedChunk(
+                        chunk_id=f"{doc.document_id}:{chunk['ordinal']}",
+                        document_id=doc.document_id,
+                        ordinal=chunk["ordinal"],
+                        content=chunk["content"],
+                        meta={},
+                        relevance_score=1.0,
+                    )
+                )
+    return matches
+
+
+async def retrieve(
+    *,
+    user_jwt: str,
+    query: str,
+    user_id: str | None = None,
+    unlocked: list[UnlockedDocument] | None = None,
+) -> list[RetrievedChunk]:
     """Five of Stage 1.8's six expected spans live here — embed_query,
     vector_search, fts_search, rrf_fuse, rerank — one per real step in
     this pipeline, in call order (the sixth, generate, is in
@@ -261,6 +325,10 @@ async def retrieve(*, user_jwt: str, query: str) -> list[RetrievedChunk]:
         )[:RERANK_TOP_N]
         span.update(output={"fused_ids": fused_ids})
     if not fused_ids:
+        if unlocked:
+            return await _sealed_exact_matches(
+                user_jwt=user_jwt, user_id=user_id or "", query=query, unlocked=unlocked
+            )
         return []
 
     candidates = [by_id[chunk_id] for chunk_id in fused_ids]
@@ -287,6 +355,13 @@ async def retrieve(*, user_jwt: str, query: str) -> list[RetrievedChunk]:
                 content=candidate["content"],
                 meta=candidate["meta"],
                 relevance_score=score,
+            )
+        )
+
+    if unlocked:
+        results.extend(
+            await _sealed_exact_matches(
+                user_jwt=user_jwt, user_id=user_id or "", query=query, unlocked=unlocked
             )
         )
     return results

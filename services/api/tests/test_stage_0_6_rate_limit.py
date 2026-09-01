@@ -227,6 +227,26 @@ def test_seal_unseal_class_uses_the_5_per_hour_limit(client, keypair):
     assert response.status_code == 429
 
 
+def test_unlock_class_uses_the_5_per_hour_limit(client, keypair):
+    # Regression test: classify_route's seal/unseal regex was written
+    # before Stage 3.3 built the real routes and only matched /seal and
+    # /unseal — missing /unlock, the actual passphrase-verification
+    # endpoint (the one worth brute-force protecting most). It silently
+    # fell through to the unlimited "general" class. Caught while wiring
+    # Stage 3.4, fixed in rate_limit.py's classify_route.
+    private_key, _ = keypair
+    headers = auth_headers(private_key)
+
+    for i in range(5):
+        response = client.post(
+            "/api/v1/documents/doc-123/unlock", headers=headers
+        )
+        assert response.status_code != 429, f"attempt {i + 1} was rate limited early"
+
+    response = client.post("/api/v1/documents/doc-123/unlock", headers=headers)
+    assert response.status_code == 429
+
+
 def test_general_api_class_uses_the_100_per_minute_limit(client, keypair):
     private_key, _ = keypair
     headers = auth_headers(private_key)

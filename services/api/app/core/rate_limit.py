@@ -40,7 +40,15 @@ LIMITS: dict[str, tuple[int, int]] = {
     "general": (100, 60),
 }
 
-_SEAL_UNSEAL_RE = re.compile(r"^/api/v1/documents/[^/]+/(seal|unseal)$")
+_SEAL_UNSEAL_RE = re.compile(r"^/api/v1/documents/[^/]+/(seal|unlock|unseal)$")
+# Stage 3.3 built the real routes as /seal, /unlock, /unseal — this
+# regex was guessed before they existed (see this module's docstring
+# about that "documented future path" pattern breaking silently once
+# already) and only covered seal/unseal. /unlock is the actual
+# passphrase-verification endpoint — the one an attacker would brute
+# force a derived key against — so missing it here meant it fell
+# through to the unlimited "general" class. Caught while wiring Stage
+# 3.4, not by a live audit this time.
 
 
 def classify_route(path: str, method: str) -> str | None:
