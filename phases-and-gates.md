@@ -810,9 +810,26 @@ a card via the real `+ Add card` flow, dragged it from `Backlog` to
 persists across a page reload" behavior for real, not just at the fake-
 transport test level. Test board/cards cleaned up afterward.
 
-### Stage 4.3 — Todo CRUD
+### Stage 4.3 — Todo CRUD ✅
 **Exit criteria:** Tasks create, complete, persist, collapse into
 completed section.
+**Done:** `services/api/app/core/todo_storage.py` + `app/routes/todos.py`
+(`POST/GET /todos`, `PATCH /todos/{id}` toggles `completed`, `DELETE
+/todos/{id}`), plus the frontend (`apps/web/src/app/tasks/page.tsx`)
+matching `Mockups/ui_kits/tasks/index.html` — flat active list, a
+collapsed completed section with a count, checkbox toggle with an
+optimistic local update backed by a real PATCH. `completed_at` is
+derived server-side from the `completed` flip — there's no field for it
+in the request schema at all, so a client literally cannot set an
+arbitrary timestamp; it's cleared on uncomplete rather than left stale.
+`todos` has no `board_id`-equivalent parent to insert into (unlike
+Stage 4.2's `cards`→`boards`), so the ownership-bypass class of bug that
+stage's security review caught doesn't apply here — confirmed by a
+dedicated review pass rather than assumed from the similarity. 18 new
+tests (12 route-level + 6 storage-level against a fake httpx transport,
+including one proving `completed_at` is derived, not trusted, and one
+proving completion persists across a fresh fetch) — 272/272 backend
+tests passing, `ruff` clean. Security review: no findings.
 
 ### Stage 4.4 — Token playground
 **Exit criteria:** Cannot be finalized until scope is explicitly decided
