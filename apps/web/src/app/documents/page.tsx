@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
@@ -35,6 +35,17 @@ type UploadItem = {
   error?: string;
 };
 
+// Stage 4.6 — candidates are ephemeral (never persisted server-side);
+// confirming one is a normal card create against whichever board this
+// page lazily creates/reuses on first confirm, same "no board is ever
+// silently populated" posture the backend's own docstring establishes —
+// nothing is added until the user explicitly clicks "Add".
+type ActionItemCandidate = {
+  title: string;
+  description: string;
+  source_chunk_id: string;
+};
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}b`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}kb`;
@@ -52,6 +63,11 @@ export default function DocumentsPage() {
   const [dragging, setDragging] = useState(false);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [extractingId, setExtractingId] = useState<string | null>(null);
+  const [actionItems, setActionItems] = useState<Record<string, ActionItemCandidate[]>>({});
+  const [addedChunkIds, setAddedChunkIds] = useState<Set<string>>(new Set());
+  const defaultBoardId = useRef<string | null>(null);
 
   const fetchDocuments = useCallback(async () => {
     const res = await authedFetch("/api/documents");
@@ -162,6 +178,62 @@ export default function DocumentsPage() {
     setUploads((prev) => prev.filter((u) => u.key !== key));
   }
 
+  async function handleExtractActionItems(documentId: string) {
+    setExtractingId(documentId);
+    try {
+      const res = await authedFetch(`/api/documents/${documentId}/extract-action-items`, {
+        method: "POST",
+      });
+      const body = await res.json();
+      setActionItems((prev) => ({ ...prev, [documentId]: res.ok ? (body.items ?? []) : [] }));
+    } finally {
+      setExtractingId(null);
+    }
+  }
+
+  async function ensureDefaultBoardId(): Promise<string> {
+    if (defaultBoardId.current) return defaultBoardId.current;
+    const listRes = await authedFetch("/api/boards");
+    const listBody = await listRes.json();
+    const boards = listBody.boards ?? [];
+    if (boards.length > 0) {
+      defaultBoardId.current = boards[0].id;
+      return boards[0].id;
+    }
+    const createRes = await authedFetch("/api/boards", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "My Board" }),
+    });
+    const created = await createRes.json();
+    defaultBoardId.current = created.id;
+    return created.id;
+  }
+
+  async function handleConfirmActionItem(documentId: string, item: ActionItemCandidate) {
+    const boardId = await ensureDefaultBoardId();
+    await authedFetch(`/api/boards/${boardId}/cards`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        column_name: "Backlog",
+        title: item.title,
+        description: item.description,
+        document_id: documentId,
+      }),
+    });
+    setAddedChunkIds((prev) => new Set(prev).add(item.source_chunk_id));
+  }
+
+  function handleDeclineActionItem(documentId: string, item: ActionItemCandidate) {
+    setActionItems((prev) => ({
+      ...prev,
+      [documentId]: (prev[documentId] ?? []).filter(
+        (c) => c.source_chunk_id !== item.source_chunk_id
+      ),
+    }));
+  }
+
   if (checking) return null;
 
   return (
@@ -248,35 +320,88 @@ export default function DocumentsPage() {
               </tr>
             )}
             {documents.map((doc, i) => (
-              <tr key={doc.id} style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}>
-                <td>
-                  <div className={styles.titleCell}>
-                    <div className={styles.typeIcon}>{typeLabel(doc.mime)}</div>
-                    {doc.title}
-                  </div>
-                </td>
-                <td className={styles.monoCell}>{formatSize(doc.size_bytes)}</td>
-                <td className={styles.monoCell}>{new Date(doc.created_at).toLocaleDateString()}</td>
-                <td>
-                  <span className={`${styles.badge} ${styles[doc.status]}`}>
-                    {(doc.status === "processing" || doc.status === "ready") && (
-                      <span className={styles.badgeDot} />
+              <Fragment key={doc.id}>
+                <tr style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}>
+                  <td>
+                    <div className={styles.titleCell}>
+                      <div className={styles.typeIcon}>{typeLabel(doc.mime)}</div>
+                      {doc.title}
+                    </div>
+                  </td>
+                  <td className={styles.monoCell}>{formatSize(doc.size_bytes)}</td>
+                  <td className={styles.monoCell}>{new Date(doc.created_at).toLocaleDateString()}</td>
+                  <td>
+                    <span className={`${styles.badge} ${styles[doc.status]}`}>
+                      {(doc.status === "processing" || doc.status === "ready") && (
+                        <span className={styles.badgeDot} />
+                      )}
+                      {doc.status[0].toUpperCase() + doc.status.slice(1)}
+                    </span>
+                  </td>
+                  <td>
+                    {doc.status === "failed" && (
+                      <button
+                        className={styles.retryBtn}
+                        disabled={retryingId === doc.id}
+                        onClick={() => handleRetry(doc.id)}
+                      >
+                        {retryingId === doc.id ? "Retrying…" : "Retry"}
+                      </button>
                     )}
-                    {doc.status[0].toUpperCase() + doc.status.slice(1)}
-                  </span>
-                </td>
-                <td>
-                  {doc.status === "failed" && (
-                    <button
-                      className={styles.retryBtn}
-                      disabled={retryingId === doc.id}
-                      onClick={() => handleRetry(doc.id)}
-                    >
-                      {retryingId === doc.id ? "Retrying…" : "Retry"}
-                    </button>
-                  )}
-                </td>
-              </tr>
+                    {doc.status === "ready" && (
+                      <button
+                        className={styles.retryBtn}
+                        disabled={extractingId === doc.id}
+                        onClick={() => handleExtractActionItems(doc.id)}
+                      >
+                        {extractingId === doc.id ? "Scanning…" : "Extract action items"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+                {actionItems[doc.id] && (
+                  <tr>
+                    <td colSpan={5} className={styles.actionItemsCell}>
+                      {actionItems[doc.id].length === 0 ? (
+                        <span className={styles.emptyRow}>No action items found in this document.</span>
+                      ) : (
+                        <div className={styles.actionItemsList}>
+                          {actionItems[doc.id].map((item) => {
+                            const added = addedChunkIds.has(item.source_chunk_id);
+                            return (
+                              <div key={item.source_chunk_id} className={styles.actionItemRow}>
+                                <div>
+                                  <div className={styles.actionItemTitle}>{item.title}</div>
+                                  {item.description && (
+                                    <div className={styles.actionItemDesc}>{item.description}</div>
+                                  )}
+                                </div>
+                                <div className={styles.actionItemActions}>
+                                  <button
+                                    className={styles.retryBtn}
+                                    disabled={added}
+                                    onClick={() => handleConfirmActionItem(doc.id, item)}
+                                  >
+                                    {added ? "Added" : "Add"}
+                                  </button>
+                                  {!added && (
+                                    <button
+                                      className={styles.retryBtn}
+                                      onClick={() => handleDeclineActionItem(doc.id, item)}
+                                    >
+                                      Decline
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>

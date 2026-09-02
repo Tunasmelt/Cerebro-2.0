@@ -1009,7 +1009,7 @@ wired as a small "Ask the agent" input directly into the existing
 appends the created card to the board it landed on when the response
 names one still visible in the current view.
 
-### Stage 4.6 — Action-item extraction into kanban
+### Stage 4.6 — Action-item extraction into kanban ✅
 The one idea in this phase that's a genuine differentiator rather than a
 nice-to-have: RAG core (Phase 1) and the task system (Stage 4.1-4.2)
 have shared nothing but a `user_id` until now. This stage is them
@@ -1035,6 +1035,27 @@ items rather than a forced count — same "no relevant content returns
 nothing" principle as Stage 1.5's own exit criteria, not a new one.
 Confirming a candidate creates exactly one card with the correct
 `document_id` chip; declining creates nothing at all.
+**Done:** `services/api/app/chat/action_items.py` (new, single-document
+chunk fetch + a plain non-streaming generation call via Stage 4.5's
+`run_interaction`, asked for structured JSON rather than tool-calling)
++ `routes/documents.py`'s `POST /documents/{id}/extract-action-items`.
+No new "confirm" endpoint — the existing `POST /boards/{id}/cards`
+(Stage 4.2) already accepts `document_id`, exactly as this stage's own
+exit criteria anticipated. Extraction is fail-safe throughout: no
+chunks (including a sealed document's, already deleted by Stage 3.3),
+a `GenerateError`, or non-JSON model output all degrade to zero items
+rather than erroring; any candidate naming a `source_chunk_id` outside
+the document's real chunk set is dropped before it ever reaches the
+caller, same distrust-by-default posture `chat/prompt.py`'s
+`extract_citations` already applies to normal chat citations. 9 new
+backend tests (6 for extraction/parsing logic, 3 route-level) —
+317/317 backend tests passing, `ruff` clean on every file this stage
+touched. Frontend:
+`/documents` gained an "Extract action items" action per ready
+document, an inline candidate list (title/description, Add/Decline per
+item), and lazily creates/reuses one default board on first confirm
+(mirroring `/kanban`'s own lazy-board pattern) rather than requiring
+the user to already have one. Frontend `lint`/`build` clean.
 
 ### Stage 4.7 — Remaining mockup UI (app shell, landing, features, settings) ✅
 Every real page built so far (Documents, the brain graph + chat,
