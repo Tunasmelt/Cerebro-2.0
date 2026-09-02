@@ -7,11 +7,14 @@ import { authedFetch } from "@/lib/api";
 import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./playground.module.css";
 
-// Stage 4.4 — read-only token/cost breakdown for a past chat turn.
-// Deliberately not the mockup's editable-textarea/re-run flow (Stage
-// 4.4's own note: that's deferred to a future Phase 5 stage, needing
-// its own generation entry point). This shows what was actually sent,
-// reconstructed server-side — nothing here is editable or re-runnable.
+// Stage 4.4 built the read-only breakdown for a past turn. Stage 5.6
+// adds the deferred half of the mockup: editable sections, live
+// client-side recalc (same len/4 estimate the mockup itself used), and
+// a real "Run" that hits a dedicated generation entry point
+// (POST .../playground/run) — never the normal chat path, and nothing
+// about an edited run is persisted.
+
+const INPUT_PRICE_PER_TOKEN_USD = 0.3 / 1_000_000;
 
 type Session = { id: string; created_at: string };
 type Message = { id: string; role: string; content: string; created_at: string };
@@ -23,12 +26,31 @@ type Breakdown = {
   total_tokens: number;
   estimated_cost_usd: number;
 };
+type RunResult = {
+  model: string;
+  response: { content: string; tokens: number };
+  total_tokens: number;
+  estimated_cost_usd: number;
+  latency_ms: number;
+};
+
+type EditableSection = {
+  label: string;
+  chunkId: string;
+  citation: string | null;
+  original: string;
+  content: string;
+};
 
 const SECTION_TITLES: Record<string, string> = {
   system_instructions: "System instructions",
   context: "Context",
   user_query: "User query",
 };
+
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.round(text.length / 4));
+}
 
 export default function PlaygroundPage() {
   const { checking, email } = useAuthedUser();
@@ -38,6 +60,11 @@ export default function PlaygroundPage() {
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<Breakdown | null>(null);
   const [loadingBreakdown, setLoadingBreakdown] = useState(false);
+
+  const [sections, setSections] = useState<EditableSection[]>([]);
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<RunResult | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   useEffect(() => {
     if (checking) return;
@@ -59,12 +86,31 @@ export default function PlaygroundPage() {
   useEffect(() => {
     if (!selectedSessionId || !selectedMessageId) {
       setBreakdown(null);
+      setSections([]);
       return;
     }
     setLoadingBreakdown(true);
+    setRunResult(null);
+    setRunError(null);
     authedFetch(`/api/chat/sessions/${selectedSessionId}/messages/${selectedMessageId}/prompt`)
       .then((res) => res.json())
-      .then((body) => setBreakdown(body.error ? null : body))
+      .then((body) => {
+        if (body.error) {
+          setBreakdown(null);
+          setSections([]);
+          return;
+        }
+        setBreakdown(body);
+        setSections(
+          body.sections.map((s: Section, i: number) => ({
+            label: s.label,
+            chunkId: s.citation ? `chunk_${i}` : "edited",
+            citation: s.citation,
+            original: s.content,
+            content: s.content,
+          }))
+        );
+      })
       .finally(() => setLoadingBreakdown(false));
   }, [selectedSessionId, selectedMessageId]);
 
@@ -72,13 +118,61 @@ export default function PlaygroundPage() {
 
   const assistantMessages = messages.filter((m) => m.role === "assistant");
 
+  const totalTokens = sections.reduce((sum, s) => sum + estimateTokens(s.content), 0);
+  const estCost = totalTokens * INPUT_PRICE_PER_TOKEN_USD;
+  const estLatencyMs = Math.round(300 + totalTokens * 1.1);
+
+  function updateSection(index: number, content: string) {
+    setSections((prev) => prev.map((s, i) => (i === index ? { ...s, content } : s)));
+  }
+
+  function resetSection(index: number) {
+    setSections((prev) => prev.map((s, i) => (i === index ? { ...s, content: s.original } : s)));
+  }
+
+  function resetAll() {
+    setSections((prev) => prev.map((s) => ({ ...s, content: s.original })));
+  }
+
+  async function run() {
+    if (!selectedSessionId) return;
+    setRunning(true);
+    setRunError(null);
+    try {
+      const systemInstructions =
+        sections.find((s) => s.label === "system_instructions")?.content ?? "";
+      const contextSections = sections
+        .filter((s) => s.label === "context")
+        .map((s) => ({ chunk_id: s.chunkId, content: s.content }));
+      const userQuery = sections.find((s) => s.label === "user_query")?.content ?? "";
+
+      const res = await authedFetch(`/api/chat/sessions/${selectedSessionId}/playground/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          system_instructions: systemInstructions,
+          context_sections: contextSections,
+          user_query: userQuery,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setRunError(body.error?.message ?? "Run failed");
+        return;
+      }
+      setRunResult(body);
+    } finally {
+      setRunning(false);
+    }
+  }
+
   return (
     <AppShell userEmail={email}>
       <div className={styles.page}>
         <div className={styles.pageHeader}>
           <h1>Playground</h1>
           <span className={styles.subtitle}>
-            Read-only — shows the prompt actually sent for a past turn.
+            Edit the prompt that was actually sent, then run it for real.
           </span>
         </div>
 
@@ -118,14 +212,17 @@ export default function PlaygroundPage() {
 
         {!loadingBreakdown && !breakdown && (
           <div className={styles.emptyState}>
-            Pick a session and a turn above to see its token/cost breakdown.
+            Pick a session and a turn above to edit and re-run its prompt.
           </div>
         )}
 
         {!loadingBreakdown && breakdown && (
           <div className={styles.shell}>
             <div className={styles.left}>
-              {breakdown.sections.map((section, i) => (
+              <button className={styles.picker} onClick={resetAll} type="button">
+                Reset to original
+              </button>
+              {sections.map((section, i) => (
                 <div className={styles.section} key={i}>
                   <div className={styles.sectionHead}>
                     <span className={styles.sectionLabel}>
@@ -134,9 +231,25 @@ export default function PlaygroundPage() {
                     {section.citation && (
                       <span className={styles.sectionCitation}>{section.citation}</span>
                     )}
-                    <span className={styles.sectionTokens}>{section.tokens} tok</span>
+                    <span className={styles.sectionTokens}>
+                      {estimateTokens(section.content)} tok
+                    </span>
+                    {section.content !== section.original && (
+                      <button
+                        className={styles.sectionTokens}
+                        onClick={() => resetSection(i)}
+                        type="button"
+                      >
+                        reset
+                      </button>
+                    )}
                   </div>
-                  <div className={styles.sectionBody}>{section.content}</div>
+                  <textarea
+                    className={styles.sectionBody}
+                    value={section.content}
+                    onChange={(e) => updateSection(i, e.target.value)}
+                    rows={Math.max(3, Math.ceil(section.content.length / 80))}
+                  />
                 </div>
               ))}
             </div>
@@ -149,22 +262,44 @@ export default function PlaygroundPage() {
               <div className={styles.statDivider} />
               <div className={styles.statBlock}>
                 <span className={styles.statLabel}>Total tokens (est.)</span>
-                <span className={styles.statValue}>{breakdown.total_tokens}</span>
+                <span className={styles.statValue}>{totalTokens}</span>
               </div>
               <div className={styles.statDivider} />
               <div className={styles.statBlock}>
+                <span className={styles.statLabel}>Est. cost (input)</span>
                 <span className={`${styles.statValue} ${styles.statCost}`}>
-                  ${breakdown.estimated_cost_usd.toFixed(6)}
+                  ${estCost.toFixed(6)}
                 </span>
-                <span className={styles.statLabel}>Est. cost</span>
+              </div>
+              <div className={styles.statDivider} />
+              <div className={styles.statBlock}>
+                <span className={styles.statLabel}>Est. latency</span>
+                <span className={styles.statValue}>~{estLatencyMs}ms</span>
               </div>
               <div className={styles.statDivider} />
 
+              <button
+                className={styles.picker}
+                onClick={run}
+                disabled={running}
+                type="button"
+              >
+                {running ? "Running…" : "Run"}
+              </button>
+
+              {runError && <div className={styles.emptyState}>{runError}</div>}
+
               <div className={styles.responseBlock}>
                 <span className={styles.responseLabel}>
-                  Response ({breakdown.response.tokens} tok)
+                  {runResult
+                    ? `Response (${runResult.response.tokens} tok, ${runResult.latency_ms}ms, $${runResult.estimated_cost_usd.toFixed(6)})`
+                    : "Response"}
                 </span>
-                <div className={styles.responseText}>{breakdown.response.content}</div>
+                <div className={styles.responseText}>
+                  {runResult
+                    ? runResult.response.content
+                    : "Run the edited prompt to see a real response here."}
+                </div>
               </div>
             </div>
           </div>

@@ -95,11 +95,19 @@
 }
 
 .sectionBody {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
   padding: var(--space-3);
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--text-primary);
   white-space: pre-wrap;
+  background: var(--bg-base);
+  border: none;
+  outline: none;
+  resize: vertical;
 }
 
 .right {
