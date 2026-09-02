@@ -1,6 +1,9 @@
 .page {
   color: var(--text-primary);
   font-family: var(--font-ui);
+  background:
+    radial-gradient(ellipse 800px 500px at 85% 0%, rgba(139, 92, 246, 0.1), transparent 60%),
+    var(--bg-base);
 }
 .page a {
   color: var(--accent-primary-hover);
@@ -29,18 +32,21 @@
   font-family: var(--font-ui);
   font-weight: var(--weight-medium);
   font-size: var(--text-sm);
-  background: var(--accent-primary);
+  background: linear-gradient(135deg, var(--accent-primary-hover), var(--accent-primary-active));
   color: var(--text-on-accent);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-6);
   cursor: pointer;
+  box-shadow: var(--glow-violet);
+  transition: transform var(--duration-fast) var(--ease-soft),
+    box-shadow var(--duration-base) var(--ease-soft);
 }
 .btnPrimary:hover {
-  background: var(--accent-primary-hover);
   color: var(--text-on-accent);
   text-decoration: none;
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.5), 0 12px 36px rgba(139, 92, 246, 0.3);
 }
 
 .navbar {
@@ -115,6 +121,13 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  box-shadow: var(--shadow-md);
+  transition: transform var(--duration-base) var(--ease-soft),
+    box-shadow var(--duration-base) var(--ease-soft);
+}
+.row:hover .rowVisual {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg);
 }
 
 .lane {
