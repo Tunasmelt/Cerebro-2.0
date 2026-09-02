@@ -39,6 +39,7 @@ from app.chat.generate import get_generate_client
 from app.chat.prompt import build_system_instruction, extract_citations
 from app.chat.storage import get_chat_storage
 from app.core.tracing import get_tracer
+from app.graph.edges import get_chunk_edges_storage
 from app.retrieve.retrieve import retrieve
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,25 @@ async def stream_chat(
             )
 
             chunks = await retrieve(user_jwt=user_jwt, query=query)
+
+            # Stage 5.3 — the associative memory graph's primary, free
+            # edge source: every pair of chunks that landed in this
+            # turn's real final result set together gets reinforced.
+            # Deliberately best-effort and never awaited into the
+            # critical path's failure mode — an edge-reinforcement bug
+            # must never turn into a failed chat turn, same posture
+            # Stage 5.1/5.2's own "optional quality improvement, never a
+            # new way for retrieval to fail" framing already established.
+            try:
+                await get_chunk_edges_storage().reinforce_co_retrieval(
+                    user_jwt=user_jwt,
+                    user_id=user_id,
+                    chunk_ids=[c.chunk_id for c in chunks],
+                )
+            except Exception:
+                logger.exception(
+                    "chunk edge reinforcement failed for session %s", session_id
+                )
 
             # Must be yielded before any token event — the frontend's
             # graph pulse animation depends on this ordering, and it's
