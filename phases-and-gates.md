@@ -832,10 +832,85 @@ proving completion persists across a fresh fetch) — 272/272 backend
 tests passing, `ruff` clean. Security review: no findings.
 
 ### Stage 4.4 — Token playground
-**Exit criteria:** Cannot be finalized until scope is explicitly decided
-— read-only token/cost display vs. fully editable pre-flight prompt
-assembly. **Do not begin implementation with this undecided**, per the
-existing note in this doc's history.
+**Scope decided:** read-only token/cost display for a past chat turn.
+Fully editable pre-flight prompt assembly (the `Mockups/ui_kits/playground`
+mockup's actual interaction — editable textareas, re-run, live recalc)
+is deliberately deferred to a future Phase 5 stage, not built here — it
+needs its own generation entry point separate from the normal chat
+path (arbitrary user-edited prompts hitting Gemini is a different,
+larger surface to secure and test than displaying what was already
+sent), and Phase 5 is RAG-quality work that's explicitly sequenced
+after the current retrieval/chat path is proven stable, not layered
+onto it mid-build — same reasoning CLAUDE.md's build-order note already
+gives for HyDE/query rewriting.
+
+Nothing about the exact historical prompt is persisted today — no
+token counts, no cost, not even the assembled system-instruction text
+(`chat_messages` stores only `content`, `retrieved_chunk_ids`, and
+`trace_id`). This stage reconstructs the breakdown after the fact for
+a chosen past assistant message: refetches the retrieved chunks by id
+(same chunk content that was actually used, since chunks are immutable
+after ingest) and rebuilds the prompt through the *same*
+`build_system_instruction` used live (Stage 1.7's `chat/prompt.py`),
+so the reconstruction can't drift into a second, untested prompt
+format. No chat history section — the real system never feeds prior
+turns into the prompt (confirmed while reading `chat/stream.py`), so
+the playground doesn't invent one either.
+
+**Exit criteria:** `GET /api/v1/chat/sessions/{session_id}/messages/{message_id}/prompt`
+returns the section breakdown (system-instruction header, one section
+per retrieved chunk with its source document title, the user query,
+and the model's response) each with an estimated token count, a total,
+and an estimated cost split by Gemini's real published per-token input
+vs. output rates for `gemini-3.5-flash-lite` (context/system/query
+sections priced as input, the response priced as output — not a single
+blended rate). 404s (not 403) for a session/message the caller doesn't
+own (RLS), and for a message that isn't role `assistant` (nothing to
+reconstruct a prompt for a user-authored message). Token counts are
+explicitly labeled as estimates (`len(text) / 4`, the same heuristic
+the mockup itself used) — no tokenizer dependency added, consistent
+with the free-tier no-heavy-deps constraint. A new `/playground` page
+lets the user pick a past session, then a past assistant turn, and
+view the breakdown — read-only, no textareas, no "Run" button.
+**Tests:** breakdown reconstructs the real chunk content and document
+titles for a fixture message's `retrieved_chunk_ids`; a message with no
+retrieved chunks still returns a valid breakdown (system header +
+query + response only, matching `build_system_instruction`'s own
+no-chunks branch); requesting another user's session/message 404s;
+requesting a `role=user` message 404s.
+
+**Done ✅:** `ChatPlaygroundStorage.get_prompt_breakdown`
+(`services/api/app/chat/playground.py`) refetches the assistant
+message's `retrieved_chunk_ids` by id, resolves each chunk's source
+document title, and displays them as separate read-only sections
+alongside the real `SYSTEM_PROMPT_HEADER` and the preceding user
+message. Per-section token badges are estimated from each section's
+own display text (readability); the real input-token count feeding the
+cost estimate is instead estimated from the actual string
+`build_system_instruction` assembles live (including the
+`[[chunk:id]]` markers and joiners the display sections don't repeat),
+so the number shown can't silently drift from what a live turn really
+sends. Cost splits input tokens (system + context + query) at
+$0.30/1M and output tokens (response) at $2.50/1M — Gemini's real
+published `gemini-3.5-flash-lite` rates, confirmed via a live web
+search at build time rather than assumed from training data (per
+`/api-check` discipline), not a single blended guess.
+`GET /api/v1/chat/sessions/{session_id}/messages/{message_id}/prompt`
+added to `routes/chat.py`; a matching frontend proxy route and a new
+`/playground` page (session picker → turn picker → breakdown) added,
+with a `Playground` item restored to `AppShell`'s nav (Stage 4.7 had
+omitted it since the route didn't exist yet). 7 new backend tests (3
+route-level + 4 storage-level against a fake httpx transport) —
+284/284 backend tests passing, `ruff` clean; frontend lint/build/test
+all clean. Security review: no findings (confirmed the chunks/documents
+follow-up lookups stay RLS-scoped even though they're separate REST
+calls from the already-scoped `chat_messages` row, matching the
+pre-existing pattern in `chat/storage.py`'s own `get_messages`; noted,
+non-blocking, that neither this nor the pre-existing code validates
+chunk/document ids are well-formed UUIDs before interpolating them
+into a PostgREST `in.()` filter — not a new risk, since both ids
+originate exclusively server-side from the retrieval pipeline, never
+from client input, but worth remembering if that ever changes).
 
 ### Stage 4.5 — Kanban agent tool-calling *(stretch, not gated)*
 
