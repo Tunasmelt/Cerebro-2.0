@@ -781,9 +781,28 @@ todo, only clear the reference. 6 static schema tests (no live
 Postgres in CI, same pattern as Stage 3.1) — 231/231 backend tests
 passing, `ruff` clean.
 
-### Stage 4.2 — Kanban CRUD & drag-drop
+### Stage 4.2 — Kanban CRUD & drag-drop ✅
 **Exit criteria:** Cards create, move between columns, persist order.
 **Tests:** Reordering persists across a page reload.
+**Done:** `services/api/app/core/kanban_storage.py` + `app/routes/kanban.py`
+(`POST/GET /boards`, `GET /boards/{id}` returning the board + its cards
+ordered by position, `POST /boards/{id}/cards`, `PATCH /cards/{id}` —
+also the move/reorder endpoint, a new `column_name` and/or `position`
+computed client-side — `DELETE /cards/{id}`), plus the frontend
+(`apps/web/src/app/kanban/page.tsx`) using native HTML5 drag-and-drop
+(no library, matching `Mockups/ui_kits/kanban/index.html`'s already-
+prototyped vanilla-JS approach) with an optimistic local update backed
+by the real PATCH. `cards.position` (Stage 4.1) is a float so a drop
+between two cards is a single PATCH averaging their positions, never a
+column renumber. A security review before merge caught a real gap:
+Stage 4.1's `cards_insert_own` RLS policy only checks the new row's own
+`user_id`, never that `board_id` actually belongs to the caller — so
+`create_card` now does an explicit RLS-scoped board lookup first and
+returns 404 if the board isn't the caller's, the same pattern
+`get_board_with_cards` already used. 23 new tests (14 route-level + 9
+storage-level against a fake httpx transport, including one proving the
+required "reordering persists across a fetch" behavior and two proving
+the ownership-check fix) — 254/254 backend tests passing, `ruff` clean.
 
 ### Stage 4.3 — Todo CRUD
 **Exit criteria:** Tasks create, complete, persist, collapse into
