@@ -760,11 +760,26 @@ gone afterward (not just assumed from the FK declaration).
 
 ---
 
-## Phase 4 — Kanban, todo, token playground *(planned — not built this window)*
+## Phase 4 — Kanban, todo, token playground
 
-### Stage 4.1 — Schema
+### Stage 4.1 — Schema ✅
 **Exit criteria:** `boards`, `cards`, `todos` exist, scoped to `user_id`
 only, optional reference chip into `documents`.
+**Done:** migration `0015_phase4_1_kanban_todo_schema`, applied to the
+live Supabase project. Same flat `auth.uid() = user_id` RLS pattern as
+every other table. No separate `columns` table — a board's columns are
+a small ordered `jsonb` array (`boards.columns`, defaults to
+`["Backlog", "In Progress", "Done"]`) and `cards.column_name` is a plain
+text value the app matches against it; not a security boundary, so not
+enforced at the DB layer, same posture as `documents.status`'s
+app-owned enum. `cards.position` is a float specifically so drag-drop
+can insert between two cards by averaging positions without
+renumbering the column. `document_id` on both `cards` and `todos` is
+the "optional reference chip" — nullable, `on delete set null` (not
+cascade): deleting a document must never delete someone's card or
+todo, only clear the reference. 6 static schema tests (no live
+Postgres in CI, same pattern as Stage 3.1) — 231/231 backend tests
+passing, `ruff` clean.
 
 ### Stage 4.2 — Kanban CRUD & drag-drop
 **Exit criteria:** Cards create, move between columns, persist order.
