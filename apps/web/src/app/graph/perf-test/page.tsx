@@ -23,12 +23,17 @@ function buildSyntheticGraph(): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const nodes: GraphNode[] = Array.from({ length: DOCUMENT_COUNT }, (_, i) => {
     const clusterId = clusterIds[i % CLUSTER_COUNT];
     const angle = (i % CLUSTER_COUNT) * ((Math.PI * 2) / CLUSTER_COUNT);
+    // Spread clusters through a real 3D volume (not a flat ring at
+    // z=0) so this harness actually exercises the 3D scene's depth,
+    // not just a plane viewed from an angle.
+    const clusterZ = (Math.floor(i / CLUSTER_COUNT) % 5) - 2;
     return {
       id: `doc-${i}`,
       title: `Synthetic document ${i}`,
       cluster_id: clusterId,
       x: Math.cos(angle) * 3,
       y: Math.sin(angle) * 3,
+      z: clusterZ,
     };
   });
 

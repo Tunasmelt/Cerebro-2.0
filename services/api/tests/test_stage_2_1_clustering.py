@@ -28,7 +28,7 @@ from app.graph.cluster import (
     choose_k,
     cluster_documents,
     kmeans,
-    project_2d,
+    project_3d,
     run_clustering_job,
 )
 
@@ -88,25 +88,25 @@ def test_choose_k_grows_with_document_count():
     assert choose_k(300) > choose_k(30) > choose_k(3)
 
 
-# --- project_2d (PCA via SVD) -------------------------------------------------
+# --- project_3d (PCA via SVD) -------------------------------------------------
 
 
-def test_project_2d_returns_correct_shape():
+def test_project_3d_returns_correct_shape():
     centroids = np.random.default_rng(0).normal(size=(5, 1024))
-    positions = project_2d(centroids)
-    assert positions.shape == (5, 2)
+    positions = project_3d(centroids)
+    assert positions.shape == (5, 3)
 
 
-def test_project_2d_single_cluster_is_the_origin():
-    positions = project_2d(np.array([[1.0, 2.0, 3.0]]))
-    assert positions.shape == (1, 2)
-    assert tuple(positions[0]) == (0.0, 0.0)
+def test_project_3d_single_cluster_is_the_origin():
+    positions = project_3d(np.array([[1.0, 2.0, 3.0]]))
+    assert positions.shape == (1, 3)
+    assert tuple(positions[0]) == (0.0, 0.0, 0.0)
 
 
-def test_project_2d_preserves_separation_of_distinct_centroids():
-    # Two very different centroids should not collapse to the same 2D point.
+def test_project_3d_preserves_separation_of_distinct_centroids():
+    # Two very different centroids should not collapse to the same 3D point.
     centroids = np.array([[0.0] * 1024, [50.0] * 1024])
-    positions = project_2d(centroids)
+    positions = project_3d(centroids)
     assert not np.allclose(positions[0], positions[1])
 
 
