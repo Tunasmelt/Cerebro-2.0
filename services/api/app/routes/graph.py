@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 from app.graph.api import get_edges, get_node_chunks, get_nodes
 from app.graph.cluster import run_clustering_job
-from app.graph.edges import get_chunk_edges_storage
+from app.graph.edges import get_associative_document_edges, get_chunk_edges_storage
 
 router = APIRouter()
 
@@ -39,12 +39,24 @@ async def nodes(request: Request):
 
 
 @router.get("/api/v1/graph/edges")
-async def edges(request: Request):
+async def edges(request: Request, include: str | None = None):
     """kNN edges as of the last recluster run — these DO go stale
     relative to new uploads until the next recluster, unlike nodes; see
-    architecture-and-security.md's Clustering pipeline section."""
+    architecture-and-security.md's Clustering pipeline section.
+
+    Stage 5.4 — ?include=associative additionally returns
+    associative_edges: Stage 5.3's chunk_edges aggregated up to
+    document pairs (a chunk-level table; the graph only shows document
+    nodes). Additive, not a breaking response shape change — the
+    `edges` key and its shape are exactly what they were before this
+    param existed, so every pre-5.4 caller keeps working unmodified."""
     result = await get_edges(user_jwt=request.state.user_jwt)
-    return JSONResponse({"edges": result})
+    body: dict = {"edges": result}
+    if include and "associative" in include.split(","):
+        body["associative_edges"] = await get_associative_document_edges(
+            user_jwt=request.state.user_jwt
+        )
+    return JSONResponse(body)
 
 
 @router.get("/api/v1/graph/nodes/{document_id}/chunks")

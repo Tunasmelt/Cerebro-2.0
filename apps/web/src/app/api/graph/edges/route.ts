@@ -1,4 +1,5 @@
 // Thin GET proxy to services/api's /api/v1/graph/edges (Stage 2.2).
+// Stage 5.4 — forwards ?include=associative through unchanged.
 
 function errorResponse(code: string, message: string, status: number) {
   return Response.json({ error: { code, message } }, { status });
@@ -11,8 +12,9 @@ export async function GET(request: Request) {
   }
 
   const authorization = request.headers.get("authorization");
+  const { search } = new URL(request.url);
 
-  const upstream = await fetch(`${apiBaseUrl}/api/v1/graph/edges`, {
+  const upstream = await fetch(`${apiBaseUrl}/api/v1/graph/edges${search}`, {
     headers: {
       ...(authorization ? { authorization } : {}),
     },

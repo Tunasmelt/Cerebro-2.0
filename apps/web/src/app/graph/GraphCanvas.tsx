@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import type * as THREE_NS from "three";
 
 import { clusterColor } from "@/lib/graph/clusterColor";
-import type { ChunkSatellite, GraphEdge, GraphNode } from "@/lib/graph/types";
+import type { AssociativeEdge, ChunkSatellite, GraphEdge, GraphNode } from "@/lib/graph/types";
 
 // 3D brain graph rendering upgrade. Was a flat Canvas2D scene driven by
 // d3-force; this is a real three.js WebGL scene, same dynamic-import +
@@ -97,6 +97,11 @@ export type GraphPulse = { nodeIds: string[]; key: number };
 export type GraphCanvasProps = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** Stage 5.4 — chunk_edges (Stage 5.3) aggregated to document pairs;
+   * a second, visually distinct edge layer from the kNN `edges` above.
+   * Purely visual — doesn't participate in the force sim's link
+   * spring, so it can't destabilize the already-tuned kNN layout. */
+  associativeEdges?: AssociativeEdge[];
   selectedNodeId: string | null;
   satellites: ChunkSatellite[];
   onNodeClick: (nodeId: string | null) => void;
@@ -123,6 +128,7 @@ function hexToThreeColor(THREE: typeof THREE_NS, hex: string): THREE_NS.Color {
 export default function GraphCanvas({
   nodes,
   edges,
+  associativeEdges,
   selectedNodeId,
   satellites,
   onNodeClick,
@@ -137,6 +143,7 @@ export default function GraphCanvas({
   const selectedIdRef = useRef<string | null>(selectedNodeId);
   const satellitesRef = useRef<ChunkSatellite[]>(satellites);
   const edgesRef = useRef<GraphEdge[]>(edges);
+  const associativeEdgesRef = useRef<AssociativeEdge[]>(associativeEdges ?? []);
   const onNodeClickRef = useRef(onNodeClick);
   const onFpsSampleRef = useRef(onFpsSample);
   const onPositionsSampleRef = useRef(onPositionsSample);
@@ -171,6 +178,9 @@ export default function GraphCanvas({
   useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
+  useEffect(() => {
+    associativeEdgesRef.current = associativeEdges ?? [];
+  }, [associativeEdges]);
   useEffect(() => {
     pulseRef.current = pulse;
     if (pulse && pulse.key !== lastPulseKeyRef.current) {
@@ -269,6 +279,26 @@ export default function GraphCanvas({
       });
       const edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial);
       scene.add(edgeLines);
+
+      // Stage 5.4 — a second, visually distinct edge layer for
+      // associative (chunk-derived) edges: thin and low-opacity by
+      // default, brightening with weight. LineBasicMaterial can't vary
+      // width per-segment (real variable-width lines need three's
+      // fatline addon, not worth the extra complexity here), so
+      // "thickens with weight" is expressed as opacity/brightness
+      // instead — still clearly reads as "stronger connection" without
+      // a second rendering pipeline.
+      const associativeEdgeGeometry = new THREE.BufferGeometry();
+      const associativeEdgeMaterial = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.8,
+      });
+      const associativeEdgeLines = new THREE.LineSegments(
+        associativeEdgeGeometry,
+        associativeEdgeMaterial
+      );
+      scene.add(associativeEdgeLines);
 
       const satelliteLineGeometry = new THREE.BufferGeometry();
       const satelliteLineMaterial = new THREE.LineBasicMaterial({
@@ -474,6 +504,49 @@ export default function GraphCanvas({
         edgeGeometry.computeBoundingSphere();
       }
 
+      // Same steady-state skip as updateEdges, plus this layer only
+      // needs rebuilding when the associative edge set itself changes
+      // (it doesn't participate in hover/selection highlighting the way
+      // kNN edges do, so focus changes don't need to invalidate it).
+      let lastAssociativeEdgesRebuiltFor: AssociativeEdge[] | null = null;
+      function updateAssociativeEdges() {
+        const currentEdges = associativeEdgesRef.current;
+        const settled = alphaRef.current <= ALPHA_MIN;
+        if (settled && currentEdges === lastAssociativeEdgesRebuiltFor) return;
+        lastAssociativeEdgesRebuiltFor = currentEdges;
+
+        const simNodes = simNodesRef.current;
+        const idToNode = new Map(simNodes.map((sn) => [sn.id, sn]));
+        const positions: number[] = [];
+        const colors: number[] = [];
+        const maxWeight = Math.max(1, ...currentEdges.map((e) => e.weight));
+        const baseColor = hexToThreeColor(THREE, "#2dd4bf"); // teal —
+        // distinct from the violet kNN edges above.
+        for (const e of currentEdges) {
+          const a = idToNode.get(e.document_id);
+          const b = idToNode.get(e.neighbor_document_id);
+          if (!a || !b) continue;
+          positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+          // "Thickens with weight" per this stage's exit criteria,
+          // expressed as brightness/opacity since per-segment line
+          // width isn't available with LineBasicMaterial — an explicit
+          // link (already weighted well above any co-retrieval sum)
+          // reads as fully bright regardless of the current max.
+          const intensity = e.is_explicit ? 1 : Math.min(1, e.weight / maxWeight);
+          const c = tmpColor.copy(baseColor).multiplyScalar(0.25 + 0.75 * intensity);
+          colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+        }
+        associativeEdgeGeometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(positions, 3)
+        );
+        associativeEdgeGeometry.setAttribute(
+          "color",
+          new THREE.Float32BufferAttribute(colors, 3)
+        );
+        associativeEdgeGeometry.computeBoundingSphere();
+      }
+
       function updateSatellites() {
         const simNodes = simNodesRef.current;
         const idToNode = new Map(simNodes.map((sn) => [sn.id, sn]));
@@ -537,6 +610,7 @@ export default function GraphCanvas({
         tick3D();
         updateNodeInstances();
         updateEdges();
+        updateAssociativeEdges();
         updateSatellites();
 
         // Hover picking against the real current instance positions.
@@ -610,6 +684,8 @@ export default function GraphCanvas({
         satelliteMaterial.dispose();
         edgeGeometry.dispose();
         edgeMaterial.dispose();
+        associativeEdgeGeometry.dispose();
+        associativeEdgeMaterial.dispose();
         satelliteLineGeometry.dispose();
         satelliteLineMaterial.dispose();
         renderer.dispose();
