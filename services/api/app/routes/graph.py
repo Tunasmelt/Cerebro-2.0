@@ -1,8 +1,10 @@
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from app.graph.api import get_edges, get_node_chunks, get_nodes
 from app.graph.cluster import run_clustering_job
+from app.graph.edges import get_chunk_edges_storage
 
 router = APIRouter()
 
@@ -53,3 +55,36 @@ async def node_chunks(request: Request, document_id: str):
     if result is None:
         return _error("not_found", "Document not found", 404)
     return JSONResponse({"chunks": result})
+
+
+class LinkChunkBody(BaseModel):
+    target_chunk_id: str
+
+
+@router.post("/api/v1/chunks/{chunk_id}/link")
+async def link_chunk(request: Request, chunk_id: str, body: LinkChunkBody):
+    """Stage 5.3 — an explicit, user-drawn associative edge. Both chunks
+    must be the caller's own (RLS-scoped lookup inside
+    create_explicit_link, same pattern kanban_storage.create_card already
+    uses for board_id) — a chunk_id belonging to another user, or one
+    that no longer exists (e.g. a sealed document's, already deleted),
+    is indistinguishable from "not found" here, never a 403."""
+    storage = get_chunk_edges_storage()
+    edge = await storage.create_explicit_link(
+        user_jwt=request.state.user_jwt,
+        user_id=request.state.user["sub"],
+        chunk_id_a=chunk_id,
+        chunk_id_b=body.target_chunk_id,
+    )
+    if edge is None:
+        return _error("not_found", "One or both chunks were not found", 404)
+    return JSONResponse(
+        {
+            "id": edge.id,
+            "source_chunk_id": edge.source_chunk_id,
+            "target_chunk_id": edge.target_chunk_id,
+            "weight": edge.weight,
+            "is_explicit": edge.is_explicit,
+        },
+        status_code=201,
+    )

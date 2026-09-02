@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 from app.core import auth as auth_module
 from app.graph import cluster as cluster_module
+from app.graph import edges as edges_module
+from app.graph.edges import ChunkEdge
 from app.main import app
 
 TEST_ISSUER = "https://test-project.supabase.co/auth/v1"
@@ -58,20 +60,43 @@ def keypair():
     return private_key, private_key.public_key()
 
 
+class _FakeChunkEdgesStorage:
+    def __init__(self):
+        self.edge_to_return: ChunkEdge | None = None
+        self.last_link_call: dict | None = None
+
+    async def reinforce_co_retrieval(self, **kwargs):
+        raise NotImplementedError
+
+    async def create_explicit_link(self, *, user_jwt, user_id, chunk_id_a, chunk_id_b):
+        self.last_link_call = {"chunk_id_a": chunk_id_a, "chunk_id_b": chunk_id_b}
+        return self.edge_to_return
+
+    async def list_edges_for_chunks(self, **kwargs):
+        raise NotImplementedError
+
+
 @pytest.fixture
 def graph_storage():
     return _FakeGraphStorage()
 
 
+@pytest.fixture
+def chunk_edges_storage():
+    return _FakeChunkEdgesStorage()
+
+
 @pytest.fixture(autouse=True)
-def _wire_test_seams(keypair, graph_storage, monkeypatch):
+def _wire_test_seams(keypair, graph_storage, chunk_edges_storage, monkeypatch):
     _private_key, public_key = keypair
     monkeypatch.setenv("SUPABASE_URL", "https://test-project.supabase.co")
     auth_module.set_jwks_client(_StubJWKClient(public_key))
     cluster_module.set_graph_storage(graph_storage)
+    edges_module.set_chunk_edges_storage(chunk_edges_storage)
     yield
     auth_module.set_jwks_client(None)
     cluster_module.set_graph_storage(None)
+    edges_module.set_chunk_edges_storage(edges_module.SupabaseChunkEdgesStorage())
 
 
 @pytest.fixture
@@ -105,6 +130,55 @@ def test_get_edges_returns_the_fake_storage_shape(client, keypair):
     response = client.get("/api/v1/graph/edges", headers=auth_headers(private_key))
     assert response.status_code == 200
     assert response.json()["edges"][0]["document_id"] == "doc-1"
+
+
+# --- Stage 5.3: explicit chunk links -----------------------------------------
+
+
+def test_link_chunk_happy_path(client, keypair, chunk_edges_storage):
+    from datetime import datetime, timezone
+
+    private_key, _ = keypair
+    chunk_edges_storage.edge_to_return = ChunkEdge(
+        id="edge-1",
+        source_chunk_id="c1",
+        target_chunk_id="c2",
+        weight=5.0,
+        co_retrieval_count=0,
+        is_explicit=True,
+        last_reinforced_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    response = client.post(
+        "/api/v1/chunks/c1/link",
+        headers=auth_headers(private_key),
+        json={"target_chunk_id": "c2"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["source_chunk_id"] == "c1"
+    assert body["target_chunk_id"] == "c2"
+    assert body["is_explicit"] is True
+    assert chunk_edges_storage.last_link_call == {"chunk_id_a": "c1", "chunk_id_b": "c2"}
+
+
+def test_link_chunk_for_unowned_or_missing_chunk_returns_404(client, keypair, chunk_edges_storage):
+    private_key, _ = keypair
+    chunk_edges_storage.edge_to_return = None
+
+    response = client.post(
+        "/api/v1/chunks/c1/link",
+        headers=auth_headers(private_key),
+        json={"target_chunk_id": "does-not-exist"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_link_chunk_requires_auth(client):
+    response = client.post("/api/v1/chunks/c1/link", json={"target_chunk_id": "c2"})
+    assert response.status_code == 401
 
 
 def test_get_node_chunks_for_a_real_document(client, keypair):

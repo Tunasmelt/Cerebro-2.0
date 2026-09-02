@@ -1199,7 +1199,7 @@ existing retrieval quality bar. A query with weak direct-embedding
 overlap but strong hypothetical-answer overlap demonstrates HyDE
 recovering a result direct retrieval alone misses.
 
-### Stage 5.3 — Associative memory graph (persistent edges)
+### Stage 5.3 — Associative memory graph (persistent edges) ✅
 **Exit criteria:** A new `chunk_edges` table (`source_chunk_id`,
 `target_chunk_id`, `weight`, `co_retrieval_count`, `last_reinforced_at`)
 persists standing associations between chunks, independent of the brain
@@ -1241,6 +1241,38 @@ activity. Attempting to link a chunk belonging to another user, or a
 sealed document's (nonexistent) chunk id, is rejected — ownership and
 sealed-isolation tests, same shape as every other mutating route's
 existing coverage.
+**Done:** migration `0016_phase5_3_chunk_edges` (applied to the live
+Supabase project, `get_advisors` clean) creates `chunk_edges` with the
+flat `auth.uid() = user_id` RLS pattern every other table uses, plus
+`unique(user_id, source_chunk_id, target_chunk_id)` — the constraint
+that actually makes the table undirected, not just application
+discipline in `_canonical_pair`. Implementation deliberately differs
+from this stage's own first draft in one way: **no decay column or
+scheduled job** — decay is a pure function of `(weight,
+last_reinforced_at)` computed at *read* time
+(`app/graph/edges.py`'s `decay_weight`/`ChunkEdge.effective_weight`)
+rather than written back on a schedule, since this project's Render
+free tier has no room for a background worker outside the request
+cycle (CLAUDE.md) and a read-time transform needs no write at all,
+simpler than "piggyback a write onto the next request." `reinforce_co_retrieval`
+is wired into `chat/stream.py` right after a real turn's `retrieve()`
+call, wrapped in its own try/except so a reinforcement failure can
+never turn into a failed chat turn (same best-effort posture Stage
+5.1/5.2's own design note already established for query
+rewriting/HyDE) — confirmed by a test that makes the fake edge storage
+raise and asserts the turn still reaches `done`. `POST /chunks/{id}/link`
+(routes/graph.py) is the explicit-link path — `create_explicit_link`
+does its own RLS-scoped ownership lookup on both chunk ids before
+inserting (same "explicit ownership check before a cross-reference
+insert" pattern `kanban_storage.create_card` already uses for
+`board_id`), fails closed to 404 for a chunk that isn't the caller's or
+no longer exists (sealed content structurally can't appear here — Stage
+3.3 deletes a document's `chunks` rows on seal). 18 new backend tests
+(13 pure/decay/storage-level, 3 route-level for `POST /chunks/{id}/link`,
+2 real `chat/stream.py` integration tests proving reinforcement is
+called with the turn's real chunk set and that a reinforcement failure
+never breaks the turn) — 335/335 backend tests passing, `ruff` clean on
+every file this stage touched.
 
 ### Stage 5.4 — Persistent-edge graph rendering
 **Exit criteria:** `/graph` renders Stage 5.3's `chunk_edges` as a
