@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 
-import type { ChunkSatellite, GraphEdge, GraphNode } from "@/lib/graph/types";
+import type { AssociativeEdge, ChunkSatellite, GraphEdge, GraphNode } from "@/lib/graph/types";
 import GraphCanvas from "../GraphCanvas";
 
 // Stage 2.3's exit criteria: "Render performance holds at the
@@ -18,7 +18,11 @@ import GraphCanvas from "../GraphCanvas";
 const DOCUMENT_COUNT = 300;
 const CLUSTER_COUNT = 12;
 
-function buildSyntheticGraph(): { nodes: GraphNode[]; edges: GraphEdge[] } {
+function buildSyntheticGraph(): {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  associativeEdges: AssociativeEdge[];
+} {
   const clusterIds = Array.from({ length: CLUSTER_COUNT }, (_, i) => `cluster-${i}`);
   const nodes: GraphNode[] = Array.from({ length: DOCUMENT_COUNT }, (_, i) => {
     const clusterId = clusterIds[i % CLUSTER_COUNT];
@@ -50,7 +54,16 @@ function buildSyntheticGraph(): { nodes: GraphNode[]; edges: GraphEdge[] } {
     }
   }
 
-  return { nodes, edges };
+  // Stage 5.4 — a handful of synthetic associative (chunk-derived)
+  // edges, including one explicit link, so this harness actually
+  // exercises the second edge layer's rendering, not just the kNN one.
+  const associativeEdges: AssociativeEdge[] = [
+    { document_id: "doc-0", neighbor_document_id: "doc-50", weight: 1, is_explicit: false },
+    { document_id: "doc-0", neighbor_document_id: "doc-100", weight: 4, is_explicit: false },
+    { document_id: "doc-1", neighbor_document_id: "doc-200", weight: 5, is_explicit: true },
+  ];
+
+  return { nodes, edges, associativeEdges };
 }
 
 // Deterministic synthetic satellites for doc-0, so a real Playwright
@@ -68,7 +81,7 @@ const SATELLITES_BY_DOC: Record<string, ChunkSatellite[]> = {
 };
 
 export default function GraphPerfTestPage() {
-  const { nodes, edges } = useMemo(buildSyntheticGraph, []);
+  const { nodes, edges, associativeEdges } = useMemo(buildSyntheticGraph, []);
   const [fps, setFps] = useState<number | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [doc0Position, setDoc0Position] = useState<{ x: number; y: number } | null>(null);
@@ -122,6 +135,7 @@ export default function GraphPerfTestPage() {
       <GraphCanvas
         nodes={nodes}
         edges={edges}
+        associativeEdges={associativeEdges}
         selectedNodeId={selectedNodeId}
         satellites={satellites}
         onNodeClick={handleNodeClick}

@@ -87,6 +87,68 @@ class ChunkEdgesError(Exception):
         super().__init__(message)
 
 
+@dataclass
+class DocumentAssociativeEdge:
+    document_id: str
+    neighbor_document_id: str
+    weight: float
+    is_explicit: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "document_id": self.document_id,
+            "neighbor_document_id": self.neighbor_document_id,
+            "weight": round(self.weight, 6),
+            "is_explicit": self.is_explicit,
+        }
+
+
+def aggregate_to_document_edges(
+    edges: list[ChunkEdge],
+    chunk_to_document: dict[str, str],
+    *,
+    now: datetime | None = None,
+) -> list[DocumentAssociativeEdge]:
+    """Stage 5.4 — the main graph shows document nodes, not chunk nodes,
+    so a chunk_edges pair only becomes a renderable edge once resolved
+    to its two parent documents. Pure function (no I/O) so this can be
+    tested directly against fixture edges/chunk-to-document maps, same
+    "pure logic separated from storage" pattern as decay_weight/
+    _canonical_pair above.
+
+    A chunk pair whose two chunks belong to the *same* document is
+    dropped — that's not a document-level edge, it's noise the main
+    graph has no way to render (both ends would land on one node).
+    Multiple chunk pairs between the same two documents sum into one
+    edge, using each chunk_edge's real effective (decayed) weight, not
+    the raw stored one — same decay-at-read-time principle Stage 5.3
+    already established. An aggregated edge is marked is_explicit if
+    *any* contributing chunk pair was an explicit user-drawn link, so a
+    single deliberate link between two chunks still reads as a strong,
+    non-decaying connection between their documents.
+    """
+    totals: dict[tuple[str, str], float] = {}
+    any_explicit: dict[tuple[str, str], bool] = {}
+    for edge in edges:
+        doc_a = chunk_to_document.get(edge.source_chunk_id)
+        doc_b = chunk_to_document.get(edge.target_chunk_id)
+        if not doc_a or not doc_b or doc_a == doc_b:
+            continue
+        key = (doc_a, doc_b) if doc_a < doc_b else (doc_b, doc_a)
+        totals[key] = totals.get(key, 0.0) + edge.effective_weight(now=now)
+        any_explicit[key] = any_explicit.get(key, False) or edge.is_explicit
+
+    return [
+        DocumentAssociativeEdge(
+            document_id=doc_a,
+            neighbor_document_id=doc_b,
+            weight=weight,
+            is_explicit=any_explicit[(doc_a, doc_b)],
+        )
+        for (doc_a, doc_b), weight in totals.items()
+    ]
+
+
 class ChunkEdgesStorage(Protocol):
     async def reinforce_co_retrieval(
         self, *, user_jwt: str, user_id: str, chunk_ids: list[str]
@@ -99,6 +161,12 @@ class ChunkEdgesStorage(Protocol):
     async def list_edges_for_chunks(
         self, *, user_jwt: str, chunk_ids: list[str]
     ) -> list[ChunkEdge]: ...
+
+    async def list_all_edges(self, *, user_jwt: str) -> list[ChunkEdge]: ...
+
+    async def resolve_chunk_documents(
+        self, *, user_jwt: str, chunk_ids: list[str]
+    ) -> dict[str, str]: ...
 
 
 def _parse_row(row: dict[str, Any]) -> ChunkEdge:
@@ -246,6 +314,55 @@ class SupabaseChunkEdgesStorage:
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="chunk_edges_list_failed")
         return [_parse_row(r) for r in response.json()]
+
+    async def list_all_edges(self, *, user_jwt: str) -> list[ChunkEdge]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/chunk_edges",
+                headers=self._headers(user_jwt),
+                params={"select": "*"},
+            )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="chunk_edges_list_failed")
+        return [_parse_row(r) for r in response.json()]
+
+    async def resolve_chunk_documents(
+        self, *, user_jwt: str, chunk_ids: list[str]
+    ) -> dict[str, str]:
+        if not chunk_ids:
+            return {}
+        in_list = ",".join(sorted(set(chunk_ids)))
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/chunks",
+                headers=self._headers(user_jwt),
+                params={"id": f"in.({in_list})", "select": "id,document_id"},
+            )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="resolve_chunk_documents_failed")
+        return {row["id"]: row["document_id"] for row in response.json()}
+
+
+async def get_associative_document_edges(*, user_jwt: str) -> list[dict[str, Any]]:
+    """Stage 5.4 — GET /graph/edges?include=associative's real logic:
+    fetch every one of the caller's chunk_edges, resolve each chunk to
+    its document, and aggregate into document-level edges via the pure
+    aggregate_to_document_edges above. Deliberately fetches every
+    chunk_edges row rather than scoping to a specific document set —
+    this project's scale (a personal vault, not a multi-tenant SaaS)
+    makes that the simplest correct thing, same posture Stage 2.1's
+    clustering job already takes toward "recompute over everything"."""
+    storage = get_chunk_edges_storage()
+    edges = await storage.list_all_edges(user_jwt=user_jwt)
+    if not edges:
+        return []
+    chunk_ids = {e.source_chunk_id for e in edges} | {e.target_chunk_id for e in edges}
+    chunk_to_document = await storage.resolve_chunk_documents(
+        user_jwt=user_jwt, chunk_ids=list(chunk_ids)
+    )
+    return [
+        e.to_dict() for e in aggregate_to_document_edges(edges, chunk_to_document)
+    ]
 
 
 _storage: ChunkEdgesStorage = SupabaseChunkEdgesStorage()

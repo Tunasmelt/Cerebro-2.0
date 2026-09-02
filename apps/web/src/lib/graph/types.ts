@@ -14,6 +14,15 @@ export type GraphEdge = {
   rank: number;
 };
 
+// Stage 5.4 — chunk_edges (Stage 5.3) aggregated up to document pairs,
+// a second, visually distinct layer alongside GraphEdge's kNN edges.
+export type AssociativeEdge = {
+  document_id: string;
+  neighbor_document_id: string;
+  weight: number;
+  is_explicit: boolean;
+};
+
 export type ChunkSatellite = {
   id: string;
   ordinal: number;

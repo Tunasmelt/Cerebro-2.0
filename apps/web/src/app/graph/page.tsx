@@ -9,6 +9,7 @@ import { parseAnswerSegments, stripCitationMarkers } from "@/lib/graph/citations
 import { clusterColor } from "@/lib/graph/clusterColor";
 import { parseSSEStream } from "@/lib/graph/sse";
 import type {
+  AssociativeEdge,
   ChatMessage,
   ChatSession,
   ChunkSatellite,
@@ -37,6 +38,7 @@ export default function GraphPage() {
   const { checking, email } = useAuthedUser();
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [edges, setEdges] = useState<GraphEdge[]>([]);
+  const [associativeEdges, setAssociativeEdges] = useState<AssociativeEdge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [satellites, setSatellites] = useState<ChunkSatellite[]>([]);
   const [legendOpen, setLegendOpen] = useState(true);
@@ -60,16 +62,18 @@ export default function GraphPage() {
   // nothing actually changed.
   const lastNodesJsonRef = useRef<string>("");
   const lastEdgesJsonRef = useRef<string>("");
+  const lastAssociativeEdgesJsonRef = useRef<string>("");
 
   const fetchGraph = useCallback(async () => {
     const [nodesRes, edgesRes] = await Promise.all([
       authedFetch("/api/graph/nodes"),
-      authedFetch("/api/graph/edges"),
+      authedFetch("/api/graph/edges?include=associative"),
     ]);
     const nodesBody = await nodesRes.json();
     const edgesBody = await edgesRes.json();
     const nodesJson = JSON.stringify(nodesBody.nodes ?? []);
     const edgesJson = JSON.stringify(edgesBody.edges ?? []);
+    const associativeEdgesJson = JSON.stringify(edgesBody.associative_edges ?? []);
     if (nodesJson !== lastNodesJsonRef.current) {
       lastNodesJsonRef.current = nodesJson;
       setNodes(nodesBody.nodes ?? []);
@@ -77,6 +81,10 @@ export default function GraphPage() {
     if (edgesJson !== lastEdgesJsonRef.current) {
       lastEdgesJsonRef.current = edgesJson;
       setEdges(edgesBody.edges ?? []);
+    }
+    if (associativeEdgesJson !== lastAssociativeEdgesJsonRef.current) {
+      lastAssociativeEdgesJsonRef.current = associativeEdgesJson;
+      setAssociativeEdges(edgesBody.associative_edges ?? []);
     }
   }, []);
 
@@ -234,6 +242,7 @@ export default function GraphPage() {
         <GraphCanvas
           nodes={nodes}
           edges={edges}
+          associativeEdges={associativeEdges}
           selectedNodeId={selectedNodeId}
           satellites={satellites}
           onNodeClick={handleNodeClick}

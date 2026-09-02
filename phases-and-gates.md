@@ -1372,7 +1372,7 @@ called with the turn's real chunk set and that a reinforcement failure
 never breaks the turn) — 335/335 backend tests passing, `ruff` clean on
 every file this stage touched.
 
-### Stage 5.4 — Persistent-edge graph rendering
+### Stage 5.4 — Persistent-edge graph rendering ✅
 **Exit criteria:** `/graph` renders Stage 5.3's `chunk_edges` as a
 second, visually distinct edge layer alongside Stage 2.2's existing
 document-cluster edges — thin, low-opacity lines that thicken with
@@ -1387,6 +1387,37 @@ With the param set, returned associative edges match `chunk_edges`
 weight ordering exactly. Render performance re-measured at the Stage
 2.3 300-document seed scale with associative edges included, not just
 cluster edges — frame rate must still hold, same bar Stage 2.3 set.
+**Done:** `graph/edges.py`'s `aggregate_to_document_edges` (pure
+function) resolves each `chunk_edges` pair to its two parent documents
+via `resolve_chunk_documents`, drops any pair whose two chunks belong
+to the same document (not a renderable document-level edge), and sums
+multiple chunk pairs between the same two documents into one edge using
+each pair's real *effective* (decay-applied) weight — same
+decay-at-read-time principle Stage 5.3 already established, not a
+second decay implementation. An aggregated edge is marked
+`is_explicit` if any contributing chunk pair was an explicit link, so
+one deliberate link still reads as a strong, non-decaying connection
+between its two documents. `GET /graph/edges?include=associative`
+(routes/graph.py) is additive exactly as planned — the existing `edges`
+key/shape is untouched, `associative_edges` only appears when asked
+for. Rendered on the 3D graph (this pass's own prior work, "3D graph
+rendering upgrade" above) as a second `LineSegments` layer in
+`GraphCanvas.tsx`, teal instead of the kNN layer's violet, brightness
+scaling with weight (real per-segment line width isn't available with
+`LineBasicMaterial` — brightness/opacity is the honest substitute for
+"thickens with weight" here, not a placeholder for a future real-width
+version). Purely visual — associative edges don't feed the force
+sim's link spring, so they can't destabilize the already-tuned kNN
+layout. 22 new backend tests (pure aggregation logic, storage-level
+against a fake httpx transport, route-level for the additive param) —
+348/348 backend tests passing, `ruff` clean on every file this stage
+touched. Live-verified against a real production build: the additive
+param leaves the plain `/graph/edges` response byte-for-byte unchanged
+(regression-checked directly, not assumed), a teal associative edge
+renders visibly distinct from the gray kNN edges in the same
+300-node/synthetic-associative-edge harness used for the 3D upgrade,
+and click/select/collapse plus FPS both hold with the new layer
+present (no regression from the additional per-frame work).
 
 ### Stage 5.5 — Quick capture (journaling as ingest)
 **Exit criteria:** A new lightweight capture path — `POST /capture`

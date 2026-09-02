@@ -64,6 +64,8 @@ class _FakeChunkEdgesStorage:
     def __init__(self):
         self.edge_to_return: ChunkEdge | None = None
         self.last_link_call: dict | None = None
+        self.all_edges: list[ChunkEdge] = []
+        self.chunk_to_document: dict[str, str] = {}
 
     async def reinforce_co_retrieval(self, **kwargs):
         raise NotImplementedError
@@ -74,6 +76,12 @@ class _FakeChunkEdgesStorage:
 
     async def list_edges_for_chunks(self, **kwargs):
         raise NotImplementedError
+
+    async def list_all_edges(self, *, user_jwt):
+        return self.all_edges
+
+    async def resolve_chunk_documents(self, *, user_jwt, chunk_ids):
+        return {cid: doc for cid, doc in self.chunk_to_document.items() if cid in chunk_ids}
 
 
 @pytest.fixture
@@ -179,6 +187,52 @@ def test_link_chunk_for_unowned_or_missing_chunk_returns_404(client, keypair, ch
 def test_link_chunk_requires_auth(client):
     response = client.post("/api/v1/chunks/c1/link", json={"target_chunk_id": "c2"})
     assert response.status_code == 401
+
+
+# --- Stage 5.4: GET /graph/edges?include=associative -------------------------
+
+
+def test_get_edges_without_include_param_is_unchanged(client, keypair, chunk_edges_storage):
+    """The additive-param requirement itself: omitting ?include must
+    return exactly the pre-5.4 shape, no associative_edges key at all."""
+    private_key, _ = keypair
+    response = client.get("/api/v1/graph/edges", headers=auth_headers(private_key))
+    assert response.status_code == 200
+    body = response.json()
+    assert "associative_edges" not in body
+    assert body["edges"][0]["document_id"] == "doc-1"
+
+
+def test_get_edges_with_include_associative_aggregates_to_document_pairs(
+    client, keypair, chunk_edges_storage
+):
+    from datetime import datetime, timezone
+
+    private_key, _ = keypair
+    chunk_edges_storage.chunk_to_document = {"c1": "doc-a", "c2": "doc-b"}
+    chunk_edges_storage.all_edges = [
+        ChunkEdge(
+            id="e1",
+            source_chunk_id="c1",
+            target_chunk_id="c2",
+            weight=5.0,
+            co_retrieval_count=5,
+            is_explicit=False,
+            last_reinforced_at=datetime.now(timezone.utc),
+        )
+    ]
+
+    response = client.get(
+        "/api/v1/graph/edges?include=associative", headers=auth_headers(private_key)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["edges"][0]["document_id"] == "doc-1"  # unchanged
+    assert len(body["associative_edges"]) == 1
+    edge = body["associative_edges"][0]
+    assert {edge["document_id"], edge["neighbor_document_id"]} == {"doc-a", "doc-b"}
+    assert edge["weight"] == pytest.approx(5.0)
+    assert edge["is_explicit"] is False
 
 
 def test_get_node_chunks_for_a_real_document(client, keypair):
