@@ -63,10 +63,10 @@ def test_rrf_fuse_single_list_preserves_its_order():
 class _FakeEmbedClient:
     provider = "jina"
 
-    async def embed_text(self, text: str) -> list[float]:
+    async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]:
         return [0.1] * 1024
 
-    async def embed_image(self, image_bytes: bytes) -> list[float]:
+    async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]:
         raise NotImplementedError
 
 

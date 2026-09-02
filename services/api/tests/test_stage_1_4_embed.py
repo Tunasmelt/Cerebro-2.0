@@ -52,12 +52,12 @@ class _FakeEmbedClient:
         if self.fail_after is not None and total_calls > self.fail_after:
             raise EmbedError("simulated_crash", "injected failure")
 
-    async def embed_text(self, text: str) -> list[float]:
+    async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]:
         self.text_calls.append(text)
         self._maybe_fail()
         return [0.1] * 1024
 
-    async def embed_image(self, image_bytes: bytes) -> list[float]:
+    async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]:
         self.image_calls.append(image_bytes)
         self._maybe_fail()
         return [0.2] * 1024
@@ -275,7 +275,7 @@ async def test_ingest_concurrency_is_one_across_normalize_and_embed():
     storage = _FakeEmbedStorage(mime=TEXT_DOC_MIME, chunks=_text_chunks(1))
 
     class _SlowFakeEmbedClient(_FakeEmbedClient):
-        async def embed_text(self, text):
+        async def embed_text(self, text, task: str = "retrieval.passage"):
             order.append("embed-start")
             await asyncio.sleep(0.05)
             order.append("embed-end")

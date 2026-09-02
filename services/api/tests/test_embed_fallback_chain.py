@@ -21,13 +21,13 @@ class _FakeClient:
         self.always_fails = always_fails
         self.text_calls: list[str] = []
 
-    async def embed_text(self, text: str) -> list[float]:
+    async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]:
         self.text_calls.append(text)
         if self.always_fails:
             raise EmbedError(f"{self.provider}_failed", f"{self.provider} is down")
         return [0.1] * 1024
 
-    async def embed_image(self, image_bytes: bytes) -> list[float]:
+    async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]:
         raise NotImplementedError
 
 

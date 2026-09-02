@@ -14,6 +14,24 @@ Checkpointing: after each chunk is embedded, ingest_jobs.checkpoint is
 updated with the last completed ordinal, so a crash mid-job resumes from
 there instead of re-embedding already-done chunks.
 
+Post-launch fix: Jina v5's retrieval is an asymmetric bi-encoder — the
+API takes a `task` field selecting a task-specific LoRA adapter
+("retrieval.passage" for indexed content, "retrieval.query" for a live
+search query; confirmed live against Jina's current docs, not assumed).
+The original code sent no `task` at all, silently falling back to
+whatever Jina's default adapter is for every call — indexed content and
+live queries alike. Confirmed live in production: a real image chunk
+(embedding genuinely present, ingest completed cleanly) ranked 16th of
+27 total chunks for the query "explain the image" — nowhere near
+VECTOR_CANDIDATES' effective window once RRF-fused with FTS, so it
+never reached rerank or got cited. `embed_text`/`embed_image` now
+default to `task="retrieval.passage"` (what every ingest call needs)
+and `retrieve.py`'s query embedding explicitly passes
+`task="retrieval.query"`. All chunks embedded before this fix were
+embedded without a task adapter and should be re-embedded for
+consistency with the corrected asymmetric scheme — see the fix's PR for
+the one-off re-embed run against production.
+
 Concurrency=1 via the pipeline-wide lock in app/ingest/concurrency.py.
 
 Provider fallback (added after Stage 1.4, as new scope): Jina -> Voyage
@@ -84,8 +102,8 @@ def crop_tile(original_bytes: bytes, bbox: list[int]) -> bytes:
 class EmbedClient(Protocol):
     provider: str
 
-    async def embed_text(self, text: str) -> list[float]: ...
-    async def embed_image(self, image_bytes: bytes) -> list[float]: ...
+    async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]: ...
+    async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]: ...
 
 
 class JinaEmbedClient:
@@ -94,7 +112,7 @@ class JinaEmbedClient:
     def __init__(self) -> None:
         self._api_key = os.environ.get("JINA_API_KEY", "")
 
-    async def _call(self, model: str, input_item: dict[str, str]) -> list[float]:
+    async def _call(self, model: str, input_item: dict[str, str], task: str) -> list[float]:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 JINA_EMBEDDINGS_URL,
@@ -102,18 +120,18 @@ class JinaEmbedClient:
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
                 },
-                json={"model": model, "input": [input_item]},
+                json={"model": model, "input": [input_item], "task": task},
             )
         if response.status_code >= 400:
             raise EmbedError("embed_call_failed", response.text)
         return response.json()["data"][0]["embedding"]
 
-    async def embed_text(self, text: str) -> list[float]:
-        return await self._call(TEXT_MODEL, {"text": text})
+    async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]:
+        return await self._call(TEXT_MODEL, {"text": text}, task)
 
-    async def embed_image(self, image_bytes: bytes) -> list[float]:
+    async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]:
         b64 = base64.b64encode(image_bytes).decode()
-        return await self._call(IMAGE_MODEL, {"image": f"data:image/png;base64,{b64}"})
+        return await self._call(IMAGE_MODEL, {"image": f"data:image/png;base64,{b64}"}, task)
 
 
 class VoyageEmbedClient:
@@ -144,10 +162,15 @@ class VoyageEmbedClient:
             raise EmbedError("embed_call_failed", response.text)
         return response.json()["data"][0]["embedding"]
 
-    async def embed_text(self, text: str) -> list[float]:
+    async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]:
+        # Voyage's multimodal API has no asymmetric query/passage input
+        # type in this request shape — task is accepted only to satisfy
+        # EmbedClient, and is moot anyway since retrieve.py's query-time
+        # embedding always uses the primary (Jina) client, never this
+        # fallback (see this module's docstring).
         return await self._call({"type": "text", "text": text})
 
-    async def embed_image(self, image_bytes: bytes) -> list[float]:
+    async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]:
         b64 = base64.b64encode(image_bytes).decode()
         return await self._call(
             {"type": "image_base64", "image_base64": f"data:image/png;base64,{b64}"}
@@ -185,10 +208,15 @@ class CohereEmbedClient:
             raise EmbedError("embed_call_failed", response.text)
         return response.json()["embeddings"]["float"][0]
 
-    async def embed_text(self, text: str) -> list[float]:
-        return await self._call(input_type="search_document", key="texts", value=text)
+    async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]:
+        # Cohere's own asymmetric distinction ("search_document" vs
+        # "search_query") mapped from the shared task vocabulary, for
+        # correctness even though this fallback is currently only ever
+        # reached at ingest time (see VoyageEmbedClient.embed_text).
+        input_type = "search_query" if task == "retrieval.query" else "search_document"
+        return await self._call(input_type=input_type, key="texts", value=text)
 
-    async def embed_image(self, image_bytes: bytes) -> list[float]:
+    async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]:
         b64 = base64.b64encode(image_bytes).decode()
         return await self._call(
             input_type="image", key="images", value=f"data:image/png;base64,{b64}"
@@ -411,6 +439,9 @@ def _is_image_document(mime: str) -> bool:
 
 
 async def _embed_one(client: EmbedClient, *, is_image: bool, chunk: dict, original_bytes: bytes | None) -> list[float]:
+    # Indexed content always embeds as "retrieval.passage" (both methods'
+    # default) — the asymmetric "retrieval.query" adapter is only ever
+    # for a live query (see retrieve.py), never for what gets stored.
     if is_image:
         tile = crop_tile(original_bytes, chunk["meta"]["bbox"])
         return await client.embed_image(tile)
