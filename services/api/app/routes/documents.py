@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.chat.action_items import extract_action_items
 from app.core.documents_storage import (
     ALLOWED_MIME_TYPES,
     MAX_UPLOAD_BYTES,
@@ -204,6 +205,21 @@ async def download_document(request: Request, document_id: str):
 async def download_original(request: Request, document_id: str):
     """Same sealed-document rejection as /download, same reasoning."""
     return await _signed_url_response(request, document_id, "original")
+
+
+@router.post("/api/v1/documents/{document_id}/extract-action-items")
+async def extract_action_items_route(request: Request, document_id: str):
+    """Stage 4.6 — single-document action-item extraction. Returns
+    candidates only; nothing is persisted here. Confirming a candidate
+    is a normal POST /boards/{id}/cards with document_id set to this
+    document (Stage 4.2's route already accepts it) — no separate
+    confirm endpoint exists because none was needed."""
+    candidates = await extract_action_items(
+        user_jwt=request.state.user_jwt, document_id=document_id
+    )
+    if candidates is None:
+        return _error("not_found", "Document not found", 404)
+    return JSONResponse({"items": candidates}, status_code=200)
 
 
 @router.delete("/api/v1/documents/{document_id}")
