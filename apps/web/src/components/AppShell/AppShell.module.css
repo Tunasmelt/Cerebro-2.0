@@ -114,6 +114,10 @@
   flex-direction: column;
   min-width: 0;
   overflow: auto;
+  background:
+    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(139, 92, 246, 0.05), transparent 60%),
+    radial-gradient(ellipse 700px 400px at 100% 100%, rgba(45, 212, 191, 0.04), transparent 60%),
+    var(--bg-base);
 }
 
 .topbar {
