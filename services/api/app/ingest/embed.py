@@ -32,6 +32,20 @@ embedded without a task adapter and should be re-embedded for
 consistency with the corrected asymmetric scheme — see the fix's PR for
 the one-off re-embed run against production.
 
+The fallback providers have the same asymmetry and are handled too:
+Cohere's `input_type` ("search_document"/"search_query") and Voyage's
+`input_type` ("document"/"query") are both mapped from the same `task`
+vocabulary. Voyage's mapping was missed in this fix's first draft — a
+comment there wrongly claimed Voyage's multimodal API had no query/
+document distinction, an assumption never actually checked against
+Voyage's docs; caught only because the user asked "what about Cohere
+and Voyage" after the Jina fix shipped, not by anything in this repo.
+Low real-world severity today regardless, since `retrieve()` only
+vector-searches `documents.embedding_provider = jina` chunks — a
+document that fell back to Voyage/Cohere is invisible to vector search
+entirely, fallback-provider correctness only matters if that scoping
+ever changes.
+
 Concurrency=1 via the pipeline-wide lock in app/ingest/concurrency.py.
 
 Provider fallback (added after Stage 1.4, as new scope): Jina -> Voyage
@@ -144,7 +158,15 @@ class VoyageEmbedClient:
     def __init__(self) -> None:
         self._api_key = os.environ.get("VOYAGE_API_KEY", "")
 
-    async def _call(self, content_item: dict[str, str]) -> list[float]:
+    async def _call(self, content_item: dict[str, str], task: str) -> list[float]:
+        # Confirmed live against Voyage's current multimodal-embeddings
+        # docs (not assumed from memory, and not assumed to be absent
+        # either — an earlier version of this fix wrongly claimed Voyage
+        # had no query/document asymmetry at all): input_type "query" vs
+        # "document" prepends a different task-specific instruction
+        # before vectorizing, same asymmetric-retrieval shape as Jina's
+        # task and Cohere's input_type.
+        input_type = "query" if task == "retrieval.query" else "document"
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 VOYAGE_MULTIMODAL_URL,
@@ -155,6 +177,7 @@ class VoyageEmbedClient:
                 json={
                     "inputs": [{"content": [content_item]}],
                     "model": VOYAGE_MODEL,
+                    "input_type": input_type,
                     "output_dimension": EMBEDDING_DIMENSIONS,
                 },
             )
@@ -163,17 +186,12 @@ class VoyageEmbedClient:
         return response.json()["data"][0]["embedding"]
 
     async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]:
-        # Voyage's multimodal API has no asymmetric query/passage input
-        # type in this request shape — task is accepted only to satisfy
-        # EmbedClient, and is moot anyway since retrieve.py's query-time
-        # embedding always uses the primary (Jina) client, never this
-        # fallback (see this module's docstring).
-        return await self._call({"type": "text", "text": text})
+        return await self._call({"type": "text", "text": text}, task)
 
     async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]:
         b64 = base64.b64encode(image_bytes).decode()
         return await self._call(
-            {"type": "image_base64", "image_base64": f"data:image/png;base64,{b64}"}
+            {"type": "image_base64", "image_base64": f"data:image/png;base64,{b64}"}, task
         )
 
 
