@@ -16,6 +16,9 @@
   color: var(--text-secondary);
   cursor: pointer;
   border-left: 2px solid transparent;
+  transition: color var(--duration-fast) var(--ease-soft),
+    border-color var(--duration-base) var(--ease-soft),
+    background var(--duration-base) var(--ease-soft);
 }
 .subnavItem:hover {
   color: var(--text-primary);
@@ -36,6 +39,17 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
+  animation: paneIn var(--duration-base) var(--ease-soft);
+}
+@keyframes paneIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .pane h1 {
   font-size: var(--text-2xl);

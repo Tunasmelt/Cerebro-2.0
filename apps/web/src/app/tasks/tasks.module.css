@@ -63,9 +63,24 @@
   gap: var(--space-3);
   padding: var(--space-3) var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
+  transition: background var(--duration-fast) var(--ease-soft);
+  animation: rowIn var(--duration-base) var(--ease-soft) backwards;
 }
 .row:last-child {
   border-bottom: none;
+}
+.row:hover {
+  background: var(--bg-elevated);
+}
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .checkbox {
@@ -80,13 +95,29 @@
   align-items: center;
   justify-content: center;
   padding: 0;
+  transition: border-color var(--duration-fast) var(--ease-soft),
+    background var(--duration-fast) var(--ease-soft),
+    transform var(--duration-fast) var(--ease-soft);
 }
 .checkbox:hover {
   border-color: var(--accent-secondary);
+  transform: scale(1.08);
+}
+@keyframes checkPop {
+  0% {
+    transform: scale(0.8);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 .checkboxChecked {
   background: var(--accent-secondary);
   border-color: var(--accent-secondary);
+  animation: checkPop var(--duration-fast) var(--ease-soft);
 }
 
 .taskText {

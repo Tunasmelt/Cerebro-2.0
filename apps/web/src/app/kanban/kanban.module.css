@@ -85,13 +85,26 @@
   transition:
     box-shadow var(--duration-fast) var(--ease-soft),
     border-color var(--duration-fast) var(--ease-soft),
-    opacity var(--duration-fast) var(--ease-soft);
+    opacity var(--duration-fast) var(--ease-soft),
+    transform var(--duration-fast) var(--ease-soft);
+  animation: cardIn var(--duration-base) var(--ease-soft) backwards;
 }
 .card:hover {
   border-color: var(--border-strong);
+  transform: translateY(-1px);
 }
 .card.dragging {
   opacity: 0.5;
+}
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .cardTitle {

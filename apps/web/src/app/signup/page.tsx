@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import Logo from "@/components/Logo";
 import { createClient } from "@/lib/supabase/client";
 import styles from "../auth.module.css";
 
@@ -44,6 +45,9 @@ export default function SignUpPage() {
   if (checkEmail) {
     return (
       <div className={styles.page}>
+        <div className={styles.logoRow}>
+          <Logo size={26} />
+        </div>
         <div className={styles.card}>
           <h1 className={styles.title}>Check your email</h1>
           <p className={styles.info}>
@@ -57,6 +61,9 @@ export default function SignUpPage() {
 
   return (
     <div className={styles.page}>
+      <div className={styles.logoRow}>
+        <Logo size={26} />
+      </div>
       <form className={styles.card} onSubmit={handleSubmit}>
         <h1 className={styles.title}>Create your account</h1>
 

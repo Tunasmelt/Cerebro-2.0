@@ -95,8 +95,12 @@ export default function TasksPage() {
         {active.length === 0 && (
           <div className={styles.emptyState}>No tasks yet — add one above.</div>
         )}
-        {active.map((todo) => (
-          <div key={todo.id} className={styles.row}>
+        {active.map((todo, i) => (
+          <div
+            key={todo.id}
+            className={styles.row}
+            style={{ animationDelay: `${Math.min(i, 12) * 25}ms` }}
+          >
             <button
               className={styles.checkbox}
               onClick={() => handleToggle(todo)}

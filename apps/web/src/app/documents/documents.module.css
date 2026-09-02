@@ -142,6 +142,17 @@
 .table tbody tr {
   border-bottom: 1px solid var(--border-subtle);
   transition: background var(--duration-fast) var(--ease-soft);
+  animation: rowIn var(--duration-base) var(--ease-soft) backwards;
+}
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .table tbody tr:hover {
   background: var(--bg-elevated);

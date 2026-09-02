@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
+import Logo from "@/components/Logo";
 import { createClient } from "@/lib/supabase/client";
 import styles from "./AppShell.module.css";
 
@@ -50,7 +51,7 @@ export default function AppShell({
       <div className={`${styles.sidebar} ${collapsed ? styles.sidebarCollapsed : ""}`}>
         <div className={styles.sidebarTop}>
           <span className={styles.brandMark} onClick={() => router.push("/graph")}>
-            Cerebro
+            <Logo size={collapsed ? 20 : 20} wordmark={!collapsed} />
           </span>
           <button
             className={`${styles.collapseBtn} ${collapsed ? styles.collapseBtnFlipped : ""}`}
@@ -105,7 +106,9 @@ export default function AppShell({
           </div>
         </div>
 
-        <div className={styles.content}>{children}</div>
+        <div className={styles.content} key={pathname}>
+          {children}
+        </div>
       </div>
     </div>
   );
