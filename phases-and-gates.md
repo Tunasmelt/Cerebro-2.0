@@ -463,6 +463,104 @@ All stages 2.1–2.5 pass their tests, **and** you confirm live:
       note), not a code defect; a retry against the now-warm instance
       completed in ~5s and every subsequent run was clean.
 
+### 3D graph rendering upgrade ✅
+Not a numbered stage (no new backend capability, no exit-criteria
+change) — a rendering/visual upgrade to the already-built Stage
+2.1-2.3 graph, done in response to an explicit request to make the
+brain graph feel like a real 3D "brain" and connect similar nodes by
+real distance. Same non-numbered-stage pattern as the earlier "UI
+design pass — logo, navbar, animation, three.js hero" entry (Phase 4).
+
+The "connect similar nodes by euclidean distance" half of the request
+turned out to already be true: `compute_knn_edges`
+(`graph/cluster.py`, Stage 2.2) has computed each document's 3 nearest
+neighbors by real `np.linalg.norm` euclidean distance on full
+1024-dim document centroid vectors — not the lossy 2D projection —
+since Stage 2.2 shipped. Nothing about *how* edges are chosen changed
+here; what changed is the projection that places nodes in space and
+how the whole thing is rendered.
+
+**Done:**
+- `graph/cluster.py`'s `project_2d` → `project_3d`: the same PCA-via-SVD
+  approach, extended from the top-2 to the top-3 principal components
+  (same zero-padding fallback for k=1/k=2 clusters, one dimension
+  wider). `ClusterResult.cluster_positions` is now a 3-tuple.
+- New column `clusters.centroid_z` (migration
+  `0017_phase2_3d_graph_centroid_z`, applied live, `get_advisors`
+  clean) — no backfill needed, `replace_graph` already fully replaces
+  every cluster row on the next recluster, same as how
+  `centroid_x`/`centroid_y` themselves were introduced. `graph/storage.py`'s
+  `replace_graph`/`get_nodes` read and write it alongside x/y.
+- `GraphCanvas.tsx` fully rewritten from a flat `d3-force` + Canvas2D
+  scene to a real three.js WebGL scene — same dynamic-import +
+  disposal pattern `HeroGraph.tsx` already established for this repo's
+  other three.js usage, reused rather than reinvented. `InstancedMesh`
+  spheres for nodes (per-instance cluster color), `LineSegments` for
+  edges (vertex-colored for hover/selection highlight), `OrbitControls`
+  for pan/zoom/rotate (damping on, no auto-rotate — real data the user
+  is reading, not `HeroGraph`'s decorative graph), `Raycaster` picking
+  against the nodes mesh preserving the exact `onNodeClick` contract,
+  chunk satellites distributed over a sphere via a golden-angle spiral
+  instead of the old flat circle. `onPositionsSample` still reports
+  screen-space pixels (projected through the camera), not world
+  coordinates, specifically so `graph/perf-test/page.tsx`'s existing
+  Playwright click-test technique needed zero changes to keep working
+  against the rewritten component.
+- **No new physics dependency.** `d3-force` has no z-axis and
+  `d3-force-3d` (an unofficial, less-maintained fork) would break this
+  project's established "hand-roll rather than add a dependency"
+  posture (Stage 2.1 avoided scikit-learn, Stage 2.3 avoided a full
+  graph-viz framework for the same reason). A small hand-rolled 3D
+  force loop replaces it: pairwise repulsion (with a cutoff distance so
+  cost doesn't grow unbounded), a per-edge spring, centering, damping —
+  plus, critically, the same alpha-decay cooling `d3-force` itself
+  relies on to ever settle, which the first draft omitted and had to
+  add back after live testing caught it (below).
+
+**Two real bugs found and fixed by live testing, not code review** —
+exactly what this kind of check exists to catch:
+1. **Unbounded drift.** Repulsion among ~300 nodes is O(n²) and its
+   per-node total grows with n, but the original centering strength
+   didn't scale to match — live Playwright testing against
+   `/graph/perf-test`'s 300-synthetic-node harness found `doc-0`'s
+   reported screen position far outside the viewport after a few
+   seconds, i.e. the whole layout was drifting outward forever. Fixed
+   with a repulsion cutoff, retuned constants, and two hard safety
+   clamps (max speed, max radius from origin) that hold regardless of
+   how the forces balance.
+2. **No settling.** Even after the drift fix, a live click test
+   sometimes selected the wrong node — the hand-rolled sim had no
+   alpha-decay cooling (the actual mechanism that lets `d3-force`
+   settle; the old code got it for free from the library and it was
+   never re-added here), so positions never stopped moving between
+   when a position was sampled and when the click landed. Added the
+   same alpha-decay shape `d3-force`'s default uses; confirmed live
+   that a sampled position and a click against it agree exactly once
+   settled, and that FPS stays live-measured (not eyeballed) at the
+   same 300-node scale Stage 2.3's own bar targets — ~26-28fps
+   headless (this environment's WebGL is software-rendered, unlike
+   Canvas2D's cheap headless compositing, so this number isn't directly
+   comparable to Stage 2.3's original ~59fps Canvas2D measurement in
+   the same kind of test; a real GPU-accelerated browser is expected to
+   render this scene faster than headless software rendering does).
+   A third optimization attempt (skipping the node-instance rebuild
+   once settled, mirroring the edge-geometry one that shipped) was
+   tried and reverted after it reintroduced the same wrong-node-click
+   bug — kept the safe, always-current version instead of chasing a
+   marginal FPS gain at the cost of correctness.
+**Tests:** No committed frontend test file (this repo's established
+convention — see Stage 2.3/2.4's own notes — is live Playwright runs
+via the `webapp-testing` skill, not committed browser tests).
+Live-verified against a real production build (`next build` +
+`next start`, not dev mode) at the 300-node synthetic scale: FPS is a
+real measured number every second, clicking a node's real reported
+position selects it and shows its satellites, a second click collapses
+the selection, zero console errors. Backend: `project_3d`'s tests
+updated in `test_stage_2_1_clustering.py` (shape `(k, 3)`,
+single-cluster-is-origin now `(0.0, 0.0, 0.0)`) — 335/335 backend
+tests passing, `ruff` clean on every file this pass touched. Frontend
+`lint`/`build` clean.
+
 ---
 
 ## Phase 3 — Sealed tier

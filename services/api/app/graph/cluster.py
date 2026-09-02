@@ -108,21 +108,23 @@ def kmeans(
     return labels, centroids
 
 
-def project_2d(centroids: np.ndarray) -> np.ndarray:
-    """PCA via SVD: center the centroids, project onto their top-2
-    principal components. Returns (k, 2)."""
+def project_3d(centroids: np.ndarray) -> np.ndarray:
+    """PCA via SVD: center the centroids, project onto their top-3
+    principal components. Returns (k, 3) — extended from the original
+    2D projection (was project_2d) for the 3D graph rendering upgrade;
+    same fallback logic, one dimension wider."""
     k = centroids.shape[0]
     if k == 1:
-        return np.zeros((1, 2))
+        return np.zeros((1, 3))
     mean = centroids.mean(axis=0)
     centered = centroids - mean
     _u, _s, vt = np.linalg.svd(centered, full_matrices=False)
-    projected = centered @ vt[:2].T
-    if projected.shape[1] < 2:
-        # Fewer than 2 non-trivial directions (e.g. k=2 clusters can
-        # only separate along 1 axis) — pad with zeros rather than error.
+    projected = centered @ vt[:3].T
+    if projected.shape[1] < 3:
+        # Fewer than 3 non-trivial directions (e.g. k=2 clusters can only
+        # separate along 1 axis) — pad with zeros rather than error.
         projected = np.hstack(
-            [projected, np.zeros((projected.shape[0], 2 - projected.shape[1]))]
+            [projected, np.zeros((projected.shape[0], 3 - projected.shape[1]))]
         )
     return projected
 
@@ -144,7 +146,7 @@ class Edge:
 
 @dataclass
 class ClusterResult:
-    cluster_positions: list[tuple[float, float]]  # index-aligned with cluster labels
+    cluster_positions: list[tuple[float, float, float]]  # index-aligned with cluster labels
     cluster_centroid_embeddings: list[list[float]]  # index-aligned, real 1024-dim
     assignments: list[ClusterAssignment]
     edges: list[Edge]
@@ -199,7 +201,7 @@ def cluster_documents(
 
     k = choose_k(len(clusterable))
     labels, cluster_centroids = kmeans(centroids_by_doc, k, seed=seed)
-    positions = project_2d(cluster_centroids)
+    positions = project_3d(cluster_centroids)
 
     assignments = [
         ClusterAssignment(
@@ -215,7 +217,7 @@ def cluster_documents(
         else []
     )
     return ClusterResult(
-        cluster_positions=[(float(x), float(y)) for x, y in positions],
+        cluster_positions=[(float(x), float(y), float(z)) for x, y, z in positions],
         cluster_centroid_embeddings=[c.tolist() for c in cluster_centroids],
         assignments=assignments,
         edges=edges,
@@ -231,7 +233,7 @@ class GraphStorage(Protocol):
         *,
         user_jwt: str,
         user_id: str,
-        cluster_positions: list[tuple[float, float]],
+        cluster_positions: list[tuple[float, float, float]],
         cluster_centroid_embeddings: list[list[float]],
         assignments: list[ClusterAssignment],
         edges: list[Edge],

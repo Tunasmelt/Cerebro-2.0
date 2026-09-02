@@ -86,7 +86,7 @@ class SupabaseGraphStorage:
         *,
         user_jwt: str,
         user_id: str,
-        cluster_positions: list[tuple[float, float]],
+        cluster_positions: list[tuple[float, float, float]],
         cluster_centroid_embeddings: list[list[float]],
         assignments: list[ClusterAssignment],
         edges: list[Edge],
@@ -119,7 +119,7 @@ class SupabaseGraphStorage:
                 return
 
             cluster_ids: list[str] = []
-            for (x, y), centroid_embedding in zip(cluster_positions, cluster_centroid_embeddings):
+            for (x, y, z), centroid_embedding in zip(cluster_positions, cluster_centroid_embeddings):
                 insert_resp = await client.post(
                     f"{self._supabase_url}/rest/v1/clusters",
                     headers={
@@ -131,6 +131,7 @@ class SupabaseGraphStorage:
                         "user_id": user_id,
                         "centroid_x": x,
                         "centroid_y": y,
+                        "centroid_z": z,
                         "centroid_embedding": centroid_embedding,
                     },
                 )
@@ -187,7 +188,7 @@ class SupabaseGraphStorage:
                 headers=self._headers(user_jwt),
                 params={
                     "status": "eq.ready",
-                    "select": "id,title,document_clusters(cluster_id,distance,clusters(centroid_x,centroid_y))",
+                    "select": "id,title,document_clusters(cluster_id,distance,clusters(centroid_x,centroid_y,centroid_z))",
                 },
             )
         if response.status_code >= 400:
@@ -207,6 +208,7 @@ class SupabaseGraphStorage:
                     "cluster_id": (dc or {}).get("cluster_id"),
                     "x": cluster.get("centroid_x"),
                     "y": cluster.get("centroid_y"),
+                    "z": cluster.get("centroid_z"),
                 }
             )
         return nodes

@@ -4,6 +4,7 @@ export type GraphNode = {
   cluster_id: string | null;
   x: number | null;
   y: number | null;
+  z: number | null;
 };
 
 export type GraphEdge = {

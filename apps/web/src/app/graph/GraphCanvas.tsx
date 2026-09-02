@@ -1,35 +1,93 @@
 "use client";
 
-import {
-  forceCenter,
-  forceCollide,
-  forceLink,
-  forceManyBody,
-  forceSimulation,
-  type Simulation,
-  type SimulationLinkDatum,
-  type SimulationNodeDatum,
-} from "d3-force";
 import { useEffect, useRef } from "react";
+import type * as THREE_NS from "three";
 
 import { clusterColor } from "@/lib/graph/clusterColor";
 import type { ChunkSatellite, GraphEdge, GraphNode } from "@/lib/graph/types";
 
-const NODE_RADIUS = 6;
-const SATELLITE_RADIUS = 3;
-const SATELLITE_ORBIT = 26;
+// 3D brain graph rendering upgrade. Was a flat Canvas2D scene driven by
+// d3-force; this is a real three.js WebGL scene, same dynamic-import +
+// disposal pattern apps/web/src/app/HeroGraph.tsx already established
+// for this repo's other three.js usage (async import("three"), a
+// `disposed` flag guarding late async setup, explicit
+// geometry/material/renderer/controls disposal on cleanup) — reused
+// here rather than invented fresh.
+//
+// No new physics dependency: d3-force has no z-axis, and d3-force-3d
+// (an unofficial, less-maintained fork) would break this project's
+// established "hand-roll rather than add a dependency" posture (Stage
+// 2.1 avoided scikit-learn, Stage 2.3 avoided a full graph-viz
+// framework for the same reason). `tick3D` below is the direct 3D
+// generalization of what the old d3-force setup already did in 2D:
+// pairwise repulsion, per-edge spring toward a target link distance, a
+// gentle centering pull to the origin, velocity damping.
+//
+// Node/edge similarity itself is unchanged — document_edges already
+// come from real euclidean distance on full 1024-dim document centroid
+// vectors (services/api/app/graph/cluster.py's compute_knn_edges,
+// Stage 2.2), not the lossy projection. This file only changes how
+// that data is laid out and drawn.
+
+const NODE_RADIUS = 0.14;
+const SATELLITE_RADIUS = 0.07;
+const SATELLITE_ORBIT = 0.55;
 // Server centroid coordinates are small floats (PCA output, typically
-// well under ±5) — scaled up so nodes actually spread across the
-// canvas instead of clustering in a few pixels at the center.
-const POSITION_SCALE = 60;
+// well under ±5) — scaled up so nodes actually spread through the
+// scene instead of clustering near the origin.
+const POSITION_SCALE = 1.3;
 // Brightening then fading over roughly 2 seconds is the single most
 // important animation in the product (see the retrieval-pulse animation
 // in Mockups/ui_kits/brain/index.html), so this duration is a
-// deliberate design value, not a placeholder.
+// deliberate design value, not a placeholder. Unchanged from the 2D
+// version.
 const PULSE_DURATION_MS = 2000;
 
-type SimNode = SimulationNodeDatum & GraphNode;
-type SimLink = SimulationLinkDatum<SimNode>;
+// Hand-rolled 3D force sim constants — the direct generalization of the
+// old d3-force setup (forceManyBody().strength(-80), forceLink...
+// .distance(50), forceCenter, forceCollide(NODE_RADIUS * 2)), retuned
+// for this file's smaller world-unit scale (POSITION_SCALE=1.3 vs the
+// old 60).
+//
+// Repulsion is O(n^2) and its per-node total grows with n, but
+// CENTERING_STRENGTH doesn't scale with n — so at a few hundred nodes,
+// unbounded repulsion wins and the whole graph drifts outward forever
+// (confirmed live: a real Playwright run against the 300-node perf
+// harness found doc-0 projected far outside the viewport after a few
+// seconds). REPULSION_CUTOFF stops a node from repelling ones already
+// far away (same practical effect as d3-force's own default theta-based
+// approximation, just simpler), and MAX_RADIUS is a hard safety clamp —
+// regardless of how the forces balance, no node can end up further than
+// this from the origin, which is what actually guarantees every node
+// stays inside the camera frustum.
+const REPULSION_STRENGTH = 0.35;
+const REPULSION_CUTOFF = 3.5;
+const LINK_DISTANCE = 1.1;
+const LINK_STRENGTH = 0.05;
+const CENTERING_STRENGTH = 0.045;
+const DAMPING = 0.82;
+const MAX_SPEED = 0.4;
+const ALPHA_DECAY = 0.03; // same decay-to-alphaMin shape d3-force's
+// default uses, reaching near-zero after ~230 ticks — a few seconds at
+// a real 60fps browser tab; slower headless/software-rendered
+// environments take longer in wall-clock time since this is tick-based,
+// not time-based, matching d3-force's own convention.
+const ALPHA_MIN = 0.001;
+const MAX_RADIUS = 3.2; // stays comfortably inside the camera frustum
+// at the default camera distance (6.5) and FOV (55°) — see the tuning
+// comment above.
+const COLLIDE_DISTANCE = NODE_RADIUS * 2.4;
+
+type SimNode = {
+  id: string;
+  cluster_id: string | null;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+};
 
 /** `key` must change (e.g. incrementing counter) to re-trigger the
  * animation even when `nodeIds` is identical to the previous pulse —
@@ -50,11 +108,17 @@ export type GraphCanvasProps = {
    * graph/perf-test/page.tsx): called every second with the actual
    * measured frames-per-second, not an assumed/estimated number. */
   onFpsSample?: (fps: number) => void;
-  /** Test hook: called every second with each node's current on-canvas
-   * pixel position, so a real click-interaction test can target a
-   * specific node without guessing where physics settled it. */
+  /** Test hook: called every second with each node's current on-screen
+   * pixel position (projected from its real 3D world position through
+   * the camera), so a real click-interaction test can target a
+   * specific node without guessing where physics settled it — same
+   * pixel-space contract the old 2D version had. */
   onPositionsSample?: (positions: Record<string, { x: number; y: number }>) => void;
 };
+
+function hexToThreeColor(THREE: typeof THREE_NS, hex: string): THREE_NS.Color {
+  return new THREE.Color(hex);
+}
 
 export default function GraphCanvas({
   nodes,
@@ -66,17 +130,28 @@ export default function GraphCanvas({
   onFpsSample,
   onPositionsSample,
 }: GraphCanvasProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const simNodesRef = useRef<SimNode[]>([]);
-  const simulationRef = useRef<Simulation<SimNode, SimLink> | null>(null);
+  const nodeIdsRef = useRef<string[]>([]);
   const hoveredIdRef = useRef<string | null>(null);
   const selectedIdRef = useRef<string | null>(selectedNodeId);
+  const satellitesRef = useRef<ChunkSatellite[]>(satellites);
+  const edgesRef = useRef<GraphEdge[]>(edges);
   const onNodeClickRef = useRef(onNodeClick);
   const onFpsSampleRef = useRef(onFpsSample);
   const onPositionsSampleRef = useRef(onPositionsSample);
   const pulseRef = useRef<GraphPulse | null | undefined>(pulse);
   const pulseStartRef = useRef<number>(0);
   const lastPulseKeyRef = useRef<number | null>(null);
+  const pointerNdcRef = useRef({ x: -10, y: -10 }); // off-canvas until first move
+  // d3-force's actual settling mechanism (an "alpha" that decays each
+  // tick, damping every force toward zero) — the old code inherited it
+  // for free from the library; this hand-rolled version needs its own,
+  // or the sim jitters forever instead of converging (confirmed live:
+  // without it, a real Playwright run clicking a node's last-sampled
+  // position sometimes hit a different node — the layout had visibly
+  // drifted in the ~1s between sampling and clicking).
+  const alphaRef = useRef(1);
 
   useEffect(() => {
     selectedIdRef.current = selectedNodeId;
@@ -91,6 +166,12 @@ export default function GraphCanvas({
     onPositionsSampleRef.current = onPositionsSample;
   }, [onPositionsSample]);
   useEffect(() => {
+    satellitesRef.current = satellites;
+  }, [satellites]);
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+  useEffect(() => {
     pulseRef.current = pulse;
     if (pulse && pulse.key !== lastPulseKeyRef.current) {
       pulseStartRef.current = performance.now();
@@ -98,215 +179,453 @@ export default function GraphCanvas({
     }
   }, [pulse]);
 
-  // Rebuild the simulation whenever the node/edge set itself changes —
-  // not on every selection/satellite change, which would otherwise
-  // restart physics and jitter the whole graph just from a click.
+  // Rebuild the sim node set whenever the node set itself changes — not
+  // on every selection/satellite/edge change, which would otherwise
+  // restart physics and jitter the whole graph from a click.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-
-    const simNodes: SimNode[] = nodes.map((n) => ({
-      ...n,
-      x: n.x !== null ? n.x * POSITION_SCALE + width / 2 : width / 2 + (Math.random() - 0.5) * 40,
-      y: n.y !== null ? n.y * POSITION_SCALE + height / 2 : height / 2 + (Math.random() - 0.5) * 40,
+    simNodesRef.current = nodes.map((n) => ({
+      id: n.id,
+      cluster_id: n.cluster_id,
+      x: n.x != null ? n.x * POSITION_SCALE : (Math.random() - 0.5) * 2,
+      y: n.y != null ? n.y * POSITION_SCALE : (Math.random() - 0.5) * 2,
+      z: n.z != null ? n.z * POSITION_SCALE : (Math.random() - 0.5) * 2,
+      vx: 0,
+      vy: 0,
+      vz: 0,
     }));
-    const idToNode = new Map(simNodes.map((n) => [n.id, n]));
-    const simLinks: SimLink[] = edges
-      .filter((e) => idToNode.has(e.document_id) && idToNode.has(e.neighbor_document_id))
-      .map((e) => ({ source: e.document_id, target: e.neighbor_document_id }));
+    nodeIdsRef.current = simNodesRef.current.map((n) => n.id);
+    alphaRef.current = 1; // fresh layout — full energy, then cools down
+  }, [nodes]);
 
-    simNodesRef.current = simNodes;
-
-    const simulation = forceSimulation(simNodes)
-      .force("charge", forceManyBody().strength(-80))
-      .force("link", forceLink<SimNode, SimLink>(simLinks).id((d) => d.id).distance(50))
-      .force("center", forceCenter(width / 2, height / 2))
-      .force("collide", forceCollide(NODE_RADIUS * 2));
-
-    simulationRef.current = simulation;
-
-    return () => {
-      simulation.stop();
-    };
-  }, [nodes, edges]);
-
-  // Draw + FPS loop — independent of simulation restarts, runs for the
-  // lifetime of the component.
+  // Scene setup — runs once per mount, independent of data changes
+  // (data is read live off the refs above inside the animation loop).
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-    let rafId: number;
-    let frameCount = 0;
-    let lastFpsTime = performance.now();
+    let raf = 0;
+    let disposed = false;
+    let innerCleanup: (() => void) | undefined;
 
-    const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = canvas.clientWidth * dpr;
-      canvas.height = canvas.clientHeight * dpr;
-      ctx.scale(dpr, dpr);
-    };
-    resize();
-    window.addEventListener("resize", resize);
+    (async () => {
+      const THREE = await import("three");
+      const { OrbitControls } = await import(
+        "three/examples/jsm/controls/OrbitControls.js"
+      );
+      if (disposed || !container) return;
 
-    const draw = () => {
-      const now0 = performance.now();
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = "#0a0a0f";
-      ctx.fillRect(0, 0, width, height);
+      const width = container.clientWidth;
+      const height = container.clientHeight;
 
-      const simNodes = simNodesRef.current;
-      const idToNode = new Map(simNodes.map((n) => [n.id, n]));
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 200);
+      camera.position.set(0, 0, 6.5);
 
-      // Edges — faint, brighter when touching the hovered/selected node.
-      for (const e of edges) {
-        const a = idToNode.get(e.document_id);
-        const b = idToNode.get(e.neighbor_document_id);
-        if (!a || !b || a.x == null || a.y == null || b.x == null || b.y == null) continue;
-        const touchesFocus =
-          e.document_id === selectedIdRef.current ||
-          e.neighbor_document_id === selectedIdRef.current ||
-          e.document_id === hoveredIdRef.current ||
-          e.neighbor_document_id === hoveredIdRef.current;
-        ctx.strokeStyle = touchesFocus ? "rgba(139,92,246,0.5)" : "rgba(255,255,255,0.06)";
-        ctx.lineWidth = touchesFocus ? 1.5 : 1;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
-      }
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(width, height);
+      renderer.setClearColor(0x0a0a0f, 1);
+      container.appendChild(renderer.domElement);
 
-      // Retrieval pulse — the current pulse's node set, brightening
-      // then fading over PULSE_DURATION_MS. Computed once per frame so
-      // every pulsing node fades in lockstep.
-      const activePulse = pulseRef.current;
-      const pulseElapsed = activePulse ? now0 - pulseStartRef.current : Infinity;
-      const pulseActive = !!activePulse && pulseElapsed < PULSE_DURATION_MS;
-      const pulseIntensity = pulseActive ? 1 - pulseElapsed / PULSE_DURATION_MS : 0;
-      const pulsingIds = pulseActive ? new Set(activePulse!.nodeIds) : null;
+      // Real data the user is trying to read, not decoration — orbit
+      // only moves in response to the user, never auto-rotates.
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.minDistance = 1.5;
+      controls.maxDistance = 40;
 
-      // Nodes.
-      for (const n of simNodes) {
-        if (n.x == null || n.y == null) continue;
-        const isFocus = n.id === selectedIdRef.current || n.id === hoveredIdRef.current;
-        const isPulsing = pulsingIds?.has(n.id) ?? false;
-        const color = clusterColor(n.cluster_id);
-        const radius = isPulsing
-          ? NODE_RADIUS * (1.4 + 0.6 * pulseIntensity)
-          : isFocus
-            ? NODE_RADIUS * 1.4
-            : NODE_RADIUS;
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = isPulsing
-          ? `rgba(255,255,255,${0.5 + 0.5 * pulseIntensity})`
-          : color;
-        if (isPulsing) {
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 8 + 20 * pulseIntensity;
-        } else if (isFocus) {
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 12;
-        } else {
-          ctx.shadowBlur = 0;
-        }
-        ctx.fill();
-        ctx.shadowBlur = 0;
-      }
+      const MAX_NODES = 4000; // generous static capacity for InstancedMesh
+      const nodeGeometry = new THREE.SphereGeometry(NODE_RADIUS, 12, 12);
+      const nodeMaterial = new THREE.MeshBasicMaterial({ toneMapped: false });
+      const nodeMesh = new THREE.InstancedMesh(nodeGeometry, nodeMaterial, MAX_NODES);
+      nodeMesh.instanceColor = new THREE.InstancedBufferAttribute(
+        new Float32Array(MAX_NODES * 3),
+        3
+      );
+      scene.add(nodeMesh);
 
-      // Chunk satellites around the selected node.
-      const parent = selectedIdRef.current ? idToNode.get(selectedIdRef.current) : null;
-      if (parent && parent.x != null && parent.y != null && satellites.length > 0) {
-        satellites.forEach((chunk, i) => {
-          const angle = (i / satellites.length) * Math.PI * 2;
-          const sx = parent.x! + Math.cos(angle) * SATELLITE_ORBIT;
-          const sy = parent.y! + Math.sin(angle) * SATELLITE_ORBIT;
-          ctx.beginPath();
-          ctx.arc(sx, sy, SATELLITE_RADIUS, 0, Math.PI * 2);
-          ctx.fillStyle = "rgba(255,255,255,0.7)";
-          ctx.fill();
-          ctx.strokeStyle = "rgba(255,255,255,0.15)";
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(parent.x!, parent.y!);
-          ctx.lineTo(sx, sy);
-          ctx.stroke();
-        });
-      }
+      const satelliteGeometry = new THREE.SphereGeometry(SATELLITE_RADIUS, 8, 8);
+      const satelliteMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.85,
+        toneMapped: false,
+      });
+      const MAX_SATELLITES = 64;
+      const satelliteMesh = new THREE.InstancedMesh(
+        satelliteGeometry,
+        satelliteMaterial,
+        MAX_SATELLITES
+      );
+      satelliteMesh.count = 0;
+      scene.add(satelliteMesh);
 
-      frameCount++;
-      if (now0 - lastFpsTime >= 1000) {
-        onFpsSampleRef.current?.(frameCount / ((now0 - lastFpsTime) / 1000));
-        frameCount = 0;
-        lastFpsTime = now0;
-        if (onPositionsSampleRef.current) {
-          const positions: Record<string, { x: number; y: number }> = {};
-          for (const n of simNodes) {
-            if (n.x != null && n.y != null) positions[n.id] = { x: n.x, y: n.y };
+      const edgeGeometry = new THREE.BufferGeometry();
+      const edgeMaterial = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.9,
+      });
+      const edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+      scene.add(edgeLines);
+
+      const satelliteLineGeometry = new THREE.BufferGeometry();
+      const satelliteLineMaterial = new THREE.LineBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.15,
+      });
+      const satelliteLines = new THREE.LineSegments(satelliteLineGeometry, satelliteLineMaterial);
+      scene.add(satelliteLines);
+
+      const raycaster = new THREE.Raycaster();
+      const dummy = new THREE.Object3D();
+      const tmpColor = new THREE.Color();
+      const worldVec = new THREE.Vector3();
+
+      function tick3D() {
+        const simNodes = simNodesRef.current;
+        const n = simNodes.length;
+        if (n === 0) return;
+
+        const alpha = alphaRef.current;
+        if (alpha <= ALPHA_MIN) return; // settled — nothing left to do
+
+        // Pairwise repulsion — O(n^2), fine at the few-hundred-node
+        // scale this graph targets (same scale Stage 2.3's own 300-doc
+        // perf bar already covers).
+        for (let i = 0; i < n; i++) {
+          const a = simNodes[i];
+          for (let j = i + 1; j < n; j++) {
+            const b = simNodes[j];
+            let dx = a.x - b.x;
+            let dy = a.y - b.y;
+            let dz = a.z - b.z;
+            let distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq < 0.0001) {
+              dx = Math.random() * 0.01;
+              dy = Math.random() * 0.01;
+              dz = Math.random() * 0.01;
+              distSq = 0.0001;
+            }
+            const dist = Math.sqrt(distSq);
+            if (dist > REPULSION_CUTOFF) continue;
+            const force = (REPULSION_STRENGTH / distSq) * alpha;
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
+            const fz = (dz / dist) * force;
+            a.vx += fx;
+            a.vy += fy;
+            a.vz += fz;
+            b.vx -= fx;
+            b.vy -= fy;
+            b.vz -= fz;
+            // Collision — a hard minimum-separation push, same role
+            // the old d3 forceCollide(NODE_RADIUS * 2) played.
+            if (dist < COLLIDE_DISTANCE) {
+              const push = (COLLIDE_DISTANCE - dist) * 0.5;
+              const px = (dx / dist) * push;
+              const py = (dy / dist) * push;
+              const pz = (dz / dist) * push;
+              a.x += px;
+              a.y += py;
+              a.z += pz;
+              b.x -= px;
+              b.y -= py;
+              b.z -= pz;
+            }
           }
-          onPositionsSampleRef.current(positions);
         }
+
+        // Link spring — pulls connected nodes toward LINK_DISTANCE.
+        const idToNode = new Map(simNodes.map((sn) => [sn.id, sn]));
+        for (const e of edgesRef.current) {
+          const a = idToNode.get(e.document_id);
+          const b = idToNode.get(e.neighbor_document_id);
+          if (!a || !b) continue;
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dz = b.z - a.z;
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.0001;
+          const diff = (dist - LINK_DISTANCE) * LINK_STRENGTH * alpha;
+          const fx = (dx / dist) * diff;
+          const fy = (dy / dist) * diff;
+          const fz = (dz / dist) * diff;
+          a.vx += fx;
+          a.vy += fy;
+          a.vz += fz;
+          b.vx -= fx;
+          b.vy -= fy;
+          b.vz -= fz;
+        }
+
+        // Centering + integrate + damp, then two safety clamps that
+        // hold regardless of how the forces above balance: a max speed
+        // (stops one bad frame from flinging a node into orbit) and a
+        // max radius from the origin (guarantees every node stays
+        // inside the camera frustum — see this file's tuning comment
+        // above for why the forces alone can't be trusted to converge).
+        for (const sn of simNodes) {
+          sn.vx += -sn.x * CENTERING_STRENGTH * alpha;
+          sn.vy += -sn.y * CENTERING_STRENGTH * alpha;
+          sn.vz += -sn.z * CENTERING_STRENGTH * alpha;
+          sn.vx *= DAMPING;
+          sn.vy *= DAMPING;
+          sn.vz *= DAMPING;
+          const speed = Math.hypot(sn.vx, sn.vy, sn.vz);
+          if (speed > MAX_SPEED) {
+            const s = MAX_SPEED / speed;
+            sn.vx *= s;
+            sn.vy *= s;
+            sn.vz *= s;
+          }
+          sn.x += sn.vx;
+          sn.y += sn.vy;
+          sn.z += sn.vz;
+          const radius = Math.hypot(sn.x, sn.y, sn.z);
+          if (radius > MAX_RADIUS) {
+            const s = MAX_RADIUS / radius;
+            sn.x *= s;
+            sn.y *= s;
+            sn.z *= s;
+          }
+        }
+
+        alphaRef.current = Math.max(ALPHA_MIN, alpha * (1 - ALPHA_DECAY));
       }
 
-      rafId = requestAnimationFrame(draw);
-    };
-    rafId = requestAnimationFrame(draw);
+      function updateNodeInstances() {
+        const simNodes = simNodesRef.current;
+        const now0 = performance.now();
+        const activePulse = pulseRef.current;
+        const pulseElapsed = activePulse ? now0 - pulseStartRef.current : Infinity;
+        const pulseActive = !!activePulse && pulseElapsed < PULSE_DURATION_MS;
+        const pulseIntensity = pulseActive ? 1 - pulseElapsed / PULSE_DURATION_MS : 0;
+        const pulsingIds = pulseActive ? new Set(activePulse!.nodeIds) : null;
+
+        nodeMesh.count = simNodes.length;
+        for (let i = 0; i < simNodes.length; i++) {
+          const sn = simNodes[i];
+          const isFocus = sn.id === selectedIdRef.current || sn.id === hoveredIdRef.current;
+          const isPulsing = pulsingIds?.has(sn.id) ?? false;
+          const scale = isPulsing
+            ? 1.4 + 0.9 * pulseIntensity
+            : isFocus
+              ? 1.6
+              : 1;
+          dummy.position.set(sn.x, sn.y, sn.z);
+          dummy.scale.setScalar(scale);
+          dummy.updateMatrix();
+          nodeMesh.setMatrixAt(i, dummy.matrix);
+
+          const baseColor = clusterColor(sn.cluster_id);
+          tmpColor.set(baseColor);
+          if (isPulsing) {
+            tmpColor.lerp(new THREE.Color(0xffffff), 0.5 + 0.5 * pulseIntensity);
+          } else if (isFocus) {
+            tmpColor.lerp(new THREE.Color(0xffffff), 0.35);
+          }
+          nodeMesh.setColorAt(i, tmpColor);
+        }
+        nodeMesh.instanceMatrix.needsUpdate = true;
+        if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
+      }
+
+      // Rebuilding the edge geometry allocates two fresh arrays and
+      // walks every edge — cheap once, wasteful every single frame once
+      // the layout has settled and focus hasn't changed (confirmed live:
+      // this was the single biggest steady-state cost in headless
+      // testing, where WebGL is software-rendered and every allocation
+      // shows up directly in the FPS readout). Skipped once alpha has
+      // bottomed out and neither hover nor selection moved since the
+      // last frame — resumed instantly the moment either does.
+      let lastEdgeFocusKey = "";
+      function updateEdges() {
+        const focusKey = `${selectedIdRef.current}|${hoveredIdRef.current}`;
+        const settled = alphaRef.current <= ALPHA_MIN;
+        if (settled && focusKey === lastEdgeFocusKey) return;
+        lastEdgeFocusKey = focusKey;
+
+        const simNodes = simNodesRef.current;
+        const idToNode = new Map(simNodes.map((sn) => [sn.id, sn]));
+        const positions: number[] = [];
+        const colors: number[] = [];
+        for (const e of edgesRef.current) {
+          const a = idToNode.get(e.document_id);
+          const b = idToNode.get(e.neighbor_document_id);
+          if (!a || !b) continue;
+          const touchesFocus =
+            e.document_id === selectedIdRef.current ||
+            e.neighbor_document_id === selectedIdRef.current ||
+            e.document_id === hoveredIdRef.current ||
+            e.neighbor_document_id === hoveredIdRef.current;
+          positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+          const c = touchesFocus
+            ? hexToThreeColor(THREE, "#8b5cf6")
+            : hexToThreeColor(THREE, "#3f3f4a");
+          colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+        }
+        edgeGeometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(positions, 3)
+        );
+        edgeGeometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+        edgeGeometry.computeBoundingSphere();
+      }
+
+      function updateSatellites() {
+        const simNodes = simNodesRef.current;
+        const idToNode = new Map(simNodes.map((sn) => [sn.id, sn]));
+        const parent = selectedIdRef.current ? idToNode.get(selectedIdRef.current) : null;
+        const sats = satellitesRef.current;
+
+        if (!parent || sats.length === 0) {
+          satelliteMesh.count = 0;
+          satelliteLineGeometry.setAttribute(
+            "position",
+            new THREE.Float32BufferAttribute([], 3)
+          );
+          return;
+        }
+
+        // Golden-angle spiral distributes satellites evenly over a
+        // sphere around the parent, instead of the old flat 2D circle.
+        const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+        const count = Math.min(sats.length, MAX_SATELLITES);
+        satelliteMesh.count = count;
+        const linePositions: number[] = [];
+        for (let i = 0; i < count; i++) {
+          const t = count > 1 ? i / (count - 1) : 0;
+          const inclination = Math.acos(1 - 2 * t);
+          const azimuth = GOLDEN_ANGLE * i;
+          const sx = parent.x + SATELLITE_ORBIT * Math.sin(inclination) * Math.cos(azimuth);
+          const sy = parent.y + SATELLITE_ORBIT * Math.sin(inclination) * Math.sin(azimuth);
+          const sz = parent.z + SATELLITE_ORBIT * Math.cos(inclination);
+          dummy.position.set(sx, sy, sz);
+          dummy.scale.setScalar(1);
+          dummy.updateMatrix();
+          satelliteMesh.setMatrixAt(i, dummy.matrix);
+          linePositions.push(parent.x, parent.y, parent.z, sx, sy, sz);
+        }
+        satelliteMesh.instanceMatrix.needsUpdate = true;
+        satelliteLineGeometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(linePositions, 3)
+        );
+      }
+
+      let frameCount = 0;
+      let lastFpsTime = performance.now();
+
+      // Shared by the per-frame hover raycast and the click handler.
+      // Click deliberately does NOT reuse hoveredIdRef — that's only
+      // ever as fresh as the last animation frame, and a real
+      // mousemove-then-click pair (e.g. Playwright's Mouse.click, which
+      // dispatches a real move before the click) can land inside the
+      // same JS turn, before rAF has run again. Raycasting fresh here
+      // removes that race instead of hoping the frame timing lines up.
+      function pickNodeIdAt(ndcX: number, ndcY: number): string | null {
+        raycaster.setFromCamera({ x: ndcX, y: ndcY } as THREE_NS.Vector2, camera);
+        const hits = raycaster.intersectObject(nodeMesh);
+        return hits.length > 0 && hits[0].instanceId != null
+          ? nodeIdsRef.current[hits[0].instanceId]
+          : null;
+      }
+
+      function draw() {
+        tick3D();
+        updateNodeInstances();
+        updateEdges();
+        updateSatellites();
+
+        // Hover picking against the real current instance positions.
+        const hitId = pickNodeIdAt(pointerNdcRef.current.x, pointerNdcRef.current.y);
+        hoveredIdRef.current = hitId;
+        renderer.domElement.style.cursor = hitId ? "pointer" : "default";
+
+        controls.update();
+        renderer.render(scene, camera);
+
+        const now0 = performance.now();
+        frameCount++;
+        if (now0 - lastFpsTime >= 1000) {
+          onFpsSampleRef.current?.(frameCount / ((now0 - lastFpsTime) / 1000));
+          frameCount = 0;
+          lastFpsTime = now0;
+          if (onPositionsSampleRef.current) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            const positions: Record<string, { x: number; y: number }> = {};
+            for (const sn of simNodesRef.current) {
+              worldVec.set(sn.x, sn.y, sn.z).project(camera);
+              positions[sn.id] = {
+                x: ((worldVec.x + 1) / 2) * rect.width,
+                y: ((1 - worldVec.y) / 2) * rect.height,
+              };
+            }
+            onPositionsSampleRef.current(positions);
+          }
+        }
+
+        raf = requestAnimationFrame(draw);
+      }
+      raf = requestAnimationFrame(draw);
+
+      function pointerToNdc(e: PointerEvent) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointerNdcRef.current = {
+          x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
+        };
+      }
+      function handlePointerMove(e: PointerEvent) {
+        pointerToNdc(e);
+      }
+      function handleClick(e: PointerEvent) {
+        pointerToNdc(e);
+        onNodeClickRef.current(pickNodeIdAt(pointerNdcRef.current.x, pointerNdcRef.current.y));
+      }
+      renderer.domElement.addEventListener("pointermove", handlePointerMove);
+      renderer.domElement.addEventListener("click", handleClick);
+
+      function handleResize() {
+        if (!container) return;
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+      }
+      window.addEventListener("resize", handleResize);
+
+      innerCleanup = () => {
+        window.removeEventListener("resize", handleResize);
+        renderer.domElement.removeEventListener("pointermove", handlePointerMove);
+        renderer.domElement.removeEventListener("click", handleClick);
+        cancelAnimationFrame(raf);
+        controls.dispose();
+        nodeGeometry.dispose();
+        nodeMaterial.dispose();
+        satelliteGeometry.dispose();
+        satelliteMaterial.dispose();
+        edgeGeometry.dispose();
+        edgeMaterial.dispose();
+        satelliteLineGeometry.dispose();
+        satelliteLineMaterial.dispose();
+        renderer.dispose();
+        if (container?.contains(renderer.domElement)) {
+          container.removeChild(renderer.domElement);
+        }
+      };
+      if (disposed) innerCleanup();
+    })();
 
     return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener("resize", resize);
+      disposed = true;
+      cancelAnimationFrame(raf);
+      innerCleanup?.();
     };
-  }, [edges, satellites]);
+  }, []);
 
-  function nodeAtPoint(px: number, py: number): SimNode | null {
-    const simNodes = simNodesRef.current;
-    let nearest: SimNode | null = null;
-    let nearestDist = NODE_RADIUS * 2; // click tolerance
-    for (const n of simNodes) {
-      if (n.x == null || n.y == null) continue;
-      const d = Math.hypot(n.x - px, n.y - py);
-      if (d < nearestDist) {
-        nearest = n;
-        nearestDist = d;
-      }
-    }
-    return nearest;
-  }
-
-  function handleClick(e: React.MouseEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const hit = nodeAtPoint(px, py);
-    onNodeClickRef.current(hit ? hit.id : null);
-  }
-
-  function handleMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const hit = nodeAtPoint(px, py);
-    hoveredIdRef.current = hit ? hit.id : null;
-    canvas.style.cursor = hit ? "pointer" : "default";
-  }
-
-  return (
-    <canvas
-      ref={canvasRef}
-      onClick={handleClick}
-      onMouseMove={handleMouseMove}
-      style={{ width: "100%", height: "100%", display: "block" }}
-    />
-  );
+  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 }
