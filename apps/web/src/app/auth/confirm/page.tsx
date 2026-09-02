@@ -36,7 +36,7 @@ function ConfirmInner() {
         setError(exchangeError.message);
         return;
       }
-      router.replace("/account");
+      router.replace("/graph");
     });
   }, [router, searchParams]);
 

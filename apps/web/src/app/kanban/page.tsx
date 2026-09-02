@@ -1,10 +1,10 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
-import { createClient } from "@/lib/supabase/client";
+import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./kanban.module.css";
 
 type Card = {
@@ -26,25 +26,13 @@ type Board = {
 const DEFAULT_BOARD_TITLE = "My Board";
 
 export default function KanbanPage() {
-  const router = useRouter();
-  const [checking, setChecking] = useState(true);
+  const { checking, email } = useAuthedUser();
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState(true);
   const [addingColumn, setAddingColumn] = useState<string | null>(null);
   const [newCardTitle, setNewCardTitle] = useState("");
   const draggedCardId = useRef<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        router.replace("/signin");
-        return;
-      }
-      setChecking(false);
-    });
-  }, [router]);
 
   const loadBoard = useCallback(async () => {
     const listRes = await authedFetch("/api/boards");
@@ -157,12 +145,10 @@ export default function KanbanPage() {
   if (!board) return null;
 
   return (
+    <AppShell userEmail={email}>
     <div className={styles.page}>
       <div className={styles.pageHeader}>
         <h1>{board.title}</h1>
-        <span className={styles.backLink} onClick={() => router.push("/graph")}>
-          ← Back to Brain
-        </span>
       </div>
 
       <div className={styles.board}>
@@ -270,5 +256,6 @@ export default function KanbanPage() {
         })}
       </div>
     </div>
+    </AppShell>
   );
 }

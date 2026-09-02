@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
 import { parseAnswerSegments, stripCitationMarkers } from "@/lib/graph/citations";
 import { clusterColor } from "@/lib/graph/clusterColor";
@@ -14,7 +15,7 @@ import type {
   GraphEdge,
   GraphNode,
 } from "@/lib/graph/types";
-import { createClient } from "@/lib/supabase/client";
+import { useAuthedUser } from "@/lib/useAuthedUser";
 import GraphCanvas, { type GraphPulse } from "./GraphCanvas";
 import styles from "./graph.module.css";
 
@@ -33,7 +34,7 @@ type Citation = { chunk_id: string; document_id: string };
 
 export default function GraphPage() {
   const router = useRouter();
-  const [checking, setChecking] = useState(true);
+  const { checking, email } = useAuthedUser();
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [edges, setEdges] = useState<GraphEdge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -52,17 +53,6 @@ export default function GraphPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [replaying, setReplaying] = useState(false);
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        router.replace("/signin");
-        return;
-      }
-      setChecking(false);
-    });
-  }, [router]);
 
   // Refs, not state, for the last-seen payloads — comparing here avoids
   // handing GraphCanvas a new array reference (which restarts its
@@ -238,6 +228,7 @@ export default function GraphPage() {
   }
 
   return (
+    <AppShell userEmail={email}>
     <div className={styles.page}>
       <div className={styles.canvasWrap}>
         <GraphCanvas
@@ -359,5 +350,6 @@ export default function GraphPage() {
         )}
       </div>
     </div>
+    </AppShell>
   );
 }

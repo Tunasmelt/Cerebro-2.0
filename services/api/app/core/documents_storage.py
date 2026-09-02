@@ -244,7 +244,7 @@ class SupabaseDocumentsStorage:
                 headers=self._headers(user_jwt),
                 params={
                     "user_id": f"eq.{user_id}",
-                    "select": "id,title,mime,size_bytes,status,created_at",
+                    "select": "id,title,mime,size_bytes,original_size_bytes,status,created_at",
                     "order": "created_at.desc",
                 },
             )
