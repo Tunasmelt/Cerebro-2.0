@@ -44,15 +44,17 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  box-shadow: var(--shadow-sm);
   transition:
     border-color var(--duration-base) var(--ease-soft),
-    background var(--duration-base) var(--ease-soft);
+    background var(--duration-base) var(--ease-soft),
+    box-shadow var(--duration-base) var(--ease-soft);
 }
 
 .column.dragOver {
-  border-color: var(--border-strong);
+  border-color: var(--accent-primary-border);
   background: var(--bg-elevated-hover);
-  box-shadow: inset 0 0 0 1px var(--border-default);
+  box-shadow: var(--glow-violet);
 }
 
 .columnHead {
@@ -65,6 +67,17 @@
 .columnHead .name {
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.columnHead .name::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--column-accent, var(--text-disabled));
+  box-shadow: 0 0 8px var(--column-accent, transparent);
 }
 
 .columnHead .count {
@@ -82,6 +95,7 @@
   flex-direction: column;
   gap: var(--space-2);
   cursor: grab;
+  box-shadow: var(--shadow-sm);
   transition:
     box-shadow var(--duration-fast) var(--ease-soft),
     border-color var(--duration-fast) var(--ease-soft),
@@ -90,8 +104,9 @@
   animation: cardIn var(--duration-base) var(--ease-soft) backwards;
 }
 .card:hover {
-  border-color: var(--border-strong);
-  transform: translateY(-1px);
+  border-color: var(--accent-primary-border);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
 }
 .card.dragging {
   opacity: 0.5;

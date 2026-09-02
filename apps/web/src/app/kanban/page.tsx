@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/components/AppShell";
@@ -24,6 +25,12 @@ type Board = {
 };
 
 const DEFAULT_BOARD_TITLE = "My Board";
+
+// Cycled by column index rather than keyed off column name — board
+// columns are arbitrary user text (Stage 4.1's `columns jsonb`, not a
+// fixed enum), so a name->color map would silently stop covering a
+// renamed or custom column instead of degrading gracefully.
+const COLUMN_ACCENTS = ["var(--accent-primary)", "var(--accent-secondary)", "var(--accent-locked)"];
 
 export default function KanbanPage() {
   const { checking, email } = useAuthedUser();
@@ -152,12 +159,13 @@ export default function KanbanPage() {
       </div>
 
       <div className={styles.board}>
-        {board.columns.map((columnName) => {
+        {board.columns.map((columnName, columnIndex) => {
           const cards = cardsInColumn(columnName);
           return (
             <div
               key={columnName}
               className={`${styles.column} ${dragOverColumn === columnName ? styles.dragOver : ""}`}
+              style={{ "--column-accent": COLUMN_ACCENTS[columnIndex % COLUMN_ACCENTS.length] } as CSSProperties}
               onDragOver={(e) => {
                 e.preventDefault();
                 setDragOverColumn(columnName);

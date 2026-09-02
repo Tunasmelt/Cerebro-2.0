@@ -228,6 +228,7 @@ export default function DocumentsPage() {
           </div>
         )}
 
+        <div className={styles.tableCard}>
         <table className={styles.table}>
           <thead>
             <tr>
@@ -279,6 +280,7 @@ export default function DocumentsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
     </AppShell>

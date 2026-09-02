@@ -88,7 +88,7 @@ export default function AppShell({
         <div className={styles.topbar}>
           <div className={styles.topbarRight}>
             <div className={styles.avatar} onClick={() => setMenuOpen((o) => !o)}>
-              {initials(userEmail)}
+              <span className={styles.avatarInner}>{initials(userEmail)}</span>
               {menuOpen && (
                 <div className={styles.avatarMenu}>
                   <button

@@ -246,7 +246,7 @@ export default function SettingsPage() {
                       className={styles.storageFill}
                       style={{
                         width: `${Math.min(100, (totalIndexedBytes / INDEXED_QUOTA_BYTES) * 100)}%`,
-                        background: "var(--accent-primary)",
+                        background: "linear-gradient(90deg, var(--accent-primary-active), var(--accent-primary-hover))",
                       }}
                     />
                   </div>
@@ -263,7 +263,7 @@ export default function SettingsPage() {
                       className={styles.storageFill}
                       style={{
                         width: `${Math.min(100, (totalOriginalBytes / ORIGINALS_QUOTA_BYTES) * 100)}%`,
-                        background: "var(--accent-secondary)",
+                        background: "linear-gradient(90deg, var(--accent-secondary-active), var(--accent-secondary-hover))",
                       }}
                     />
                   </div>

@@ -35,6 +35,13 @@
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-5);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--duration-base) var(--ease-soft),
+    border-color var(--duration-base) var(--ease-soft);
+}
+.addRow:focus-within {
+  border-color: var(--accent-primary-border);
+  box-shadow: var(--glow-violet);
 }
 .addRow input {
   flex: 1;
@@ -56,12 +63,17 @@
 .list {
   display: flex;
   flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
 }
 .row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border-subtle);
   transition: background var(--duration-fast) var(--ease-soft);
   animation: rowIn var(--duration-base) var(--ease-soft) backwards;
@@ -70,7 +82,7 @@
   border-bottom: none;
 }
 .row:hover {
-  background: var(--bg-elevated);
+  background: var(--bg-elevated-hover);
 }
 @keyframes rowIn {
   from {

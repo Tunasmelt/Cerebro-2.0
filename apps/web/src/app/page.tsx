@@ -75,7 +75,7 @@ export default function LandingPage() {
             <h1>
               Your documents,
               <br />
-              as a graph you
+              as a <em>graph</em> you
               <br />
               can query.
             </h1>
@@ -154,17 +154,17 @@ export default function LandingPage() {
         <div className={styles.container}>
           <div className={styles.features}>
             <Reveal delayMs={0} className={styles.feature}>
-              <div className={styles.featureDot} style={{ background: "var(--accent-primary)" }} />
+              <div className={styles.featureDot} style={{ background: "var(--accent-primary)", color: "var(--accent-primary)" }} />
               <h3>Multimodal search</h3>
               <p>Query across PDFs, images, and scans with the same plain-language search.</p>
             </Reveal>
             <Reveal delayMs={90} className={styles.feature}>
-              <div className={styles.featureDot} style={{ background: "var(--accent-secondary)" }} />
+              <div className={styles.featureDot} style={{ background: "var(--accent-secondary)", color: "var(--accent-secondary)" }} />
               <h3>Real retrieval visualization</h3>
               <p>See the actual nodes and edges behind every answer, rendered live — not simulated for effect.</p>
             </Reveal>
             <Reveal delayMs={180} className={styles.feature}>
-              <div className={styles.featureDot} style={{ background: "var(--accent-locked)" }} />
+              <div className={styles.featureDot} style={{ background: "var(--accent-locked)", color: "var(--accent-locked)" }} />
               <h3>Passphrase-sealed files</h3>
               <p>Seal anything behind a passphrase. It stays sealed, even from retrieval, until you unlock it.</p>
             </Reveal>
