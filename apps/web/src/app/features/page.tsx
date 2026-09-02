@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import Logo from "@/components/Logo";
+import Reveal from "@/components/Reveal";
 import styles from "./features.module.css";
 
 // Stage 4.7 — public marketing page, always viewable regardless of
@@ -8,13 +10,29 @@ import styles from "./features.module.css";
 export default function FeaturesPage() {
   return (
     <div className={styles.page}>
+      <nav className={styles.navbar}>
+        <div className={`${styles.container} ${styles.navbarInner}`}>
+          <Link href="/" className={styles.navbarBrand}>
+            <Logo size={22} />
+          </Link>
+          <div className={styles.navbarLinks}>
+            <Link href="/signin">Sign in</Link>
+            <Link href="/signup" className={styles.btnPrimary}>
+              Try it
+            </Link>
+          </div>
+        </div>
+      </nav>
+
       <div className={`${styles.pageHead} ${styles.container}`}>
-        <div className={styles.eyebrow}>Features</div>
-        <h1>How Cerebro actually works.</h1>
+        <Reveal>
+          <div className={styles.eyebrow}>Features</div>
+          <h1>How Cerebro actually works.</h1>
+        </Reveal>
       </div>
 
       <div className={styles.container}>
-        <div className={styles.row}>
+        <Reveal className={styles.row}>
           <div className={styles.rowVisual}>
             <svg viewBox="0 0 400 160" width="100%" height="160">
               <circle cx="200" cy="80" r="7" fill="#8B5CF6" />
@@ -34,9 +52,9 @@ export default function FeaturesPage() {
               end up in the same retrieved cluster.
             </p>
           </div>
-        </div>
+        </Reveal>
 
-        <div className={styles.row}>
+        <Reveal className={styles.row}>
           <div className={styles.rowText}>
             <div className={styles.eyebrow}>02 · Retrieval</div>
             <h2>Search finds it two ways, then merges</h2>
@@ -68,9 +86,9 @@ export default function FeaturesPage() {
               </div>
             </div>
           </div>
-        </div>
+        </Reveal>
 
-        <div className={styles.row}>
+        <Reveal className={styles.row}>
           <div className={styles.rowVisual} style={{ minHeight: 280 }}>
             <svg viewBox="0 0 400 240" width="100%" height="240">
               <line x1="90" y1="70" x2="140" y2="100" stroke="rgba(244,244,245,0.1)" strokeWidth="1" />
@@ -91,9 +109,9 @@ export default function FeaturesPage() {
               rough map of what you&apos;ve actually been thinking about.
             </p>
           </div>
-        </div>
+        </Reveal>
 
-        <div className={styles.row}>
+        <Reveal className={styles.row}>
           <div className={styles.rowText}>
             <div className={styles.eyebrow}>04 · Sealed files</div>
             <h2>Lock what matters, unlock only when needed</h2>
@@ -110,9 +128,9 @@ export default function FeaturesPage() {
               <path d="M8 10V6a4 4 0 0 1 8 0v4" stroke="var(--accent-locked)" strokeWidth="1.6" fill="none" />
             </svg>
           </div>
-        </div>
+        </Reveal>
 
-        <div className={styles.row}>
+        <Reveal className={styles.row}>
           <div className={styles.rowVisual}>
             <div className={styles.screenshot}>
               <div className={styles.screenshotBody}>
@@ -132,16 +150,16 @@ export default function FeaturesPage() {
               source, not a paraphrase of it.
             </p>
           </div>
-        </div>
+        </Reveal>
       </div>
 
       <section className={styles.ctaBand}>
-        <div className={styles.container}>
+        <Reveal className={styles.container}>
           <h2>Start building your vault.</h2>
           <Link href="/signup" className={styles.btnPrimary}>
             Try it
           </Link>
-        </div>
+        </Reveal>
       </section>
     </div>
   );

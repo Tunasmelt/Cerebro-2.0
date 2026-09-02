@@ -246,8 +246,8 @@ export default function DocumentsPage() {
                 </td>
               </tr>
             )}
-            {documents.map((doc) => (
-              <tr key={doc.id}>
+            {documents.map((doc, i) => (
+              <tr key={doc.id} style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}>
                 <td>
                   <div className={styles.titleCell}>
                     <div className={styles.typeIcon}>{typeLabel(doc.mime)}</div>

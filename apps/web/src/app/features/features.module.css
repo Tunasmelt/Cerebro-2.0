@@ -40,10 +40,43 @@
   background: var(--accent-primary-hover);
   color: var(--text-on-accent);
   text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.navbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(10, 10, 15, 0.82);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.navbarInner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+}
+.navbarBrand {
+  display: inline-flex;
+  text-decoration: none;
+}
+.navbarLinks {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  font-size: var(--text-sm);
+}
+.navbarLinks a:not(.btnPrimary) {
+  color: var(--text-secondary);
+}
+.navbarLinks a:not(.btnPrimary):hover {
+  color: var(--text-primary);
+  text-decoration: none;
 }
 
 .pageHead {
-  padding: 100px 0 40px;
+  padding: 60px 0 40px;
 }
 .pageHead h1 {
   font-size: 44px;

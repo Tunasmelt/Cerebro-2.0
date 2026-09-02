@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import Logo from "@/components/Logo";
 import { createClient } from "@/lib/supabase/client";
 import styles from "../auth.module.css";
 
@@ -35,6 +36,9 @@ export default function SignInPage() {
 
   return (
     <div className={styles.page}>
+      <div className={styles.logoRow}>
+        <Logo size={26} />
+      </div>
       <form className={styles.card} onSubmit={handleSubmit}>
         <h1 className={styles.title}>Sign in</h1>
 

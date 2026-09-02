@@ -912,6 +912,47 @@ into a PostgREST `in.()` filter — not a new risk, since both ids
 originate exclusively server-side from the retrieval pipeline, never
 from client input, but worth remembering if that ever changes).
 
+### UI design pass — logo, navbar, animation, three.js hero ✅
+Not a numbered stage (no new backend surface, no new gate) — a
+cross-cutting visual polish pass across pages already built in earlier
+stages, done in response to explicit feedback that the product had no
+navbar on the landing/features pages, no real logo (every page just
+spelled out "Cerebro" as plain text), and effectively no motion
+anywhere outside the brain graph's retrieval pulse and one existing
+upload spinner.
+
+**Done:** A new `LogoMark`/`Logo` component (`components/Logo/`) — a
+three-node glyph in the same node/edge visual language the brain graph
+itself uses, not an arbitrary icon — replaces every plain-text
+"Cerebro" (AppShell sidebar, landing/features navbars and footer, auth
+pages). Landing and features pages gained real top navbars (previously
+absent — every authenticated page already had nav via AppShell, these
+two didn't). A `Reveal` component + `useScrollReveal` hook
+(IntersectionObserver-based, fires once) adds scroll-triggered
+fade/slide-in to every landing and features section; AppShell's content
+pane, kanban cards, document/task rows, and settings panes each gained
+entrance/hover micro-animations (staggered by index for lists) using
+the project's existing `--duration-*`/`--ease-soft` motion tokens, not
+new ad hoc timing values. The landing hero's static SVG dots became a
+three.js ambient node-link graph (`app/HeroGraph.tsx`, client-only via
+`next/dynamic` with `ssr:false`) — explicitly decorative, not real
+retrieval data (a marketing page with no auth has no vault to draw
+from), same posture the real `/graph` page's own docs insist on for
+actual data; respects `prefers-reduced-motion`.
+**Tests:** no new backend surface, so no new pytest coverage. Frontend
+`lint`/`build`/`test` all clean. Verified live against a local dev
+server with Playwright — navbar, logo, hero graph, and scroll-reveal
+sections all confirmed rendering correctly (including a first attempt
+that showed sections as blank, correctly diagnosed as the expected
+`Reveal` behavior — full-page screenshots don't scroll through a page
+the way a real visitor does, so an unscrolled capture just shows those
+sections still at their pre-reveal opacity:0 state, not a bug).
+Security review: no findings — `HeroGraph`'s cleanup correctly disposes
+all three.js resources and listeners even on a fast unmount race
+(fixed during review of my own draft, before the dedicated pass), no
+new `dangerouslySetInnerHTML`/`innerHTML` paths anywhere in the diff,
+`three`/`@types/three` confirmed as the real packages, not typosquats.
+
 ### Stage 4.5 — Kanban agent tool-calling *(stretch, not gated)*
 
 ### Stage 4.6 — Action-item extraction into kanban
