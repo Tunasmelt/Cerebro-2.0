@@ -41,6 +41,7 @@ export type DocumentRow = {
   title: string;
   mime: string;
   size_bytes: number;
+  original_size_bytes: number | null;
   status: DocumentStatus;
   created_at: string;
 };

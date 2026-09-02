@@ -1,10 +1,10 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
-import { createClient } from "@/lib/supabase/client";
+import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./tasks.module.css";
 
 type Todo = {
@@ -16,22 +16,10 @@ type Todo = {
 };
 
 export default function TasksPage() {
-  const router = useRouter();
-  const [checking, setChecking] = useState(true);
+  const { checking, email } = useAuthedUser();
   const [todos, setTodos] = useState<Todo[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [completedOpen, setCompletedOpen] = useState(false);
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        router.replace("/signin");
-        return;
-      }
-      setChecking(false);
-    });
-  }, [router]);
 
   useEffect(() => {
     if (checking) return;
@@ -84,12 +72,10 @@ export default function TasksPage() {
   const completed = todos.filter((t) => t.completed);
 
   return (
+    <AppShell userEmail={email}>
     <div className={styles.page}>
       <div className={styles.pageHeader}>
         <h1>Tasks</h1>
-        <span className={styles.backLink} onClick={() => router.push("/graph")}>
-          ← Back to Brain
-        </span>
       </div>
 
       <div className={styles.addRow}>
@@ -163,5 +149,6 @@ export default function TasksPage() {
         </div>
       )}
     </div>
+    </AppShell>
   );
 }

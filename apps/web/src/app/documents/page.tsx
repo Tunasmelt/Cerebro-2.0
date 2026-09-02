@@ -1,11 +1,12 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
 import type { DocumentRow } from "@/lib/graph/types";
 import { createClient } from "@/lib/supabase/client";
+import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./documents.module.css";
 
 // Mirrors services/api/app/core/documents_storage.py's ALLOWED_MIME_TYPES —
@@ -45,24 +46,12 @@ function typeLabel(mime: string): string {
 }
 
 export default function DocumentsPage() {
-  const router = useRouter();
-  const [checking, setChecking] = useState(true);
+  const { checking, email } = useAuthedUser();
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        router.replace("/signin");
-        return;
-      }
-      setChecking(false);
-    });
-  }, [router]);
 
   const fetchDocuments = useCallback(async () => {
     const res = await authedFetch("/api/documents");
@@ -176,13 +165,11 @@ export default function DocumentsPage() {
   if (checking) return null;
 
   return (
+    <AppShell userEmail={email}>
     <div className={styles.page}>
       <div className={styles.container}>
         <div className={styles.header}>
           <h1>Documents</h1>
-          <span className={styles.backLink} onClick={() => router.push("/graph")}>
-            ← Back to Brain
-          </span>
         </div>
 
         <div
@@ -294,5 +281,6 @@ export default function DocumentsPage() {
         </table>
       </div>
     </div>
+    </AppShell>
   );
 }

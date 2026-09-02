@@ -30,7 +30,7 @@ export default function SignInPage() {
       setError(signInError.message);
       return;
     }
-    router.push("/account");
+    router.push("/graph");
   }
 
   return (

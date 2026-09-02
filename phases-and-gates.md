@@ -866,6 +866,111 @@ nothing" principle as Stage 1.5's own exit criteria, not a new one.
 Confirming a candidate creates exactly one card with the correct
 `document_id` chip; declining creates nothing at all.
 
+### Stage 4.7 — Remaining mockup UI (app shell, landing, features, settings) ✅
+Every real page built so far (Documents, the brain graph + chat,
+Kanban, Tasks, auth) already matches its own mockup. What's left in
+`Mockups/ui_kits/` is four more: `app-shell`, `landing`, `features`,
+`settings` — plus `playground`, explicitly excluded here (Stage 4.4 is
+still undecided; building any of that UI now would preempt the
+decision the existing note says not to preempt).
+
+Several mockup panes describe real backend surface that doesn't exist
+yet — this stage does not silently invent it. Scoped explicitly:
+- The `settings` mockup's **API Usage** pane (token/cost history) is
+  Stage 4.4's own subject matter under a different name. Omitted
+  entirely from this stage, not trimmed-down — building any version of
+  it now would be exactly the "layered onto it mid-build" mistake the
+  Stage 4.4 note already warns against.
+- Its **Security** pane's "Active unlock sessions" (live countdown,
+  "Lock now") needs a way to list and revoke a user's currently-issued
+  `unlock_claims` — Stage 3.3 never built that (claims are fire-and-
+  forget, checked only at `/unseal` time). Omitted; the sealed-documents
+  list itself is real (documents where `status = 'sealed'`), but
+  "Unseal" links to `/documents` rather than opening a new inline
+  passphrase flow — Documents still doesn't have one either (a real,
+  separate gap flagged in the earlier Phase 3 UI audit, not solved
+  here).
+- Its **Account** pane's delete-account flow can wipe all of a user's
+  application data for real (documents, chunks, sealed_chunks, boards,
+  cards, todos, chat — everything already deletable under the same
+  per-row RLS every route in this API already relies on) but cannot
+  delete the `auth.users` row itself: that requires Supabase's
+  service-role key, which this project has never used anywhere —
+  every route so far authenticates every Supabase call with the
+  caller's own JWT, on purpose (RLS is the actual enforcement
+  boundary, not an app-layer check). Introducing a service-role secret
+  is a real architecture change, not a UI trim, so it's not made here
+  without a separate explicit decision. Delete-account in this stage
+  wipes all data and leaves an empty, sign-in-able account — an honest
+  partial feature, documented as such in the UI copy itself, not
+  silently passed off as full account deletion.
+- Its **Data & Storage** pane's usage bars use each document's already-
+  stored `size_bytes`/`original_size_bytes`, summed client-side from
+  the existing `GET /documents` response — real, no new endpoint. The
+  quota shown is the static free-tier ceiling from `CLAUDE.md`, not a
+  live Supabase project-usage query (not exposed anywhere in this app's
+  own API).
+- The app-shell's sidebar omits the `Playground` nav item for the same
+  reason as above — no route to link it to.
+
+**Exit criteria:** `AppShell` (sidebar + topbar) wraps every
+authenticated page (Brain, Documents, Kanban, Tasks, Settings) with
+real active-route highlighting; a real marketing landing page replaces
+the create-next-app boilerplate at `/`; a real `/features` page exists;
+`/settings` exists with Account (real email/password change via
+`supabase.auth.updateUser()`, real scoped delete-account), Security
+(real sealed-documents list), and Data & Storage (real per-document
+sizes) panes, API Usage omitted per above.
+**Tests:** Every wrapped page still passes its own existing exit-
+criteria tests after being wrapped in `AppShell` (a regression check,
+not new criteria — Stage 4.2's drag-drop and Stage 3.6's sealed-
+download rejection in particular must not have moved or broken).
+Delete-account, tested against a real seeded account: after
+confirming, every document/board/card/todo/chat-session row is gone,
+the account can still sign in, and a second delete-account call on the
+now-empty account doesn't error.
+
+**Done:** `AppShell` (`apps/web/src/components/AppShell/`) wraps Brain,
+Documents, Kanban, Tasks, and Settings — active-route highlighting via
+`usePathname`, no `Playground` nav item, no search box or ingest-status
+pill (both would be UI claiming a feature that isn't real yet, which
+this project treats as a defect). A shared `useAuthedUser` hook
+(`apps/web/src/lib/useAuthedUser.ts`) replaced five separate copies of
+the same session-check-and-redirect effect. Real landing page at `/`
+(redirects a signed-in visitor straight to `/graph`) and `/features`,
+both matching their mockups. `/settings` has Account (real
+`supabase.auth.updateUser()` for email/password, real delete-account),
+Security (real sealed-documents list, "Unseal" links to `/documents`),
+and Data & Storage (real per-document sizes, summed client-side from
+the existing `GET /documents` response, widened to also return
+`original_size_bytes`) — API Usage omitted entirely, exactly as
+planned. `/account` (Stage 0.5's old placeholder) now redirects to
+`/settings`; sign-in and email-confirm now land on `/graph` instead.
+
+**Delete-account backend**
+(`services/api/app/core/account_storage.py` + `app/routes/account.py`,
+`DELETE /api/v1/account`) reuses Stage 3.6's real per-document delete
+for every document (Storage objects + row + cascades), then bulk-
+deletes `boards` (cascades cards), `todos`, `chat_sessions` (cascades
+chat_messages), and `clusters`. A security review before merge caught a
+real gap: `clusters` has its own `user_id` FK to `auth.users` and isn't
+cascaded by anything else (`document_clusters` cascades FROM a
+`clusters` delete, not the reverse) — without an explicit delete, a
+user's cluster rows (label, centroid coordinates derived from their own
+document embeddings) would have silently survived a "delete
+everything." Fixed and covered by a regression test. Does not delete
+the `auth.users` row itself — that needs a service-role key this
+project has never introduced anywhere, a real architecture decision not
+made as a side effect of a settings page; the account survives, empty,
+still able to sign in, and the UI/docstring say so rather than claiming
+full deletion. 8 new tests (3 route-level + 2 storage-level for account
+wipe, matching the same fake-storage and fake-httpx-transport patterns
+as every other stage) — 277/277 backend tests passing, `ruff` clean.
+Verified locally end to end via Playwright against a real signed-in
+session: `AppShell` renders correctly on Brain/Documents/Settings with
+active-route highlighting and a real avatar, landing and features pages
+render correctly, zero runtime errors across every page.
+
 ### Phase 4 Gate *(future, criteria set once 4.4's scope is decided)*
 
 ---
