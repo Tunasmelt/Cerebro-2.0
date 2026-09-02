@@ -289,7 +289,14 @@ async def retrieve(
     with tracer.start_as_current_observation(
         as_type="span", name="embed_query", input={"query": query}
     ) as span:
-        query_embedding = await embed_client.embed_text(query)
+        # Jina v5's retrieval is an asymmetric bi-encoder — the query side
+        # and the indexed-passage side use different task-specific LoRA
+        # adapters. Using the wrong one (or none, the bug this fixed)
+        # measurably degrades results, most visibly for image chunks:
+        # a generic "explain the image" query embedded without this task
+        # ranked a real, correctly-embedded image chunk 16th out of 27
+        # total chunks in production — confirmed live, not assumed.
+        query_embedding = await embed_client.embed_text(query, task="retrieval.query")
         span.update(output={"dimensions": len(query_embedding)})
 
     # Vector search is scoped to documents embedded by the same provider

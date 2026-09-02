@@ -85,10 +85,10 @@ class _FakeSpanContext:
 class _FakeEmbedClient:
     provider = "jina"
 
-    async def embed_text(self, text):
+    async def embed_text(self, text, task: str = "retrieval.passage"):
         return [0.1] * 1024
 
-    async def embed_image(self, image_bytes):
+    async def embed_image(self, image_bytes, task: str = "retrieval.passage"):
         raise NotImplementedError
 
 
