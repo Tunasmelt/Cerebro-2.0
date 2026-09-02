@@ -65,9 +65,17 @@ phases-and-gates.md's Stage 1.8 entry).
 
 ## Build order (see phases-and-gates.md for full detail)
 
-RAG core → brain graph → sealed tier → kanban/todo/playground. This order
-is load-bearing: the graph renders real vectors, so ingestion must exist
-first; sealing gates artifacts ingestion produces, so it comes after.
+RAG core → brain graph → sealed tier → kanban/todo/playground → RAG
+quality (query rewriting/HyDE) → portability (full data export). This
+order is load-bearing: the graph renders real vectors, so ingestion must
+exist first; sealing gates artifacts ingestion produces, so it comes
+after. RAG quality work is deliberately last among the phases that
+touch retrieval, not fourth — it's an improvement to something that has
+to already be proven stable in production, not something layered onto
+a build still in motion. Portability has no real dependency on any of
+this beyond Phase 3 (it needs sealed documents to know how to *not*
+decrypt them during export) but is sequenced after kanban/todo simply
+because that's the current build point when it was planned.
 Retrieval core (hybrid + RRF + rerank, Stage 1.5) was originally meant
 to fork an existing "Docify" pipeline, but no such source was ever
 available anywhere in this repo — confirmed and built fresh from the

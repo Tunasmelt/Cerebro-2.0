@@ -816,7 +816,124 @@ existing note in this doc's history.
 
 ### Stage 4.5 — Kanban agent tool-calling *(stretch, not gated)*
 
+### Stage 4.6 — Action-item extraction into kanban
+The one idea in this phase that's a genuine differentiator rather than a
+nice-to-have: RAG core (Phase 1) and the task system (Stage 4.1-4.2)
+have shared nothing but a `user_id` until now. This stage is them
+actually talking to each other — chat scans a document and proposes
+kanban cards. Depends on Phase 1 (chat/generation) and Stages 4.1-4.2
+(kanban schema + CRUD) both already being built, which they are;
+`cards.document_id` (Stage 4.1's "optional reference chip") is exactly
+the connective tissue this stage needed and already exists.
+
+**Exit criteria:** A new endpoint runs single-document extraction — the
+target document's own chunks (not a hybrid-retrieval query against the
+whole vault) go through generation with an "extract concrete action
+items" instruction, returning candidate cards (`title`, `description`,
+`source_chunk_id`). Candidates are never persisted directly: each one
+requires an explicit per-item confirm from the user, which creates a
+real card via the existing `POST /boards/{id}/cards`, with
+`document_id` set to the source document. No board is ever silently
+populated.
+**Tests:** A fixture document with known actionable sentences proposes
+items traceable to real chunk ids, never fabricated content not present
+in the source. A document with no actionable content proposes zero
+items rather than a forced count — same "no relevant content returns
+nothing" principle as Stage 1.5's own exit criteria, not a new one.
+Confirming a candidate creates exactly one card with the correct
+`document_id` chip; declining creates nothing at all.
+
 ### Phase 4 Gate *(future, criteria set once 4.4's scope is decided)*
+
+---
+
+## Phase 5 — RAG quality: query rewriting & HyDE *(deferred — begins
+once Phase 1's retrieval has run in production long enough to be
+considered stable; deliberately not layered onto the current build,
+per the reasoning that started this phase: real RAG-quality work
+belongs after the thing it's improving is proven, not mid-build)*
+
+### Stage 5.1 — Query rewriting
+**Exit criteria:** `retrieve()` gains an optional pre-embedding rewrite
+step — a fast, cheap generation call reformulates the raw query using
+recent chat history (pronoun resolution, e.g. "what about the other
+one?", and multi-part decomposition) before it's embedded for vector
+search. Falls back to the raw query on any rewrite failure — this is
+strictly an optional quality improvement, never a new way for retrieval
+itself to fail.
+**Tests:** A fixture conversation with an unresolved pronoun in the
+follow-up query rewrites to include the referenced entity before
+embedding. A rewrite-client failure (timeout, bad response) still
+returns real results from the raw, un-rewritten query — retrieval never
+errors because rewriting did.
+
+### Stage 5.2 — HyDE (Hypothetical Document Embeddings)
+**Exit criteria:** `retrieve()` gains an optional path that generates a
+short hypothetical answer to the query and embeds that instead of (or
+blended with) the raw query for vector search — answer-shaped text
+often overlaps document chunks better than question-shaped text. Behind
+a flag so it can be A/B'd against direct retrieval rather than replacing
+it outright.
+**Tests:** Stage 1.5's own "known-relevant chunk in top 3" fixture test
+re-run with HyDE enabled must still pass — this must never regress the
+existing retrieval quality bar. A query with weak direct-embedding
+overlap but strong hypothetical-answer overlap demonstrates HyDE
+recovering a result direct retrieval alone misses.
+
+### Phase 5 Gate *(future)*
+A held-out set of real queries against your own real documents shows
+HyDE/rewriting measurably improves recall (more known-relevant chunks
+reach top-3) without regressing any Stage 1.5 fixture case — measured
+live against real retrieval output, not assumed from the unit tests
+alone.
+
+---
+
+## Phase 6 — Portability: full data export *(independent of Phase 5 —
+cheap, no hard dependency on anything past Phase 3, sequenced here only
+because Phase 4 is the current build point. Directly answers "what if I
+want to leave," the same instinct behind the security page's own "what
+this doesn't protect against" column — a real answer to that question,
+not just a claim.)*
+
+### Stage 6.1 — Export job
+**Exit criteria:** `POST /export/request` starts a background job
+assembling one archive containing every document's original file (from
+the `originals` bucket) plus its metadata row, every chat session and
+its messages, and all kanban boards/cards/todos. **Sealed documents
+export in their original encrypted form — ciphertext, salt, and nonce
+exactly as stored in `sealed_chunks`/Storage — never decrypted
+server-side during export.** This preserves the exact guarantee Phase 3
+built; the archive's manifest marks which files are sealed and require
+the same passphrase to open them after export. Job status polling
+mirrors the existing `ingest_jobs` shape (a new small `export_jobs`
+table, not a new pattern).
+**Tests:** An export for a seeded account contains exactly the
+documents/chats/cards that account owns — RLS-scoped the same as every
+other query in this API, never another user's data. A round-trip test
+using Stage 3.2's real `seal.ts` crypto: seal a known plaintext, export
+it, confirm the exported ciphertext+salt+nonce independently decrypt
+back to the original bytes with the right passphrase and fail with the
+wrong one — the export path is not a second, less-guarded copy of the
+plaintext.
+
+### Stage 6.2 — Export API & download
+**Exit criteria:** `GET /export/{job_id}` returns a short-lived signed
+URL to the finished archive once ready, same posture as Stage 3.6's
+document-download signed URLs (never a permanent link). The frontend
+surfaces this as a single "Export my data" action (account/settings)
+with a real progress state, not a fire-and-forget button.
+**Tests:** Requesting an export while a previous one for the same
+account is still running doesn't start a second concurrent job — queued
+or rejected, not duplicated. A stale/expired download link 4xxs rather
+than serving a completed archive indefinitely.
+
+### Phase 6 Gate *(future)*
+You personally request a real export of your own real account, download
+it, and confirm every real document/chat/card is actually present —
+and that a sealed document's exported form still requires the real
+passphrase to open. Driven live, not from a chat description of
+behavior, per this doc's own cross-phase rule below.
 
 ---
 
