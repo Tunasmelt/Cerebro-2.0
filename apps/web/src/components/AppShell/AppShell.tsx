@@ -8,19 +8,18 @@ import { createClient } from "@/lib/supabase/client";
 import styles from "./AppShell.module.css";
 
 // Stage 4.7 — wraps every authenticated page (Brain, Documents, Kanban,
-// Tasks, Settings) with the shared sidebar/topbar from
-// Mockups/ui_kits/app-shell. No "Playground" nav item — that route
-// doesn't exist (Stage 4.4 is still undecided) and a shell shouldn't
-// link to a page that isn't there. No search box or ingest-status pill
-// either — both would be UI that claims to do something without a real
-// feature behind it yet, which this project treats as a defect
-// (citations, retrieval pulses, etc. are all real, never decorative).
+// Tasks, Settings, Playground) with the shared sidebar/topbar from
+// Mockups/ui_kits/app-shell. No search box or ingest-status pill —
+// both would be UI that claims to do something without a real feature
+// behind it yet, which this project treats as a defect (citations,
+// retrieval pulses, etc. are all real, never decorative).
 
 const NAV_ITEMS = [
   { href: "/graph", label: "Brain" },
   { href: "/documents", label: "Documents" },
   { href: "/kanban", label: "Kanban" },
   { href: "/tasks", label: "Tasks" },
+  { href: "/playground", label: "Playground" },
 ];
 
 function initials(email: string | null): string {
