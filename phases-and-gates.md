@@ -835,14 +835,14 @@ tests passing, `ruff` clean. Security review: no findings.
 **Scope decided:** read-only token/cost display for a past chat turn.
 Fully editable pre-flight prompt assembly (the `Mockups/ui_kits/playground`
 mockup's actual interaction — editable textareas, re-run, live recalc)
-is deliberately deferred to a future Phase 5 stage, not built here — it
-needs its own generation entry point separate from the normal chat
-path (arbitrary user-edited prompts hitting Gemini is a different,
-larger surface to secure and test than displaying what was already
-sent), and Phase 5 is RAG-quality work that's explicitly sequenced
-after the current retrieval/chat path is proven stable, not layered
-onto it mid-build — same reasoning CLAUDE.md's build-order note already
-gives for HyDE/query rewriting.
+is deliberately deferred here — it needs its own generation entry point
+separate from the normal chat path (arbitrary user-edited prompts
+hitting Gemini is a different, larger surface to secure and test than
+displaying what was already sent), and Phase 5 is RAG-quality work
+that's explicitly sequenced after the current retrieval/chat path is
+proven stable, not layered onto it mid-build — same reasoning
+CLAUDE.md's build-order note already gives for HyDE/query rewriting.
+Built later as **Stage 5.6**.
 
 Nothing about the exact historical prompt is persisted today — no
 token counts, no cost, not even the assembled system-instruction text
@@ -953,7 +953,61 @@ all three.js resources and listeners even on a fast unmount race
 new `dangerouslySetInnerHTML`/`innerHTML` paths anywhere in the diff,
 `three`/`@types/three` confirmed as the real packages, not typosquats.
 
-### Stage 4.5 — Kanban agent tool-calling *(stretch, not gated)*
+### Stage 4.5 — Kanban agent tool-calling *(stretch, not gated)* ✅
+Scoped deliberately small: one real tool (`create_kanban_card`), one
+round trip at most (a message either triggers exactly one tool call or
+none), no open-ended agent loop. Confirmed live against current Gemini
+docs before writing this (per CLAUDE.md's `/api-check` discipline,
+same posture Stage 1.7 and 5.6 both already followed): the Interactions
+API's `tools` request field, `function_call`/`model_output` step
+shapes, and the `function_result`/`previous_interaction_id` follow-up
+contract were all checked against `ai.google.dev`'s current docs rather
+than assumed. One thing the docs didn't specify anywhere findable:
+`function_call`'s exact SSE event shape in a *streaming* response —
+rather than guess at an undocumented shape for a stretch feature, this
+stage's tool-calling turn is deliberately **non-streaming**
+(`chat/generate.py`'s new `run_interaction`, separate from
+`stream_text`), which the docs do fully specify. `chat/stream.py`'s
+normal streaming chat path is untouched.
+
+**Exit criteria:** `POST /api/v1/chat/sessions/{session_id}/agent-turn`
+takes a plain-text `message`, lists the caller's own boards (via the
+existing, RLS-scoped `KanbanStorage.list_boards`) in the system
+instruction, and gives the model exactly one tool. If the model calls
+it, the card is created for real through the existing
+`KanbanStorage.create_card` — same ownership enforcement (Stage 4.2's
+explicit board-ownership lookup) as every other kanban mutation, not a
+new bypass path — and the result is sent back to the model for a final
+text reply. A message with no card intent just gets a normal text
+reply and creates nothing. A hallucinated/mismatched board id fails
+closed (no card, an explanatory reply) rather than guessing which board
+was meant. Session-scoped the same 404-not-403 way `stream()` already
+is, even though the tool call itself only touches boards, not the
+session's own data — keeps this endpoint consistent with the rest of
+the chat surface rather than a special case.
+**Tests:** A message with no tool-worthy intent creates nothing. A
+tool-worthy message creates exactly one real card via the fake
+`KanbanStorage`, defaults to the board's first column when the model
+omits one, and the follow-up call carries the real `function_result` +
+`previous_interaction_id` (not the original message replayed). A
+hallucinated board id creates nothing and returns an explanatory
+reply. A `GenerateError` at the first call or at the function-result
+follow-up is caught and surfaced as text, never raised past this
+module — including the follow-up-fails case, where the already-created
+card is still reported back rather than silently dropped. Route-level:
+auth required, 404-not-403 on another user's session, 404 on a
+nonexistent one.
+**Done:** `services/api/app/chat/agent_tools.py` (new) +
+`chat/generate.py`'s `run_interaction` (new, non-streaming) +
+`routes/chat.py`'s `POST .../agent-turn`. 10 new backend tests (6
+storage-level in `test_stage_4_5_agent_tools.py` against a fake
+`KanbanStorage` and a monkeypatched `run_interaction` + 4 route-level in
+`test_stage_4_5_agent_turn_route.py`) — 308/308 backend tests passing,
+`ruff` clean on every file this stage touched. No new frontend page —
+wired as a small "Ask the agent" input directly into the existing
+`/kanban` page (stretch scope, not a new surface), which optimistically
+appends the created card to the board it landed on when the response
+names one still visible in the current view.
 
 ### Stage 4.6 — Action-item extraction into kanban
 The one idea in this phase that's a genuine differentiator rather than a
@@ -1124,12 +1178,154 @@ existing retrieval quality bar. A query with weak direct-embedding
 overlap but strong hypothetical-answer overlap demonstrates HyDE
 recovering a result direct retrieval alone misses.
 
+### Stage 5.3 — Associative memory graph (persistent edges)
+**Exit criteria:** A new `chunk_edges` table (`source_chunk_id`,
+`target_chunk_id`, `weight`, `co_retrieval_count`, `last_reinforced_at`)
+persists standing associations between chunks, independent of the brain
+graph's existing document-cluster edges (Stage 2.2's `document_edges`,
+which come from centroid nearest-neighbor at recluster time, not from
+actual usage). Two edge sources, additive rather than either/or:
+- **Retrieval co-occurrence (free — the primary source):** every real
+  `retrieve()` call already returns a final top-k chunk set per query
+  (Stage 1.5) and every chat turn already persists its
+  `retrieved_chunk_ids` (Stage 1.7/2.4). A lightweight post-turn step
+  increments `weight`/`co_retrieval_count` for every pair of chunks that
+  landed in the same final result set together — Hebbian in the literal
+  sense ("chunks that fire together wire together"), and needs no new
+  ingest work, no LLM call, and no new column on `chunks` itself, since
+  it's entirely derived from data Stage 1.7 already writes.
+- **Explicit user-drawn links (secondary):** a `POST /chunks/{id}/link`
+  lets a user manually assert a link between two of their own chunks
+  (both ownership-checked, same RLS-scoped pattern as every other
+  mutating route in this API) — these persist at a fixed high weight and
+  are never decayed the way co-retrieval edges below are.
+
+Weight decays on a schedule (not a background worker — same constraint
+Stage 2.5 already worked within: piggybacks on the next real user
+request touching that chunk's document, same pattern as Stage 2.1's
+incremental-vs-full recluster split) so an edge formed by one coincidental
+shared retrieval fades if never reinforced, while a repeatedly co-retrieved
+pair strengthens. Sealed content is explicitly out of scope — a sealed
+chunk has no `chunks` row to hold an id in the first place (Stage 3.1's
+isolation), so no edge can ever reference one; this is true by
+construction, not by an added filter.
+
+**Tests:** A fixture sequence of chat turns with a known repeated
+co-retrieval pattern produces edges whose weight ordering matches the
+expected reinforcement (more shared retrievals → higher weight). A
+chunk pair retrieved together exactly once, then never again across N
+subsequent unrelated turns, shows measurable decay. An explicit
+user-drawn link is never decayed and survives regardless of retrieval
+activity. Attempting to link a chunk belonging to another user, or a
+sealed document's (nonexistent) chunk id, is rejected — ownership and
+sealed-isolation tests, same shape as every other mutating route's
+existing coverage.
+
+### Stage 5.4 — Persistent-edge graph rendering
+**Exit criteria:** `/graph` renders Stage 5.3's `chunk_edges` as a
+second, visually distinct edge layer alongside Stage 2.2's existing
+document-cluster edges — thin, low-opacity lines that thicken with
+`weight`, separate from the cluster-neighbor edges and from Stage 2.4's
+transient retrieval-pulse animation (a real standing structure the graph
+now has, not just a replay of one past event). `GET /graph/edges` gains
+an optional `include=associative` param rather than a breaking response
+shape change, so Stage 2.2/2.3's existing tests keep passing unmodified.
+**Tests:** Regression: existing Stage 2.2/2.3 edge and render tests still
+pass with the new param omitted (default response shape unchanged).
+With the param set, returned associative edges match `chunk_edges`
+weight ordering exactly. Render performance re-measured at the Stage
+2.3 300-document seed scale with associative edges included, not just
+cluster edges — frame rate must still hold, same bar Stage 2.3 set.
+
+### Stage 5.5 — Quick capture (journaling as ingest)
+**Exit criteria:** A new lightweight capture path — `POST /capture`
+(text) and a voice variant reusing whatever transcription step is
+cheapest to add — creates a `documents` row with a new
+`source = 'capture'` value (alongside the implicit `'upload'` every
+existing document has today) and feeds straight into the *existing*
+extract → chunk → embed pipeline (Stage 1.3/1.4), not a parallel one —
+a captured thought is chunked and embedded exactly like an uploaded
+document, so it's retrievable, clusterable (Stage 2.1/2.5), and eligible
+for Stage 5.3's associative edges with zero special-casing anywhere else
+in the pipeline. No `originals`/`indexed` storage round-trip is needed
+for pure text capture (there's no file to normalize) — the row goes
+straight to `extracting` with the captured text as its own content,
+skipping Stage 1.2's normalize step entirely for this source type only;
+voice capture (if built) still needs a real audio file in `originals`
+and a real normalize step, so it does not skip that stage.
+Frontend: a persistent, always-available quick-capture affordance (not
+buried in the upload flow) — matching the "low cost, high personal-brain
+feel" framing this stage was scoped under, not a new full-page form.
+**Tests:** A text capture produces a `documents` row with
+`source='capture'`, no `originals`/`indexed` storage object, and chunks
+appear via the same extract/chunk/embed pipeline as an uploaded document
+— verified by asserting it's retrievable by a fixture query afterward,
+not by inspecting internal state alone. A captured document participates
+in clustering (Stage 2.1/2.5) and can accrue associative edges (Stage
+5.3) identically to an uploaded one — no `source` branch anywhere in
+those code paths. Voice capture (if built this stage): a known audio
+fixture transcribes to expected text before entering the same pipeline.
+
+### Stage 5.6 — Editable playground (deferred half of Stage 4.4) ✅
+Stage 4.4 deliberately scoped down to a read-only breakdown and deferred
+the mockup's actual interaction — editable sections, re-run, live
+recalc — until it had "its own generation entry point separate from the
+normal chat path," since arbitrary user-edited prompts hitting Gemini is
+a different, larger surface to secure than replaying what was already
+sent. This is that stage, formalized and built now that a decision was
+made to prioritize it early in Phase 5 rather than leave it an
+open-ended note.
+
+**Exit criteria:** `POST /api/v1/chat/sessions/{session_id}/playground/run`
+takes caller-edited `system_instructions`, `context_sections`, and
+`user_query`, reassembles them through the same block-join shape
+`build_system_instruction` uses (parameterized by the edited text
+instead of hardcoded — not a second, drifting reimplementation), and
+runs the result for real through `chat/generate.py`'s existing
+`GenerateClient` — the same client `stream_chat` calls, not a second
+HTTP path. Scoped to a session the caller owns (same RLS-backed
+404-not-403 pattern Stage 4.4's route already established); nothing
+about an edited run is persisted, matching Stage 4.4's own posture for
+the unedited prompt. No chat-history section is exposed for editing,
+consistent with Stage 4.4's finding that the live system never feeds
+prior turns into the prompt in the first place — editing something that
+was never really sent would misrepresent production behavior. Frontend:
+the existing `/playground` page's read-only sections became editable
+textareas with per-section and whole-form reset (matching
+`Mockups/ui_kits/playground`'s own reset affordances), a live
+client-side token/cost/latency estimate recalculated on every edit (same
+`len/4` heuristic the mockup used), and a real "Run" button that calls
+the new endpoint and replaces the placeholder response with the real
+one, including real latency and real cost from the response.
+**Tests:** `run_edited_prompt`'s assembled `system_instruction` sent to
+the generate client matches `build_system_instruction`'s block-join
+format exactly, including the `[[chunk:id]]` marker per edited section,
+proven against a fake `GenerateClient` that records what it was called
+with — not just that a response came back. A run scoped to a session
+the caller doesn't own returns the same not-found shape Stage 4.4's
+route uses. A generate-client failure surfaces as a real error response
+(502) rather than a silent empty run or an unhandled exception.
+**Done:** `services/api/app/chat/playground.py`'s `ChatPlaygroundStorage.run_edited_prompt`
++ `routes/chat.py`'s `POST .../playground/run` + a matching Next.js
+proxy route + the `/playground` page rewrite described above. 7 new
+backend tests (3 route-level using a fake playground storage + 4
+storage-level against a fake httpx transport and a fake `GenerateClient`
+that asserts the exact assembled prompt string) — 298/298 backend tests
+passing, `ruff` clean on every changed file (pre-existing findings in
+unrelated files untouched). Frontend `lint`/`build` clean; the one
+pre-existing `tsc` failure (`seal.test.ts`'s `Uint8Array`/`BufferSource`
+mismatch, Stage 3.2) is unrelated to this stage's files.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks
 reach top-3) without regressing any Stage 1.5 fixture case — measured
 live against real retrieval output, not assumed from the unit tests
-alone.
+alone. Additionally: you quick-capture a real thought, watch it become
+retrievable and appear on the graph without a manual upload step; you
+have a real conversation across several turns touching related content
+and see the resulting associative edges on the graph actually connect
+what you'd expect, thickening on the pair you kept coming back to.
 
 ---
 

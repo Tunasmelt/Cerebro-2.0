@@ -115,6 +115,49 @@ class GeminiGenerateClient:
                         yield text
 
 
+async def run_interaction(
+    *,
+    system_instruction: str,
+    input_data: str | list[dict],
+    tools: list[dict] | None = None,
+    previous_interaction_id: str | None = None,
+) -> dict:
+    """Stage 4.5 — a non-streaming interactions call, for tool-calling
+    turns only (chat/stream.py's streaming stream_text is unaffected and
+    unused here). Confirmed live against current docs before writing
+    this (per CLAUDE.md's /api-check discipline): a non-streaming
+    response's steps live under a top-level "steps" array; a
+    function_call step carries "name"/"arguments"/"id" (not "call_id");
+    a model_output step carries "content", a list of {"type": "text",
+    "text": ...} blocks. Streaming's SSE shape for function_call steps
+    is not documented anywhere findable at build time, which is exactly
+    why this call is non-streaming — guessing at an undocumented
+    streaming shape for a stretch feature isn't worth the risk of
+    silently mis-parsing a tool call.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    payload: dict = {
+        "model": GEMINI_MODEL,
+        "input": input_data,
+        "system_instruction": system_instruction,
+        "stream": False,
+    }
+    if tools:
+        payload["tools"] = tools
+    if previous_interaction_id:
+        payload["previous_interaction_id"] = previous_interaction_id
+
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        response = await client.post(
+            GEMINI_INTERACTIONS_URL,
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise GenerateError("generate_call_failed", response.text)
+    return response.json()
+
+
 _client: GenerateClient = GeminiGenerateClient()
 
 

@@ -22,14 +22,28 @@ $0.30 / 1M input tokens, $2.50 / 1M output tokens) — prompt sections
 response as output, not a single blended rate.
 """
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from app.chat.generate import GEMINI_MODEL
+from app.chat.generate import GEMINI_MODEL, GenerateError, get_generate_client
 from app.chat.prompt import SYSTEM_PROMPT_HEADER, build_system_instruction
 from app.retrieve.retrieve import RetrievedChunk
+
+# Stage 5.6 extends this file with a real "run" path: the deferred half
+# of Stage 4.4's mockup (editable textareas, re-run, live recalc) that
+# was explicitly held back until this had its own generation entry
+# point, separate from chat/stream.py's normal path — a user-edited
+# prompt hitting Gemini is a different, larger surface to secure than
+# replaying what was already sent. run_edited_prompt() below reuses the
+# real GenerateClient chat/stream.py itself calls, and mirrors
+# build_system_instruction's exact block-join format (parameterized by
+# the caller's edited header/content instead of hardcoded) so what's
+# actually sent matches production shape rather than a drifted
+# approximation. Nothing about a playground run is persisted — same
+# posture already established for the original, unedited breakdown.
 
 INPUT_PRICE_PER_TOKEN_USD = 0.30 / 1_000_000
 OUTPUT_PRICE_PER_TOKEN_USD = 2.50 / 1_000_000
@@ -187,6 +201,74 @@ class ChatPlaygroundStorage:
             "response": {"content": message["content"], "tokens": response_tokens},
             "total_tokens": total_tokens,
             "estimated_cost_usd": round(estimated_cost_usd, 6),
+        }
+
+
+    async def run_edited_prompt(
+        self,
+        *,
+        user_jwt: str,
+        session_id: str,
+        system_instructions: str,
+        context_sections: list[dict[str, str]],
+        user_query: str,
+    ) -> dict[str, Any] | None:
+        """Runs a user-edited prompt for real against Gemini and returns
+        the response with recalculated tokens/cost/latency. Returns None
+        if the session isn't the caller's (RLS-scoped, 404-not-403 at the
+        route layer, same pattern as get_prompt_breakdown)."""
+        async with httpx.AsyncClient() as client:
+            session_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/chat_sessions",
+                headers=self._headers(user_jwt),
+                params={"id": f"eq.{session_id}", "select": "id"},
+            )
+            if not session_resp.json():
+                return None
+
+        # Mirrors build_system_instruction's block-join format exactly,
+        # parameterized by the caller's edited header/content instead of
+        # hardcoded — each section keeps the [[chunk:id]] marker so the
+        # assembled shape matches what a real turn sends, even though a
+        # playground run never emits citation events off the result.
+        if context_sections:
+            context_blocks = "\n\n".join(
+                f"[[chunk:{s.get('chunk_id', 'edited')}]]\n{s['content']}"
+                for s in context_sections
+            )
+            assembled_system = f"{system_instructions}\n\n{context_blocks}"
+        else:
+            assembled_system = system_instructions
+
+        generate_client = get_generate_client()
+        started_at = time.monotonic()
+        try:
+            response_text = "".join(
+                [
+                    delta
+                    async for delta in generate_client.stream_text(
+                        system_instruction=assembled_system, input_text=user_query
+                    )
+                ]
+            )
+        except GenerateError as exc:
+            return {"error": {"code": exc.code, "message": exc.message}}
+        latency_ms = round((time.monotonic() - started_at) * 1000)
+
+        response_tokens = estimate_tokens(response_text)
+        input_tokens = estimate_tokens(assembled_system) + estimate_tokens(user_query)
+        total_tokens = input_tokens + response_tokens
+        estimated_cost_usd = (
+            input_tokens * INPUT_PRICE_PER_TOKEN_USD
+            + response_tokens * OUTPUT_PRICE_PER_TOKEN_USD
+        )
+
+        return {
+            "model": GEMINI_MODEL,
+            "response": {"content": response_text, "tokens": response_tokens},
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": round(estimated_cost_usd, 6),
+            "latency_ms": latency_ms,
         }
 
 

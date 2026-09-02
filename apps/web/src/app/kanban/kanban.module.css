@@ -19,6 +19,46 @@
   margin: 0;
 }
 
+.agentBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.agentBar input {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: var(--space-2) var(--space-3);
+  min-width: 260px;
+}
+
+.agentBar button {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.agentBar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.agentReply {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  max-width: 320px;
+}
+
 .backLink {
   color: var(--text-secondary);
   cursor: pointer;

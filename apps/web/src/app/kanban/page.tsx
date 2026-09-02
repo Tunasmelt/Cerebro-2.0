@@ -41,6 +41,16 @@ export default function KanbanPage() {
   const draggedCardId = useRef<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
+  // Stage 4.5 (stretch) — a tool-calling agent turn, separate from
+  // /playground's plain generation and from the normal chat page. Lazily
+  // creates one chat session on first use (agent-turn is session-scoped
+  // the same way stream() is) rather than requiring the user to already
+  // be in a chat conversation just to add a card.
+  const agentSessionId = useRef<string | null>(null);
+  const [agentMessage, setAgentMessage] = useState("");
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentReply, setAgentReply] = useState<string | null>(null);
+
   const loadBoard = useCallback(async () => {
     const listRes = await authedFetch("/api/boards");
     const listBody = await listRes.json();
@@ -148,6 +158,45 @@ export default function KanbanPage() {
     });
   }
 
+  async function handleAskAgent() {
+    const message = agentMessage.trim();
+    if (!message || agentRunning) return;
+    setAgentRunning(true);
+    setAgentReply(null);
+    try {
+      if (!agentSessionId.current) {
+        const sessionRes = await authedFetch("/api/chat/sessions", { method: "POST" });
+        const sessionBody = await sessionRes.json();
+        agentSessionId.current = sessionBody.id;
+      }
+      const res = await authedFetch(
+        `/api/chat/sessions/${agentSessionId.current}/agent-turn`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message }),
+        }
+      );
+      const body = await res.json();
+      if (!res.ok) {
+        setAgentReply(body.error?.message ?? "Something went wrong.");
+        return;
+      }
+      setAgentReply(body.response);
+      setAgentMessage("");
+      const createdOnThisBoard = (body.created_cards ?? []).filter(
+        (c: Card & { board_id?: string }) => c.board_id === board?.id
+      );
+      if (createdOnThisBoard.length > 0) {
+        setBoard((prev) =>
+          prev ? { ...prev, cards: [...prev.cards, ...createdOnThisBoard] } : prev
+        );
+      }
+    } finally {
+      setAgentRunning(false);
+    }
+  }
+
   if (checking || loading) return null;
   if (!board) return null;
 
@@ -156,6 +205,22 @@ export default function KanbanPage() {
     <div className={styles.page}>
       <div className={styles.pageHeader}>
         <h1>{board.title}</h1>
+        <div className={styles.agentBar}>
+          <input
+            type="text"
+            placeholder="Ask the agent to add a card…"
+            value={agentMessage}
+            onChange={(e) => setAgentMessage(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleAskAgent();
+            }}
+            disabled={agentRunning}
+          />
+          <button onClick={handleAskAgent} disabled={agentRunning || !agentMessage.trim()}>
+            {agentRunning ? "Asking…" : "Ask"}
+          </button>
+          {agentReply && <span className={styles.agentReply}>{agentReply}</span>}
+        </div>
       </div>
 
       <div className={styles.board}>

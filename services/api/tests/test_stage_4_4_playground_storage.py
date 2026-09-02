@@ -6,6 +6,8 @@ the correct 404-vs-not-found rules.
 import httpx
 import pytest
 
+from app.chat import generate as generate_module
+from app.chat.generate import GenerateError
 from app.chat.playground import ChatPlaygroundStorage
 
 
@@ -184,3 +186,114 @@ async def test_breakdown_for_nonexistent_session_returns_none(monkeypatch):
     )
 
     assert breakdown is None
+
+
+class _FakeGenerateClient:
+    """Stage 5.6 — records the exact system_instruction/input_text it was
+    called with, so the test can assert run_edited_prompt actually
+    mirrors build_system_instruction's block-join format rather than
+    inventing a second one."""
+
+    model = "gemini-3.5-flash-lite"
+
+    def __init__(self, *, response_text="the edited answer", error=None):
+        self._response_text = response_text
+        self._error = error
+        self.last_call: dict | None = None
+
+    async def stream_text(self, *, system_instruction, input_text):
+        self.last_call = {"system_instruction": system_instruction, "input_text": input_text}
+        if self._error:
+            raise self._error
+        for chunk in [self._response_text[:5], self._response_text[5:]]:
+            if chunk:
+                yield chunk
+
+
+@pytest.mark.asyncio
+async def test_run_edited_prompt_mirrors_block_join_format_and_returns_real_response(
+    monkeypatch,
+):
+    transport = _FakeTransport(sessions=[{"id": "s1"}], messages=[], chunks=[], documents=[])
+    _patch_client(monkeypatch, transport)
+    fake_generate = _FakeGenerateClient()
+    generate_module.set_generate_client(fake_generate)
+
+    storage = ChatPlaygroundStorage()
+    result = await storage.run_edited_prompt(
+        user_jwt="t",
+        session_id="s1",
+        system_instructions="edited system header",
+        context_sections=[{"chunk_id": "c1", "content": "edited chunk text"}],
+        user_query="edited query",
+    )
+
+    assert result is not None
+    assert result["response"]["content"] == "the edited answer"
+    assert result["total_tokens"] > 0
+    assert result["estimated_cost_usd"] > 0
+    assert result["latency_ms"] >= 0
+    assert fake_generate.last_call == {
+        "system_instruction": "edited system header\n\n[[chunk:c1]]\nedited chunk text",
+        "input_text": "edited query",
+    }
+    generate_module.set_generate_client(generate_module.GeminiGenerateClient())
+
+
+@pytest.mark.asyncio
+async def test_run_edited_prompt_with_no_context_sections_omits_block_join(monkeypatch):
+    transport = _FakeTransport(sessions=[{"id": "s1"}], messages=[], chunks=[], documents=[])
+    _patch_client(monkeypatch, transport)
+    fake_generate = _FakeGenerateClient()
+    generate_module.set_generate_client(fake_generate)
+
+    storage = ChatPlaygroundStorage()
+    await storage.run_edited_prompt(
+        user_jwt="t",
+        session_id="s1",
+        system_instructions="just the header",
+        context_sections=[],
+        user_query="a query",
+    )
+
+    assert fake_generate.last_call["system_instruction"] == "just the header"
+    generate_module.set_generate_client(generate_module.GeminiGenerateClient())
+
+
+@pytest.mark.asyncio
+async def test_run_edited_prompt_for_nonexistent_session_returns_none(monkeypatch):
+    transport = _FakeTransport(sessions=[], messages=[], chunks=[], documents=[])
+    _patch_client(monkeypatch, transport)
+
+    storage = ChatPlaygroundStorage()
+    result = await storage.run_edited_prompt(
+        user_jwt="t",
+        session_id="does-not-exist",
+        system_instructions="x",
+        context_sections=[],
+        user_query="y",
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_run_edited_prompt_surfaces_generate_error_without_raising(monkeypatch):
+    transport = _FakeTransport(sessions=[{"id": "s1"}], messages=[], chunks=[], documents=[])
+    _patch_client(monkeypatch, transport)
+    fake_generate = _FakeGenerateClient(
+        error=GenerateError("generate_call_failed", "upstream boom")
+    )
+    generate_module.set_generate_client(fake_generate)
+
+    storage = ChatPlaygroundStorage()
+    result = await storage.run_edited_prompt(
+        user_jwt="t",
+        session_id="s1",
+        system_instructions="x",
+        context_sections=[],
+        user_query="y",
+    )
+
+    assert result == {"error": {"code": "generate_call_failed", "message": "upstream boom"}}
+    generate_module.set_generate_client(generate_module.GeminiGenerateClient())
