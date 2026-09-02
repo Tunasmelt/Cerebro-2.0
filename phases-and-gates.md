@@ -803,6 +803,12 @@ returns 404 if the board isn't the caller's, the same pattern
 storage-level against a fake httpx transport, including one proving the
 required "reordering persists across a fetch" behavior and two proving
 the ownership-check fix) — 254/254 backend tests passing, `ruff` clean.
+**Live-verified** against production (Playwright, real account): created
+a card via the real `+ Add card` flow, dragged it from `Backlog` to
+`In Progress`, then reloaded the page — the card was still in
+`In Progress` after reload, confirming the required "reordering
+persists across a page reload" behavior for real, not just at the fake-
+transport test level. Test board/cards cleaned up afterward.
 
 ### Stage 4.3 — Todo CRUD
 **Exit criteria:** Tasks create, complete, persist, collapse into
