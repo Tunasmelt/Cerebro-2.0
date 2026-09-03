@@ -86,6 +86,7 @@ export default function DocumentsPage() {
   const [sealError, setSealError] = useState<string | null>(null);
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletePromptFor, setDeletePromptFor] = useState<DocumentRow | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -202,27 +203,49 @@ export default function DocumentsPage() {
 
   async function handleView(doc: DocumentRow) {
     setViewingId(doc.id);
+    // A tab opened only after the await below has resolved is no longer
+    // inside the click's user-gesture window in most browsers — the
+    // popup gets silently blocked, which is exactly what "View doesn't
+    // work" looks like from the outside (no error, nothing happens).
+    // Opening a blank tab synchronously here, then pointing it at the
+    // real URL once it's fetched, keeps the whole thing inside the
+    // gesture instead.
+    const pending = window.open("", "_blank", "noopener,noreferrer");
     try {
       const res = await authedFetch(`/api/documents/${doc.id}/download`);
       const body = await res.json();
       if (!res.ok) {
+        pending?.close();
         alert(body?.error?.message || "Could not open this document");
         return;
       }
-      window.open(body.url, "_blank", "noopener,noreferrer");
+      if (pending) {
+        pending.location.href = body.url;
+      } else {
+        // Popup blocked even for the synchronous open (e.g. a stricter
+        // browser setting) — fall back to a same-tab navigation rather
+        // than leaving the click with no visible effect at all.
+        window.location.href = body.url;
+      }
     } finally {
       setViewingId(null);
     }
   }
 
-  async function handleDelete(doc: DocumentRow) {
-    if (!window.confirm(`Delete "${doc.title}"? This can't be undone.`)) return;
+  function requestDelete(doc: DocumentRow) {
+    setDeletePromptFor(doc);
+  }
+
+  async function confirmDelete() {
+    const doc = deletePromptFor;
+    if (!doc) return;
     setDeletingId(doc.id);
     try {
       await authedFetch(`/api/documents/${doc.id}`, { method: "DELETE" });
       setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
     } finally {
       setDeletingId(null);
+      setDeletePromptFor(null);
     }
   }
 
@@ -513,46 +536,48 @@ export default function DocumentsPage() {
                     </span>
                   </td>
                   <td>
-                    {doc.status === "failed" && (
-                      <button
-                        className={styles.retryBtn}
-                        disabled={retryingId === doc.id}
-                        onClick={() => handleRetry(doc.id)}
-                      >
-                        {retryingId === doc.id ? "Retrying…" : "Retry"}
-                      </button>
-                    )}
-                    {doc.status === "ready" && (
-                      <>
+                    <div className={styles.actionsCell}>
+                      {doc.status === "failed" && (
                         <button
                           className={styles.retryBtn}
-                          disabled={extractingId === doc.id}
-                          onClick={() => handleExtractActionItems(doc.id)}
+                          disabled={retryingId === doc.id}
+                          onClick={() => handleRetry(doc.id)}
                         >
-                          {extractingId === doc.id ? "Scanning…" : "Extract action items"}
-                        </button>{" "}
-                        <button className={styles.retryBtn} onClick={() => openSealPrompt(doc.id)}>
-                          Seal
-                        </button>{" "}
-                      </>
-                    )}
-                    {doc.status !== "sealed" && (
+                          {retryingId === doc.id ? "Retrying…" : "Retry"}
+                        </button>
+                      )}
+                      {doc.status === "ready" && (
+                        <>
+                          <button
+                            className={styles.retryBtn}
+                            disabled={extractingId === doc.id}
+                            onClick={() => handleExtractActionItems(doc.id)}
+                          >
+                            {extractingId === doc.id ? "Scanning…" : "Extract action items"}
+                          </button>
+                          <button className={styles.retryBtn} onClick={() => openSealPrompt(doc.id)}>
+                            Seal
+                          </button>
+                        </>
+                      )}
+                      {doc.status !== "sealed" && (
+                        <button
+                          className={styles.retryBtn}
+                          disabled={viewingId === doc.id}
+                          onClick={() => handleView(doc)}
+                          title="Open the file in a new tab"
+                        >
+                          {viewingId === doc.id ? "Opening…" : "View"}
+                        </button>
+                      )}
                       <button
-                        className={styles.retryBtn}
-                        disabled={viewingId === doc.id}
-                        onClick={() => handleView(doc)}
-                        title="Open the file in a new tab"
+                        className={`${styles.retryBtn} ${styles.dangerBtn}`}
+                        disabled={deletingId === doc.id}
+                        onClick={() => requestDelete(doc)}
                       >
-                        {viewingId === doc.id ? "Opening…" : "View"}
+                        {deletingId === doc.id ? "Deleting…" : "Delete"}
                       </button>
-                    )}{" "}
-                    <button
-                      className={`${styles.retryBtn} ${styles.dangerBtn}`}
-                      disabled={deletingId === doc.id}
-                      onClick={() => handleDelete(doc)}
-                    >
-                      {deletingId === doc.id ? "Deleting…" : "Delete"}
-                    </button>
+                    </div>
                   </td>
                 </tr>
                 {sealPromptFor === doc.id && (
@@ -642,6 +667,37 @@ export default function DocumentsPage() {
         </table>
         </div>
       </div>
+
+      {deletePromptFor && (
+        <div
+          className={styles.modalOverlay}
+          onClick={() => !deletingId && setDeletePromptFor(null)}
+        >
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <h2 className={styles.modalTitle}>Delete document</h2>
+            <p className={styles.modalBody}>
+              Delete <strong>&ldquo;{deletePromptFor.title}&rdquo;</strong>? This can&apos;t be
+              undone.
+            </p>
+            <div className={styles.modalActions}>
+              <button
+                className={styles.retryBtn}
+                disabled={!!deletingId}
+                onClick={() => setDeletePromptFor(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className={`${styles.retryBtn} ${styles.dangerBtn}`}
+                disabled={!!deletingId}
+                onClick={confirmDelete}
+              >
+                {deletingId ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
     </AppShell>
   );

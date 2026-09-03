@@ -366,3 +366,111 @@
   font-size: var(--text-sm);
   padding: var(--space-6) var(--space-3);
 }
+
+.actionsCell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  z-index: 30;
+  animation: overlayIn var(--duration-fast) var(--ease-soft);
+}
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-5);
+  width: 100%;
+  max-width: 380px;
+  animation: menuIn var(--duration-fast) var(--ease-soft);
+}
+@keyframes menuIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.modalTitle {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  margin: 0 0 var(--space-2);
+}
+.modalBody {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-5);
+  word-break: break-word;
+}
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .container {
+    padding: var(--space-6) var(--space-4) 60px;
+  }
+  .header h1 {
+    font-size: var(--text-xl);
+  }
+  .dropzone {
+    padding: var(--space-6) var(--space-4);
+  }
+  .uploadRow {
+    grid-template-columns: 1fr;
+    row-gap: var(--space-1);
+  }
+  .uploadStage {
+    text-align: left;
+  }
+  .uploadErrorRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  /* Size/Uploaded columns are the least essential on a narrow screen —
+     dropping them (rather than squeezing every column) keeps Title and
+     Actions, the two columns actually worked with on mobile, legible.
+     The table still scrolls horizontally as a fallback if a title +
+     the action buttons still don't fit. */
+  .table th:nth-child(2),
+  .table td:nth-child(2),
+  .table th:nth-child(3),
+  .table td:nth-child(3) {
+    display: none;
+  }
+  .tableCard {
+    overflow-x: auto;
+  }
+  .table {
+    min-width: 420px;
+  }
+
+  .actionItemRow {
+    flex-wrap: wrap;
+  }
+  .actionItemActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

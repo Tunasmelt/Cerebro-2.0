@@ -248,3 +248,83 @@
     transform: translateY(0);
   }
 }
+
+.menuToggle {
+  display: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.menuToggle:hover {
+  background: var(--bg-elevated-hover);
+  border-color: var(--border-strong);
+}
+
+.overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 19;
+  animation: overlayIn var(--duration-fast) var(--ease-soft);
+}
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Below this width the sidebar becomes a fixed off-canvas drawer
+   instead of a permanent flex column — a permanent 220px (or even
+   64px collapsed) sidebar left no usable width for content on a phone
+   and no way at all to reach the other nav items, since nothing in
+   this shell ever had a mobile breakpoint before. */
+@media (max-width: 860px) {
+  .shell {
+    height: 100dvh;
+  }
+  .sidebar,
+  .sidebarCollapsed {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100dvh;
+    width: 240px;
+    transform: translateX(-100%);
+    transition: transform var(--duration-base) var(--ease-soft);
+    z-index: 20;
+  }
+  .sidebar.sidebarMobileOpen {
+    transform: translateX(0);
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebarCollapsed .navLabel {
+    display: block;
+  }
+  .sidebarCollapsed .navItem {
+    justify-content: flex-start;
+    padding: var(--space-2) var(--space-3);
+  }
+  .collapseBtn {
+    display: none;
+  }
+  .menuToggle {
+    display: flex;
+  }
+  .overlay {
+    display: block;
+  }
+  .topbar {
+    padding: 0 var(--space-3);
+    gap: var(--space-3);
+  }
+  .topbarRight {
+    gap: var(--space-2);
+  }
+}

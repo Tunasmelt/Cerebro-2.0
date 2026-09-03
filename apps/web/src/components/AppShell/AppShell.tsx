@@ -115,6 +115,13 @@ export default function AppShell({
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Sidebar is a fixed off-canvas drawer below the mobile breakpoint
+  // (see AppShell.module.css's @media block) — closed by default so a
+  // phone load doesn't open with the nav covering the page, opened via
+  // the hamburger button in the topbar. Independent of `collapsed`,
+  // which only makes sense as a desktop-width affordance.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  useEffect(() => setMobileNavOpen(false), [pathname]);
   // Profile pass — AppShell reads its own displayName/avatarUrl rather
   // than threading two more props through every page that mounts it
   // (every page already independently calls useAuthedUser for its own
@@ -133,7 +140,14 @@ export default function AppShell({
 
   return (
     <div className={styles.shell}>
-      <div className={`${styles.sidebar} ${collapsed ? styles.sidebarCollapsed : ""}`}>
+      {mobileNavOpen && (
+        <div className={styles.overlay} onClick={() => setMobileNavOpen(false)} />
+      )}
+      <div
+        className={`${styles.sidebar} ${collapsed ? styles.sidebarCollapsed : ""} ${
+          mobileNavOpen ? styles.sidebarMobileOpen : ""
+        }`}
+      >
         <div className={styles.sidebarTop}>
           <span className={styles.brandMark} onClick={() => router.push("/graph")}>
             <Logo size={collapsed ? 20 : 20} wordmark={!collapsed} />
@@ -175,6 +189,20 @@ export default function AppShell({
 
       <div className={styles.main}>
         <div className={styles.topbar}>
+          <button
+            className={styles.menuToggle}
+            onClick={() => setMobileNavOpen((o) => !o)}
+            aria-label={mobileNavOpen ? "Close menu" : "Open menu"}
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <path
+                d="M2.5 5H15.5M2.5 9H15.5M2.5 13H15.5"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           <div className={styles.topbarRight}>
             <QuickCapture />
             <div className={styles.avatar} onClick={() => setMenuOpen((o) => !o)}>

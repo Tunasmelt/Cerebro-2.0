@@ -33,17 +33,41 @@ already applies to citations in a normal chat answer. Any failure to
 get valid JSON back from the model (a parse error, a GenerateError) also
 degrades to zero items rather than a hard error — consistent with the
 same "no forced count" principle, not a new behavior.
+
+Image documents (Stage 1.3's extract.py leaves image chunk `content`
+permanently empty — captioning was deferred there and never built
+anywhere since) previously always yielded zero candidates: the text
+path above has nothing to read. Fixed by giving image documents their
+own path that sends the normalized `indexed` bytes (already ≤2048px
+WebP, comfortably under the Interactions API's 20MB inline-image cap —
+confirmed live against current docs before writing this, per CLAUDE.md's
+/api-check discipline: `input` accepts a flat list of
+{"type":"text",...} / {"type":"image","data":<base64>,"mime_type":...}
+blocks) straight to Gemini as an image content block, asking it to read
+tasks directly off the image (whiteboards, screenshots, checklists,
+handwritten notes) instead of off chunk text. There is no `[[chunk:id]]`
+marker to reference for an image, so every candidate is pinned to the
+document's first chunk id up front (one of `valid_chunk_ids` either
+way) rather than trusting the model to echo one back.
 """
+import base64
 import json
 import os
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from fastapi import HTTPException
 
 from app.chat import generate as generate_module
 from app.chat.generate import GenerateError
-from app.core.documents_storage import DocumentsStorage, get_documents_storage
+from app.core.documents_storage import (
+    DocumentsStorage,
+    DocumentsStorageError,
+    get_documents_storage,
+)
+
+IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 ACTION_ITEM_SYSTEM_HEADER = (
     "You extract concrete, actionable tasks from the document text below. "
@@ -54,6 +78,19 @@ ACTION_ITEM_SYSTEM_HEADER = (
     "(the value inside [[chunk:...]]) for source_chunk_id on every item — "
     'never invent an id. If there are no real action items, respond with '
     '{"items": []}. No markdown, no prose outside the JSON object.'
+)
+
+IMAGE_ACTION_ITEM_SYSTEM_HEADER_TEMPLATE = (
+    "You extract concrete, actionable tasks that are actually visible in the "
+    "image below — text, handwriting, checklists, whiteboards, screenshots, "
+    "sticky notes, calendars, and the like. Only extract items you can "
+    "genuinely read in the image — never invent one. Respond with ONLY a "
+    'JSON object of the exact shape {{"items": [{{"title": <str>, '
+    '"description": <str>, "source_chunk_id": <str>}}]}}, using "{chunk_id}" '
+    "as source_chunk_id for every item — it's the only id available for this "
+    'image, do not invent another one. If there are no real action items '
+    'visible, respond with {{"items": []}}. No markdown, no prose outside '
+    "the JSON object."
 )
 
 
@@ -121,6 +158,61 @@ async def _fetch_document_chunks(
     return response.json()
 
 
+async def _extract_from_image(
+    *,
+    storage: DocumentsStorage,
+    user_jwt: str,
+    document_id: str,
+    chunks: list[dict[str, Any]],
+    valid_chunk_ids: set[str],
+) -> list[dict[str, Any]]:
+    # Every tile chunk (extract.py's extract_image_chunks) represents the
+    # same underlying image — there's no [[chunk:id]] marker to have the
+    # model choose one, so the first is the fixed anchor every candidate
+    # gets pinned to.
+    anchor_chunk_id = chunks[0]["id"]
+
+    try:
+        signed_url = await storage.get_signed_url(
+            user_jwt=user_jwt, document_id=document_id, variant="indexed"
+        )
+    except (DocumentsStorageError, HTTPException):
+        return []
+
+    async with httpx.AsyncClient() as client:
+        image_resp = await client.get(signed_url)
+    if image_resp.status_code >= 400:
+        return []
+
+    # /download's own docstring: `indexed` is always a normalized WebP
+    # for every image mime by the time normalize.py has run, regardless
+    # of what the original was uploaded as.
+    image_b64 = base64.b64encode(image_resp.content).decode()
+    system_instruction = IMAGE_ACTION_ITEM_SYSTEM_HEADER_TEMPLATE.format(
+        chunk_id=anchor_chunk_id
+    )
+
+    try:
+        interaction = await generate_module.run_interaction(
+            system_instruction=system_instruction,
+            input_data=[
+                {"type": "text", "text": "Extract the action items from this image now."},
+                {"type": "image", "data": image_b64, "mime_type": "image/webp"},
+            ],
+        )
+    except GenerateError:
+        return []
+
+    raw_text = "".join(
+        block.get("text", "")
+        for step in interaction.get("steps", [])
+        if step.get("type") == "model_output"
+        for block in step.get("content", [])
+        if block.get("type") == "text"
+    )
+    return [c.to_dict() for c in _parse_candidates(raw_text, valid_chunk_ids)]
+
+
 async def extract_action_items(
     *,
     user_jwt: str,
@@ -140,6 +232,16 @@ async def extract_action_items(
         return []
 
     valid_chunk_ids = {c["id"] for c in chunks}
+
+    if document.get("mime") in IMAGE_MIME_TYPES:
+        return await _extract_from_image(
+            storage=storage,
+            user_jwt=user_jwt,
+            document_id=document_id,
+            chunks=chunks,
+            valid_chunk_ids=valid_chunk_ids,
+        )
+
     context_blocks = "\n\n".join(f"[[chunk:{c['id']}]]\n{c['content']}" for c in chunks)
     system_instruction = f"{ACTION_ITEM_SYSTEM_HEADER}\n\n{context_blocks}"
 
