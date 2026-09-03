@@ -35,6 +35,7 @@ import httpx
 from app.core.sealed_storage import SealedStorageError, get_sealed_storage
 from app.core.tracing import get_tracer
 from app.ingest.embed import get_embed_client
+from app.retrieve.hyde import generate_hypothetical_answer
 from app.retrieve.rewrite import rewrite_query
 
 RRF_K = 60  # standard constant from the original RRF paper, not tunable
@@ -270,6 +271,7 @@ async def retrieve(
     user_id: str | None = None,
     unlocked: list[UnlockedDocument] | None = None,
     recent_messages: list[dict[str, str]] | None = None,
+    use_hyde: bool = False,
 ) -> list[RetrievedChunk]:
     """Five of Stage 1.8's six expected spans live here — embed_query,
     vector_search, fts_search, rrf_fuse, rerank — one per real step in
@@ -295,7 +297,19 @@ async def retrieve(
     actually gets embedded/searched/reranked below; `_sealed_exact_matches`
     still matches against the caller's real, literal `query` — an
     exact-phrase check against sealed content shouldn't be run against a
-    paraphrase."""
+    paraphrase.
+
+    Stage 5.2 — `use_hyde`, off by default and not wired into
+    chat/stream.py (this stage's own exit criteria calls for an
+    A/B-able flag, not a silent default-on switch): when True, one more
+    cheap generation call writes a short hypothetical answer to
+    `effective_query` (see retrieve/hyde.py), and *that* — not the real
+    query — is what gets embedded for vector search specifically. FTS
+    and rerank still use `effective_query`: a hypothetical passage may
+    not contain the literal keywords the user typed, and rerank should
+    judge relevance against what was actually asked, not a guess at the
+    answer. A failed or empty hypothetical falls back to embedding
+    `effective_query` exactly as if `use_hyde` were False."""
     storage = get_retrieve_storage()
     embed_client = get_embed_client()
     rerank_client = get_rerank_client()
@@ -307,8 +321,12 @@ async def retrieve(
         else query
     )
 
+    hyde_text = await generate_hypothetical_answer(query=effective_query) if use_hyde else None
+
     with tracer.start_as_current_observation(
-        as_type="span", name="embed_query", input={"query": effective_query}
+        as_type="span",
+        name="embed_query",
+        input={"query": effective_query, "hyde": hyde_text is not None},
     ) as span:
         # Jina v5's retrieval is an asymmetric bi-encoder — the query side
         # and the indexed-passage side use different task-specific LoRA
@@ -317,7 +335,20 @@ async def retrieve(
         # a generic "explain the image" query embedded without this task
         # ranked a real, correctly-embedded image chunk 16th out of 27
         # total chunks in production — confirmed live, not assumed.
-        query_embedding = await embed_client.embed_text(effective_query, task="retrieval.query")
+        #
+        # Stage 5.2 — a HyDE hypothetical is embedded with
+        # "retrieval.passage" instead, not "retrieval.query": it's
+        # deliberately document-shaped text, meant to land near real
+        # indexed passages, so it goes through the same passage-side
+        # adapter those passages were embedded with (see hyde.py's
+        # module docstring for why this is the detail that makes HyDE
+        # actually work, not just a stylistic choice).
+        if hyde_text is not None:
+            query_embedding = await embed_client.embed_text(hyde_text, task="retrieval.passage")
+        else:
+            query_embedding = await embed_client.embed_text(
+                effective_query, task="retrieval.query"
+            )
         span.update(output={"dimensions": len(query_embedding)})
 
     # Vector search is scoped to documents embedded by the same provider
