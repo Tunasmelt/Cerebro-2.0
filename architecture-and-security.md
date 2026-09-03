@@ -300,20 +300,31 @@ Stage 2.2 read routes:
   404 (not empty list) when the document doesn't exist or isn't the
   caller's own, distinguished from "exists, zero chunks."
 
-### Graph rendering (detail, Stage 2.3)
+### Graph rendering (detail, Stage 2.3 — rewritten by the "3D graph rendering upgrade" pass, see phases-and-gates.md)
 
-`apps/web/src/app/graph/GraphCanvas.tsx` runs `d3-force` for physics
-only (headless — no DOM/SVG binding, which the library also offers) and
-draws every frame itself via native Canvas 2D. Same lean-dependency
-posture as Stage 2.1's hand-rolled k-means: a full graph-viz framework
-wasn't needed for force simulation + circles-and-lines rendering.
+`apps/web/src/app/graph/GraphCanvas.tsx` originally ran `d3-force` for
+physics (headless, no DOM/SVG binding) and drew every frame via native
+Canvas 2D. It was later fully rewritten to a real three.js/WebGL scene:
+`InstancedMesh` spheres for nodes (per-instance cluster color),
+`LineSegments` for edges (vertex-colored for hover/selection and, for
+the associative edge layer, weight-based brightness), `OrbitControls`
+for pan/zoom/rotate (damping on, no auto-rotate — this is real data
+being read, not `HeroGraph`'s decorative landing-page graph), and
+`Raycaster` picking against the node mesh, falling back to a
+screen-space nearest-neighbor search when the exact raycast misses a
+small node's hit-sphere. `d3-force` has no z-axis and its unofficial
+3D fork wasn't worth taking on as a dependency (same "hand-roll rather
+than add a dependency" posture as Stage 2.1's k-means), so a small
+hand-rolled 3D force loop replaces it: pairwise repulsion with a cutoff
+distance, a per-edge spring, centering, damping, and the same
+alpha-decay cooling `d3-force` itself relies on to ever settle.
 
-Node screen position comes from the server's cluster centroid
-(`x`/`y` from `GET /graph/nodes`, scaled up — PCA output sits in a
-small float range, not pixel space) as the simulation's *initial*
-position, not a fixed one — d3-force's charge/collision forces then
-organically spread out documents that share one cluster's exact
-centroid, rather than needing bespoke jitter logic for that case.
+Node position comes from the server's cluster centroid (`x`/`y`/`z`
+from `GET /graph/nodes` — `project_3d`, Stage 2.1's PCA extended from 2
+to 3 principal components) as the simulation's *initial* position, not
+a fixed one — the force loop's repulsion then organically spreads out
+documents that share one cluster's exact centroid, rather than needing
+bespoke jitter logic for that case.
 
 `/graph/perf-test` is a synthetic-data harness (no auth, no backend
 calls) mounting the same `GraphCanvas` component with 300 generated
@@ -331,8 +342,8 @@ is compared via `JSON.stringify` against the last-seen one in a ref
 (not state) before calling `setNodes`/`setEdges`, specifically so an
 unchanged tick doesn't hand `GraphCanvas` a new array reference — its
 simulation-rebuild effect keys on `[nodes, edges]` (see above), and a
-fresh reference every 5s would restart d3-force and visibly jitter an
-already-settled graph.
+fresh reference every 5s would restart the force simulation and
+visibly jitter an already-settled graph.
 
 ### Retrieval-replay (detail, Stage 2.4)
 
@@ -423,6 +434,41 @@ a successful embed — best-effort, logged and degraded to
 background task, same posture as `run_clustering_job`. No new route: a
 new upload naturally flows through the existing ingest background task.
 
+### Associative memory graph (detail, Stage 5.3/5.4)
+
+A second, independent edge layer alongside Stage 2.2's kNN edges — kNN
+is a *similarity* structure (recomputed whole-scale from centroid
+vectors on every recluster); `chunk_edges` is a *usage* structure
+("chunks that fire together wire together"), reinforced turn by turn
+from real chat activity rather than recomputed. Two sources land in the
+same table: retrieval co-occurrence (`reinforce_co_retrieval` —
+free, derived entirely from data `chat/stream.py` already computes:
+every real chat turn's final chunk set reinforces every pairwise
+combination in it) and explicit user-drawn links (`is_explicit=true`,
+never decayed). No decay column or scheduled job — decay is a pure
+function of `(weight, last_reinforced_at)` applied at *read* time
+(`decay_weight`, one-week half-life), not written back on a schedule,
+consistent with this project's no-background-worker constraint.
+
+`GET /graph/edges?include=associative` resolves every one of the
+caller's `chunk_edges` rows to their parent documents and aggregates
+same-pair chunk edges into one document-level edge
+(`aggregate_to_document_edges`); a pair whose two chunks share one
+document is dropped (not renderable — both ends would land on one
+node). Edges below `MIN_RENDERED_WEIGHT` (1.5× a single reinforcement)
+are filtered out before being returned — without this floor, a single
+chat turn against a small vault (`retrieve.py`'s `FINAL_TOP_K=5`) could
+already touch half the graph, and every pairwise combination among
+those five chunks became a permanent, fully-opaque edge from one
+question alone. The filter runs against the already-decayed weight at
+read time, so it self-heals any existing over-connected graph on
+deploy — no migration needed.
+
+Sealed content can never appear in `chunk_edges` by construction, not
+by an added filter: sealing (Stage 3.3) deletes a document's `chunks`
+rows entirely, so the foreign keys on `chunk_edges` would reject an
+insert against a chunk id that no longer exists.
+
 ---
 
 ## 2. Data model
@@ -468,7 +514,7 @@ unlock_claims (                 -- Stage 3.3 — a plain DB row, not a
                                  -- own clock, never the client's.
 
 clusters (
-  id, user_id, label, centroid_x, centroid_y,
+  id, user_id, label, centroid_x, centroid_y, centroid_z,  -- z: 3D upgrade
   method, computed_at,
   centroid_embedding halfvec(1024)  -- Stage 2.5, nullable (predates migration)
 )
@@ -478,6 +524,41 @@ document_clusters (
 )
 document_edges (                -- Stage 2.2, undocumented before this
   document_id, neighbor_document_id, distance, rank  -- rank 1..3
+)
+
+chunk_edges (                   -- Stage 5.3 — associative memory graph,
+  id, user_id,                  -- distinct from document_edges above
+  source_chunk_id, target_chunk_id,  -- (a similarity structure vs. this
+  weight, co_retrieval_count,   -- one, a usage structure). Undirected —
+  is_explicit,                  -- source/target always stored in
+  last_reinforced_at,           -- canonical (smaller, larger) chunk-id
+  created_at                    -- order — and unique(user_id,
+)                                -- source_chunk_id, target_chunk_id)
+                                 -- is what actually enforces "one row
+                                 -- per pair," not app discipline alone.
+
+boards (                        -- Phase 4 — kanban
+  id, user_id, title,
+  columns jsonb                 -- ordered column names, app-owned, not
+)                                -- a security boundary (see cards below)
+
+cards (
+  id, board_id, user_id,
+  document_id,                  -- optional reference chip, on delete
+                                 -- set null — deleting a document never
+                                 -- deletes someone's card
+  column_name,                  -- plain text, matched against
+                                 -- boards.columns app-side
+  title, description,
+  position double precision     -- float so a drop between two cards is
+)                                -- one averaging PATCH, never a
+                                 -- column-wide renumber
+
+todos (
+  id, user_id,
+  document_id,                  -- optional reference chip, same
+                                 -- on delete set null as cards
+  title, completed, completed_at
 )
 
 ingest_jobs (

@@ -1,8 +1,9 @@
 # CLAUDE.md — Cerebro 2.0
 
 Context for any Claude session (chat, Code, or an agent) working in this
-repo. Read this before touching code. Companion docs: `docs/phases-and-gates.md`,
-`docs/architecture-and-security.md`, `docs/api-documentation.md`.
+repo. Read this before touching code. Companion docs: `phases-and-gates.md`,
+`architecture-and-security.md`, `api-documentation.md` (repo root —
+`docs/` holds only screenshots).
 
 ## What this is
 

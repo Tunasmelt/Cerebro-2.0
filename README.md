@@ -45,11 +45,28 @@ node behind them pulsed live when the answer streamed in:
 - **Provider fallback** — a document's embedding job locks onto one
   provider (Jina → Voyage → Cohere) for its whole life, so vector
   search never compares across incompatible embedding spaces.
+- **Associative memory graph** — chunks that actually get retrieved
+  together reinforce a persistent edge between their documents ("fire
+  together, wire together"), decaying over time unless reinforced
+  again; rendered as a second edge layer distinct from the graph's
+  similarity-based kNN edges.
+- **RAG quality pass** — query rewriting and HyDE (hypothetical
+  document embeddings) sit ahead of retrieval, tried against a stored
+  regression set before landing.
+- **Kanban, tasks, and an editable prompt playground** — a lightweight
+  board and todo list (optionally chip-referencing a document), plus a
+  playground that shows the real assembled prompt for a past turn,
+  editable and re-runnable against the real model, not a simulation.
+- **Chat management** — every conversation gets its own page: reopen,
+  delete, or export a past conversation to Markdown, citation chips
+  intact.
 
 ## Tech stack
 
-**Frontend** — Next.js 15 (App Router, Turbopack), React 19, native
-Canvas 2D + d3-force for the graph, deployed on Vercel.
+**Frontend** — Next.js 15 (App Router, Turbopack), React 19, a
+hand-rolled 3D force layout rendered with three.js/WebGL (`InstancedMesh`
+nodes, `OrbitControls`, real click-to-select raycasting) for the graph,
+deployed on Vercel.
 
 **Backend** — FastAPI on Render's free tier (512MB RAM, single
 instance), which is what actually shapes a lot of the architecture:
@@ -78,11 +95,19 @@ the way.
 - ✅ **Phase 1** — Multimodal RAG core (upload, ingest, hybrid
   retrieval, chat, observability)
 - ✅ **Phase 2** — Brain graph (clustering, live rendering,
-  retrieval-replay animation)
+  retrieval-replay animation, later upgraded to a real 3D three.js
+  scene)
 - ✅ **Phase 3** — Sealed tier (schema isolation, client-side crypto,
   seal/unlock API, metadata-only search filtering, adversarial
   security testing, document lifecycle)
-- ⏳ **Phase 4** — Kanban, todo, token playground (not started)
+- ✅ **Phase 4** — Kanban, todo, editable token playground, plus a full
+  UI design pass (app shell, landing page, settings)
+- 🔄 **Phase 5** — RAG quality (query rewriting, HyDE) and an
+  associative memory graph, both shipped; ongoing production
+  hardening (chat management, sealed-document unlock UI, a live
+  memory-leak fix, and assorted correctness/UX fixes) continues under
+  this phase
+- ⏳ **Phase 6** — Portability: full data export (not started)
 
 ## Documentation
 
