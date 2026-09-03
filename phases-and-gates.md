@@ -1315,7 +1315,7 @@ end-to-end test through `stream_chat` proving the full plumbing —
 `rewrite_query` → the real embed client) — 357/357 backend tests
 passing, `ruff` clean on every file this stage touched.
 
-### Stage 5.2 — HyDE (Hypothetical Document Embeddings)
+### Stage 5.2 — HyDE (Hypothetical Document Embeddings) ✅
 **Exit criteria:** `retrieve()` gains an optional path that generates a
 short hypothetical answer to the query and embeds that instead of (or
 blended with) the raw query for vector search — answer-shaped text
@@ -1327,6 +1327,41 @@ re-run with HyDE enabled must still pass — this must never regress the
 existing retrieval quality bar. A query with weak direct-embedding
 overlap but strong hypothetical-answer overlap demonstrates HyDE
 recovering a result direct retrieval alone misses.
+**Done:** `services/api/app/retrieve/hyde.py` (new) —
+`generate_hypothetical_answer` reuses the same non-streaming
+`run_interaction` entry point Stage 4.5/4.6/5.1 already call, same
+broad-exception-plus-empty-output fallback contract as Stage 5.1's
+`rewrite_query`. `retrieve()` gained an optional `use_hyde` param,
+**off by default and not wired into `chat/stream.py`** — this stage's
+exit criteria explicitly calls for a flag "so it can be A/B'd against
+direct retrieval rather than replacing it outright," not a silent
+default-on switch, so no caller anywhere turns it on yet; it exists for
+a future experiment to flip. When enabled, the hypothetical passage
+(not the real query) is embedded for vector search only, and
+deliberately with `task="retrieval.passage"` rather than
+`"retrieval.query"` — the hypothetical is document-shaped text meant to
+land near real indexed passages, so it goes through the same
+passage-side adapter those passages were embedded with; using the
+query-side adapter here would have undermined the whole technique at
+the embedding level, not just missed a style point. FTS and rerank
+still see the real (possibly Stage 5.1-rewritten) query, never the
+hypothetical — a generated passage may not contain the literal keywords
+the user typed, and rerank should judge relevance against what was
+actually asked. No new Langfuse span added (same reasoning as Stage
+5.1: Stage 1.8's six-span shape is a regression-tested fixed contract);
+the existing `embed_query` span's input gained a `hyde: bool` field
+instead, cheap and additive. 9 new backend tests — `generate_hypothetical_answer`
+unit tests (success, `GenerateError`, unexpected exception, empty
+output), `retrieve()` wiring tests (hyde-embedded-as-passage, off-by-default
+unchanged shape, fallback-to-real-query-on-failure), Stage 1.5's own
+fixture re-run with `use_hyde=True` (this stage's own required
+regression check), and a dedicated fake-vector-space test proving HyDE
+recovers a chunk that a direct query embedding alone doesn't reach
+(same "controlled fake, not a real embedding space" honesty Stage 1.5's
+own test file already established — real semantic quality is a live
+question, not a unit-test one) — 366/366 backend tests passing, `ruff`
+clean on every file this stage touched. Stage 1.5/1.8's own existing
+tests re-confirmed unaffected.
 
 ### Stage 5.3 — Associative memory graph (persistent edges) ✅
 **Exit criteria:** A new `chunk_edges` table (`source_chunk_id`,
