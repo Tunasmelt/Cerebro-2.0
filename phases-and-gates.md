@@ -2692,16 +2692,51 @@ timeout; recovers from a non-2xx response; gives up after the retry
 budget on a persistent failure. Full suite: 490/490 passing, ruff
 clean.
 
-### Stage 7.13 — Explicit generation config
+### Stage 7.13 — Explicit generation config ✅
 **Exit criteria:** No `temperature`, `max_output_tokens`, `top_p`/
 `top_k`, or safety-settings are set anywhere in the Gemini call
 (`generate.py`) — everything relies on platform defaults, which can
 change or vary without this codebase's knowledge. Set these explicitly
 and deliberately based on what this product actually wants (grounded,
 citation-heavy answers, not creative-writing variance).
-**Tests:** Generation config values are asserted directly in the
-request payload sent to Gemini (fake-transport test, this repo's
-established pattern), not just implied by behavior.
+**Done:** Confirmed live against the current Interactions API
+reference before touching anything (per CLAUDE.md's `/api-check`
+discipline, not assumed from the older generateContent shape or from
+training data): **`temperature`, `top_p`, and `top_k` don't exist
+anywhere in this API at all** — a real finding, not an oversight this
+stage could just "add." The endpoint's `generation_config` only
+exposes `max_output_tokens`, `seed`, `stop_sequences`, `thinking_
+level`, `thinking_summaries`, `tool_choice`, and modality-specific
+configs. So what actually got set explicitly: `GEMINI_MAX_OUTPUT_
+TOKENS=2048` (a real ceiling now, not implicitly unbounded) and
+`GEMINI_SAFETY_SETTINGS` — the four standard harm categories (hate
+speech, sexually explicit, dangerous content, harassment) all set to
+`BLOCK_ONLY_HIGH`, deliberately looser than the platform default: a
+personal vault answers grounded in the user's *own* uploaded
+documents, which can legitimately contain sensitive-sounding-but-
+benign content (medical records, legal filings, security research) a
+default/stricter threshold risks false-positive blocking — full
+immunity would defeat the point of having safety settings at all, so
+`BLOCK_ONLY_HIGH` rather than `BLOCK_NONE`. "Grounded, not creative-
+writing variance" is therefore achieved the only way this API actually
+allows: prompt design (`SYSTEM_PROMPT_HEADER`), not a sampling
+parameter that doesn't exist. `thinking_level` and the other unused
+`generation_config` fields were deliberately left unset — `thinking_
+level` is exactly what made gemini-3.7-flash unusably slow even at
+"low" (this module's own model-choice history), and there's zero
+live-tested data on how gemini-3.5-flash-lite's own default behaves
+under an explicit override; guessing without a real timed call to
+confirm against would risk silently reintroducing that same latency
+regression. Applied uniformly to both `stream_text` (live chat) and
+`run_interaction` (HyDE/rewrite/captioning/tool calls).
+**Tests:** New `test_stage_7_13_generation_config.py`, 4 tests — a
+real fake-httpx-transport test (this repo's established pattern)
+asserts the exact `generation_config`/`safety_settings` values in the
+request body sent by both `stream_text` and `run_interaction`; a
+direct test on `GEMINI_SAFETY_SETTINGS`' four categories and threshold;
+a regression guard asserting `GENERATION_CONFIG` never silently grows
+`temperature`/`top_p`/`top_k` keys the live API doesn't accept. Full
+suite: 494/494 passing, ruff clean.
 
 ### Stage 7.14 — Clear partial-answer state on mid-stream error
 **Exit criteria:** If generation fails partway through today, whatever
