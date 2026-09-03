@@ -6,7 +6,6 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
 import { parseAnswerSegments, stripCitationMarkers } from "@/lib/graph/citations";
-import { clusterColor } from "@/lib/graph/clusterColor";
 import { parseSSEStream } from "@/lib/graph/sse";
 import type {
   AssociativeEdge,
@@ -111,11 +110,17 @@ function GraphPageInner() {
       }
       setSelectedNodeId(nodeId);
       setSatellites([]);
+      // A sealed document's chunks were deleted from `chunks` when it
+      // was sealed (Stage 3.3) — fetching would just come back empty,
+      // so skip the request and let the panel show the sealed state
+      // directly instead of a confusing "No chunks yet."
+      const node = nodes.find((n) => n.id === nodeId);
+      if (node?.status === "sealed") return;
       authedFetch(`/api/graph/nodes/${nodeId}/chunks`)
         .then((res) => res.json())
         .then((body) => setSatellites(body.chunks ?? []));
     },
-    [selectedNodeId]
+    [selectedNodeId, nodes]
   );
 
   // A cross-page link (e.g. /chat's citation chips) lands here with
@@ -142,9 +147,7 @@ function GraphPageInner() {
     return body.id;
   }
 
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = query.trim();
+  async function sendQuery(trimmed: string) {
     if (!trimmed || streaming) return;
 
     setChatError(null);
@@ -188,6 +191,22 @@ function GraphPageInner() {
     } finally {
       setStreaming(false);
     }
+  }
+
+  function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    sendQuery(query.trim());
+  }
+
+  // "Chat about this" — the side panel's chunk previews are a raw peek
+  // at what got stored, not an actual answer; this runs the node's
+  // title through the exact same real retrieval+generation path typing
+  // a question does (sendQuery), it's just a pre-filled question rather
+  // than user-typed text.
+  function handleChatAboutNode(node: GraphNode) {
+    setSelectedNodeId(null);
+    setSatellites([]);
+    sendQuery(`Tell me about "${node.title}".`);
   }
 
   async function openSessionList() {
@@ -288,26 +307,60 @@ function GraphPageInner() {
             ×
           </button>
           <h2 className={styles.sidePanelTitle}>{selectedNode.title}</h2>
-          {satellites.length === 0 && (
-            <p className={styles.chunkItem}>No chunks yet.</p>
-          )}
-          {satellites.map((chunk) => (
-            <p key={chunk.id} className={styles.chunkItem}>
-              {chunk.content.length > 220
-                ? `${chunk.content.slice(0, 220)}…`
-                : chunk.content}
+          <div className={styles.sidePanelMeta}>
+            <span className={styles.metaBadge}>
+              {selectedNode.mime?.startsWith("image/") ? "Image" : "Document"}
+            </span>
+            {selectedNode.status === "sealed" && (
+              <span className={`${styles.metaBadge} ${styles.metaBadgeSealed}`}>Sealed</span>
+            )}
+          </div>
+          <div className={styles.sidePanelActions}>
+            <button
+              className={styles.sidePanelActionBtn}
+              disabled={streaming}
+              onClick={() => handleChatAboutNode(selectedNode)}
+            >
+              Chat about this
+            </button>
+            <button
+              className={styles.sidePanelActionBtn}
+              onClick={() => router.push("/documents")}
+            >
+              Open in Documents
+            </button>
+          </div>
+          {selectedNode.status === "sealed" ? (
+            <p className={styles.chunkItem}>
+              This document is sealed — its content is hidden until you unlock it from
+              Documents.
             </p>
-          ))}
+          ) : (
+            <>
+              {satellites.length === 0 && (
+                <p className={styles.chunkItem}>No chunks yet.</p>
+              )}
+              {satellites.map((chunk) => (
+                <p key={chunk.id} className={styles.chunkItem}>
+                  {chunk.content.length > 220
+                    ? `${chunk.content.slice(0, 220)}…`
+                    : chunk.content}
+                </p>
+              ))}
+            </>
+          )}
         </div>
       )}
 
       {legendOpen && (
         <div className={styles.legend}>
-          <div>node color = cluster</div>
+          <div>node color = type</div>
           <div style={{ marginTop: 4 }}>
-            <span style={{ color: clusterColor("x") }}>●</span> clustered
+            <span style={{ color: "#8b5cf6" }}>●</span> document
             {"  "}
-            <span style={{ color: clusterColor(null) }}>●</span> not yet clustered
+            <span style={{ color: "#2dd4bf" }}>●</span> image
+            {"  "}
+            <span style={{ color: "#f59e0b" }}>●</span> sealed
           </div>
           <button
             onClick={() => setLegendOpen(false)}

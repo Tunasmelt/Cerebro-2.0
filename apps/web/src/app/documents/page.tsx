@@ -85,6 +85,12 @@ export default function DocumentsPage() {
   const [sealing, setSealing] = useState(false);
   const [sealError, setSealError] = useState<string | null>(null);
 
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
+
   const fetchDocuments = useCallback(async () => {
     const res = await authedFetch("/api/documents");
     if (!res.ok) return;
@@ -192,6 +198,61 @@ export default function DocumentsPage() {
 
   function dismissUpload(key: string) {
     setUploads((prev) => prev.filter((u) => u.key !== key));
+  }
+
+  async function handleView(doc: DocumentRow) {
+    setViewingId(doc.id);
+    try {
+      const res = await authedFetch(`/api/documents/${doc.id}/download`);
+      const body = await res.json();
+      if (!res.ok) {
+        alert(body?.error?.message || "Could not open this document");
+        return;
+      }
+      window.open(body.url, "_blank", "noopener,noreferrer");
+    } finally {
+      setViewingId(null);
+    }
+  }
+
+  async function handleDelete(doc: DocumentRow) {
+    if (!window.confirm(`Delete "${doc.title}"? This can't be undone.`)) return;
+    setDeletingId(doc.id);
+    try {
+      await authedFetch(`/api/documents/${doc.id}`, { method: "DELETE" });
+      setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  function startRename(doc: DocumentRow) {
+    setRenamingId(doc.id);
+    setRenameValue(doc.title);
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameValue("");
+  }
+
+  async function handleRenameSave(documentId: string) {
+    const title = renameValue.trim();
+    if (!title) return;
+    setRenameSaving(true);
+    try {
+      const res = await authedFetch(`/api/documents/${documentId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (res.ok) {
+        setDocuments((prev) => prev.map((d) => (d.id === documentId ? { ...d, title } : d)));
+        setRenamingId(null);
+      }
+    } finally {
+      setRenameSaving(false);
+    }
   }
 
   async function handleExtractActionItems(documentId: string) {
@@ -397,7 +458,48 @@ export default function DocumentsPage() {
                   <td>
                     <div className={styles.titleCell}>
                       <div className={styles.typeIcon}>{typeLabel(doc.mime)}</div>
-                      {doc.title}
+                      {renamingId === doc.id ? (
+                        <>
+                          <input
+                            autoFocus
+                            className={styles.titleInput}
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleRenameSave(doc.id);
+                              if (e.key === "Escape") cancelRename();
+                            }}
+                            disabled={renameSaving}
+                          />
+                          <button
+                            className={styles.titleEditBtn}
+                            title="Save"
+                            disabled={renameSaving || !renameValue.trim()}
+                            onClick={() => handleRenameSave(doc.id)}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            className={styles.titleEditBtn}
+                            title="Cancel"
+                            disabled={renameSaving}
+                            onClick={cancelRename}
+                          >
+                            ×
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className={styles.titleText}>{doc.title}</span>
+                          <button
+                            className={styles.titleEditBtn}
+                            title="Rename"
+                            onClick={() => startRename(doc)}
+                          >
+                            ✎
+                          </button>
+                        </>
+                      )}
                     </div>
                   </td>
                   <td className={styles.monoCell}>{formatSize(doc.size_bytes)}</td>
@@ -431,9 +533,26 @@ export default function DocumentsPage() {
                         </button>{" "}
                         <button className={styles.retryBtn} onClick={() => openSealPrompt(doc.id)}>
                           Seal
-                        </button>
+                        </button>{" "}
                       </>
                     )}
+                    {doc.status !== "sealed" && (
+                      <button
+                        className={styles.retryBtn}
+                        disabled={viewingId === doc.id}
+                        onClick={() => handleView(doc)}
+                        title="Open the file in a new tab"
+                      >
+                        {viewingId === doc.id ? "Opening…" : "View"}
+                      </button>
+                    )}{" "}
+                    <button
+                      className={`${styles.retryBtn} ${styles.dangerBtn}`}
+                      disabled={deletingId === doc.id}
+                      onClick={() => handleDelete(doc)}
+                    >
+                      {deletingId === doc.id ? "Deleting…" : "Delete"}
+                    </button>
                   </td>
                 </tr>
                 {sealPromptFor === doc.id && (

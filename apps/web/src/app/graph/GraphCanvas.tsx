@@ -3,7 +3,6 @@
 import { useEffect, useRef } from "react";
 import type * as THREE_NS from "three";
 
-import { clusterColor } from "@/lib/graph/clusterColor";
 import type { AssociativeEdge, ChunkSatellite, GraphEdge, GraphNode } from "@/lib/graph/types";
 
 // 3D brain graph rendering upgrade. Was a flat Canvas2D scene driven by
@@ -78,9 +77,29 @@ const MAX_RADIUS = 3.2; // stays comfortably inside the camera frustum
 // comment above.
 const COLLIDE_DISTANCE = NODE_RADIUS * 2.4;
 
+// Node type/sealed coloring pass — a document's node used to be colored
+// solely by cluster_id (a real signal, but not one a document/image/
+// sealed distinction was ever visible through). Sealed always wins
+// regardless of type — matching --accent-locked (colors.css) so it
+// reads the same "locked" amber as every other sealed indicator in the
+// app (the Documents table badge, the Settings lock icon). Document
+// stays the existing brand violet; image gets a distinct teal so the
+// two read apart from across the room, not just on hover.
+const SEALED_COLOR = "#f59e0b";
+const IMAGE_COLOR = "#2dd4bf";
+const DOCUMENT_COLOR = "#8b5cf6";
+
+function nodeBaseColor(status: string | null | undefined, mime: string | null | undefined): string {
+  if (status === "sealed") return SEALED_COLOR;
+  if (mime?.startsWith("image/")) return IMAGE_COLOR;
+  return DOCUMENT_COLOR;
+}
+
 type SimNode = {
   id: string;
   cluster_id: string | null;
+  mime: string | null | undefined;
+  status: string | null | undefined;
   x: number;
   y: number;
   z: number;
@@ -196,6 +215,8 @@ export default function GraphCanvas({
     simNodesRef.current = nodes.map((n) => ({
       id: n.id,
       cluster_id: n.cluster_id,
+      mime: n.mime,
+      status: n.status,
       x: n.x != null ? n.x * POSITION_SCALE : (Math.random() - 0.5) * 2,
       y: n.y != null ? n.y * POSITION_SCALE : (Math.random() - 0.5) * 2,
       z: n.z != null ? n.z * POSITION_SCALE : (Math.random() - 0.5) * 2,
@@ -449,7 +470,7 @@ export default function GraphCanvas({
           dummy.updateMatrix();
           nodeMesh.setMatrixAt(i, dummy.matrix);
 
-          const baseColor = clusterColor(sn.cluster_id);
+          const baseColor = nodeBaseColor(sn.status, sn.mime);
           tmpColor.set(baseColor);
           if (isPulsing) {
             tmpColor.lerp(new THREE.Color(0xffffff), 0.5 + 0.5 * pulseIntensity);

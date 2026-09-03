@@ -46,8 +46,10 @@ class _FakeDocumentsStorage:
         self.signed_url_to_return: str | None = None
         self.signed_url_error: DocumentsStorageError | None = None
         self.delete_result: bool = True
+        self.rename_result: bool = True
         self.signed_url_calls: list[tuple[str, str]] = []
         self.delete_calls: list[str] = []
+        self.rename_calls: list[tuple[str, str]] = []
 
     async def list_documents(self, *, user_jwt, user_id):
         return []
@@ -64,6 +66,10 @@ class _FakeDocumentsStorage:
     async def delete_document(self, *, user_jwt, document_id):
         self.delete_calls.append(document_id)
         return self.delete_result
+
+    async def rename_document(self, *, user_jwt, document_id, title):
+        self.rename_calls.append((document_id, title))
+        return self.rename_result
 
 
 @pytest.fixture
@@ -258,4 +264,72 @@ def test_sealed_document_can_still_be_deleted(client, keypair):
     storage_module.set_documents_storage(fake)
 
     response = client.delete("/api/v1/documents/doc-1", headers=auth_headers(private_key))
+    assert response.status_code == 200
+
+
+# --- PATCH /documents/{id} (rename) -------------------------------------------
+
+
+def test_rename_document_succeeds(client, keypair):
+    private_key, _ = keypair
+    fake = _FakeDocumentsStorage()
+    fake.rename_result = True
+    storage_module.set_documents_storage(fake)
+
+    response = client.patch(
+        "/api/v1/documents/doc-1",
+        headers=auth_headers(private_key),
+        json={"title": "Renamed"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": "doc-1", "title": "Renamed"}
+    assert fake.rename_calls == [("doc-1", "Renamed")]
+
+
+def test_rename_document_not_found_returns_404(client, keypair):
+    private_key, _ = keypair
+    fake = _FakeDocumentsStorage()
+    fake.rename_result = False
+    storage_module.set_documents_storage(fake)
+
+    response = client.patch(
+        "/api/v1/documents/doc-missing",
+        headers=auth_headers(private_key),
+        json={"title": "Renamed"},
+    )
+    assert response.status_code == 404
+
+
+def test_rename_document_rejects_empty_title(client, keypair):
+    private_key, _ = keypair
+    fake = _FakeDocumentsStorage()
+    storage_module.set_documents_storage(fake)
+
+    response = client.patch(
+        "/api/v1/documents/doc-1",
+        headers=auth_headers(private_key),
+        json={"title": "   "},
+    )
+    assert response.status_code == 422
+    assert fake.rename_calls == []
+
+
+def test_rename_document_requires_auth(client):
+    storage_module.set_documents_storage(_FakeDocumentsStorage())
+    response = client.patch("/api/v1/documents/doc-1", json={"title": "Renamed"})
+    assert response.status_code == 401
+
+
+def test_sealed_document_can_still_be_renamed(client, keypair):
+    private_key, _ = keypair
+    fake = _FakeDocumentsStorage()
+    fake.rename_result = True  # storage doesn't special-case sealed docs for rename
+    storage_module.set_documents_storage(fake)
+
+    response = client.patch(
+        "/api/v1/documents/doc-1",
+        headers=auth_headers(private_key),
+        json={"title": "Renamed"},
+    )
     assert response.status_code == 200
