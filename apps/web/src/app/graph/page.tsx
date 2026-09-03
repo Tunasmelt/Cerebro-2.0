@@ -55,6 +55,14 @@ function GraphPageInner() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [replaying, setReplaying] = useState(false);
+  // Distinguishes "still loading the first poll" from "genuinely no
+  // documents yet" — without this the empty-state CTA flashed on every
+  // load, even for accounts with plenty of documents, until the first
+  // fetch resolved.
+  const [loadingGraph, setLoadingGraph] = useState(true);
+  const sessionsPanelRef = useRef<HTMLDivElement | null>(null);
+  const sessionsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
 
   // Refs, not state, for the last-seen payloads — comparing here avoids
   // handing GraphCanvas a new array reference (which restarts its
@@ -90,10 +98,55 @@ function GraphPageInner() {
 
   useEffect(() => {
     if (checking) return;
-    fetchGraph();
+    fetchGraph().finally(() => setLoadingGraph(false));
     const interval = setInterval(fetchGraph, GRAPH_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [checking, fetchGraph]);
+
+  // Escape closes whichever overlay is open, most-recently-opened
+  // first — sessions panel sits "on top of" the side panel visually,
+  // so it should be the first thing Escape dismisses. "/" focuses the
+  // chat input from anywhere on the page (skipped while already typing
+  // in a field, so it doesn't hijack a literal "/" character).
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (sessionsOpen) {
+          setSessionsOpen(false);
+        } else if (selectedNodeId) {
+          setSelectedNodeId(null);
+          setSatellites([]);
+        }
+        return;
+      }
+      if (e.key === "/") {
+        const target = e.target as HTMLElement;
+        const isTyping =
+          target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+        if (isTyping) return;
+        e.preventDefault();
+        chatInputRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [sessionsOpen, selectedNodeId]);
+
+  // Click-outside closes the sessions panel, same as any dropdown.
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    function handlePointerDown(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        !sessionsPanelRef.current?.contains(target) &&
+        !sessionsButtonRef.current?.contains(target)
+      ) {
+        setSessionsOpen(false);
+      }
+    }
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [sessionsOpen]);
 
   const handleNodeClick = useCallback(
     (nodeId: string | null) => {
@@ -285,13 +338,19 @@ function GraphPageInner() {
         Documents
       </span>
 
-      {nodes.length === 0 && (
+      {loadingGraph ? (
         <div className={styles.emptyState}>
-          <p style={{ margin: 0 }}>Your graph will start forming as soon as it lands.</p>
-          <button className={styles.emptyStateCta} onClick={() => router.push("/documents")}>
-            Upload your first document
-          </button>
+          <p style={{ margin: 0 }}>Loading your graph…</p>
         </div>
+      ) : (
+        nodes.length === 0 && (
+          <div className={styles.emptyState}>
+            <p style={{ margin: 0 }}>Your graph will start forming as soon as it lands.</p>
+            <button className={styles.emptyStateCta} onClick={() => router.push("/documents")}>
+              Upload your first document
+            </button>
+          </div>
+        )
       )}
 
       {selectedNode && (
@@ -386,6 +445,7 @@ function GraphPageInner() {
         )}
         <form className={styles.chatForm} onSubmit={handleSend}>
           <button
+            ref={sessionsButtonRef}
             type="button"
             className={styles.sessionsButton}
             onClick={openSessionList}
@@ -395,10 +455,11 @@ function GraphPageInner() {
             {replaying ? "replaying…" : "history"}
           </button>
           <input
+            ref={chatInputRef}
             className={styles.chatInput}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Ask about your documents…"
+            placeholder="Ask about your documents… (/ to focus)"
             disabled={streaming}
           />
           <button type="submit" className={styles.chatSend} disabled={streaming}>
@@ -407,7 +468,7 @@ function GraphPageInner() {
         </form>
 
         {sessionsOpen && (
-          <div className={styles.sessionsPanel}>
+          <div ref={sessionsPanelRef} className={styles.sessionsPanel}>
             {sessions.length === 0 && (
               <p className={styles.chunkItem}>No past conversations yet.</p>
             )}

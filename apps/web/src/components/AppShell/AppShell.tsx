@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import Logo from "@/components/Logo";
 import QuickCapture from "@/components/QuickCapture";
@@ -113,17 +113,23 @@ export default function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  // Collapsed state persists across reloads via localStorage — starts
-  // false (matches SSR markup, avoids a hydration mismatch) and syncs
-  // to the stored value on mount.
-  const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => {
+  // Collapsed state persists across reloads via localStorage. Every
+  // page mounts its own <AppShell> (there's no shared layout), so a
+  // client-side nav between pages unmounts and remounts this component
+  // — reading the stored value lazily in useState (rather than in a
+  // post-mount useEffect) means that remount picks up the right state
+  // on its very first render instead of flashing expanded-then-collapsed
+  // each time. Safe against hydration mismatches because every caller
+  // gates AppShell behind `if (checking) return null`, so this only
+  // ever mounts client-side, never during SSR.
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
     try {
-      setCollapsed(localStorage.getItem("cerebro:sidebar-collapsed") === "1");
+      return localStorage.getItem("cerebro:sidebar-collapsed") === "1";
     } catch {
-      // storage unavailable (private browsing, etc.) — keep default
+      return false;
     }
-  }, []);
+  });
   function toggleCollapsed() {
     setCollapsed((c) => {
       const next = !c;
@@ -136,6 +142,26 @@ export default function AppShell({
     });
   }
   const [menuOpen, setMenuOpen] = useState(false);
+  const avatarRef = useRef<HTMLDivElement | null>(null);
+  // Every other dropdown-style overlay in this app (the graph page's
+  // sessions panel, both ConfirmModal-based prompts) closes on Escape
+  // and an outside click — the avatar menu is the one place that
+  // never did, on every single page since it lives in the shared shell.
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    function handlePointerDown(e: MouseEvent) {
+      if (!avatarRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [menuOpen]);
   // Sidebar is a fixed off-canvas drawer below the mobile breakpoint
   // (see AppShell.module.css's @media block) — closed by default so a
   // phone load doesn't open with the nav covering the page, opened via
@@ -226,7 +252,7 @@ export default function AppShell({
           </button>
           <div className={styles.topbarRight}>
             <QuickCapture />
-            <div className={styles.avatar} onClick={() => setMenuOpen((o) => !o)}>
+            <div className={styles.avatar} ref={avatarRef} onClick={() => setMenuOpen((o) => !o)}>
               {avatarUrl && !avatarImgFailed ? (
                 // eslint-disable-next-line @next/next/no-img-element -- user-pasted external URL, not a local/optimizable asset.
                 <img

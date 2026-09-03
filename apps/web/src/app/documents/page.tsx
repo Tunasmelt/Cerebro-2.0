@@ -166,11 +166,28 @@ export default function DocumentsPage() {
   const [renameValue, setRenameValue] = useState("");
   const [renameSaving, setRenameSaving] = useState(false);
 
+  // Distinguishes "still loading" and "failed to load" from "genuinely
+  // no documents yet" — without these the table silently showed the
+  // upload-a-document empty state both while loading and when a fetch
+  // actually failed, with no way to tell the difference or retry.
+  const [loadingDocuments, setLoadingDocuments] = useState(true);
+  const [documentsLoadError, setDocumentsLoadError] = useState(false);
+
   const fetchDocuments = useCallback(async () => {
-    const res = await authedFetch("/api/documents");
-    if (!res.ok) return;
-    const body = await res.json();
-    setDocuments(body.documents ?? []);
+    try {
+      const res = await authedFetch("/api/documents");
+      if (!res.ok) {
+        setDocumentsLoadError(true);
+        return;
+      }
+      const body = await res.json();
+      setDocuments(body.documents ?? []);
+      setDocumentsLoadError(false);
+    } catch {
+      setDocumentsLoadError(true);
+    } finally {
+      setLoadingDocuments(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -639,12 +656,29 @@ export default function DocumentsPage() {
             </tr>
           </thead>
           <tbody>
-            {documents.length === 0 && (
+            {loadingDocuments ? (
               <tr>
                 <td colSpan={5} className={styles.emptyRow}>
-                  No documents yet — drag one in above.
+                  Loading documents…
                 </td>
               </tr>
+            ) : documentsLoadError ? (
+              <tr>
+                <td colSpan={5} className={styles.emptyRow}>
+                  Couldn&apos;t load your documents.{" "}
+                  <button className={styles.retryBtn} onClick={() => fetchDocuments()}>
+                    Retry
+                  </button>
+                </td>
+              </tr>
+            ) : (
+              documents.length === 0 && (
+                <tr>
+                  <td colSpan={5} className={styles.emptyRow}>
+                    No documents yet — drag one in above.
+                  </td>
+                </tr>
+              )
             )}
             {documents.map((doc, i) => (
               <Fragment key={doc.id}>

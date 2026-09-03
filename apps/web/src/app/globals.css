@@ -31,6 +31,18 @@ a {
   text-decoration: none;
 }
 
+/* Keyboard-only focus ring, app-wide. Nothing here overrode the
+   browser default before this — on the near-black surfaces used
+   everywhere in this app that showed up as a jarring, undesigned blue
+   box rather than a themed indicator. :focus-visible (not :focus)
+   keeps this keyboard-only — a mouse click never triggers it, so it
+   doesn't add a ring to every button press. */
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 html {
   color-scheme: dark;
 }
