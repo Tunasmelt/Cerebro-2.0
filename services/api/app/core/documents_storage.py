@@ -26,12 +26,24 @@ fast-feedback only (a doomed upload shouldn't get as far as a signed URL).
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 import httpx
 from fastapi import HTTPException
 
 from app.core.http_client import CachedHttpClientMixin
+
+UPLOAD_STALL_EXPIRY_SECONDS = 60 * 60  # 1 hour — Stage 7.5. A job stuck
+# at ingest_jobs.state='uploading' this long means authorize() issued a
+# signed URL and the browser never called upload-confirm (tab closed,
+# network died, upload abandoned) — nothing will ever advance it on its
+# own. Generous relative to a direct-to-storage PUT of up to 50MB, but
+# bounded, so a permanently stuck row doesn't sit forever. Swept lazily
+# the next time list_documents runs for that user, not by a separate
+# worker process — CLAUDE.md: background work outside the request
+# cycle isn't covered by Render's free tier, so the ingest pipeline
+# (and now this cleanup) stays request-triggered and in-process.
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 52,428,800 bytes — Supabase Free
 # plan's hard global ceiling, binary MiB not decimal MB, empirically
@@ -101,6 +113,8 @@ class DocumentsStorage(Protocol):
     async def list_documents(
         self, *, user_jwt: str, user_id: str
     ) -> list[dict[str, Any]]: ...
+
+    async def sweep_stalled_uploads(self, *, user_jwt: str, user_id: str) -> None: ...
 
     async def get_document(
         self, *, user_jwt: str, document_id: str
@@ -256,9 +270,57 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
             document_id=document_id, state=new_state, size_bytes=size_bytes
         )
 
+    async def sweep_stalled_uploads(self, *, user_jwt: str, user_id: str) -> None:
+        """Best-effort: any failure here (a transient PostgREST hiccup)
+        must never break the actual document listing this is called
+        from — it just means this sweep's stale rows get caught on the
+        next call instead."""
+        try:
+            client = self._client()
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(seconds=UPLOAD_STALL_EXPIRY_SECONDS)
+            ).isoformat()
+            stale_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/ingest_jobs",
+                headers=self._headers(user_jwt),
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "state": "eq.uploading",
+                    "created_at": f"lt.{cutoff}",
+                    "select": "document_id",
+                },
+            )
+            if stale_resp.status_code >= 400:
+                return
+            stale_ids = [row["document_id"] for row in stale_resp.json()]
+            if not stale_ids:
+                return
+
+            await client.patch(
+                f"{self._supabase_url}/rest/v1/ingest_jobs",
+                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "state": "eq.uploading",
+                    "created_at": f"lt.{cutoff}",
+                },
+                json={"state": "failed", "last_error": "upload_expired"},
+            )
+            await client.patch(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                params={"id": f"in.({','.join(stale_ids)})"},
+                json={"status": "failed"},
+            )
+        except Exception:
+            # Best-effort by design (see docstring) — never let a sweep
+            # failure take down the document listing it's attached to.
+            pass
+
     async def list_documents(
         self, *, user_jwt: str, user_id: str
     ) -> list[dict[str, Any]]:
+        await self.sweep_stalled_uploads(user_jwt=user_jwt, user_id=user_id)
         client = self._client()
         response = await client.get(
             f"{self._supabase_url}/rest/v1/documents",
