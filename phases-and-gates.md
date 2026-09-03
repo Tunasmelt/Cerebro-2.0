@@ -1485,7 +1485,15 @@ renders visibly distinct from the gray kNN edges in the same
 and click/select/collapse plus FPS both hold with the new layer
 present (no regression from the additional per-frame work).
 
-### Stage 5.5 — Quick capture (journaling as ingest)
+### Stage 5.5 — Quick capture (journaling as ingest) ✅
+**Scope decided:** text capture only. The voice variant needs a
+transcription step this project has never chosen a provider for —
+adding one is a real, separate decision (cost, API, another live
+integration to verify per CLAUDE.md's `/api-check` discipline), not
+something to bundle into this pass as an afterthought. Text capture
+alone already delivers this stage's actual differentiator (a thought
+in the vault in one keystroke, from anywhere) and needs no new
+dependency at all.
 **Exit criteria:** A new lightweight capture path — `POST /capture`
 (text) and a voice variant reusing whatever transcription step is
 cheapest to add — creates a `documents` row with a new
@@ -1513,6 +1521,47 @@ in clustering (Stage 2.1/2.5) and can accrue associative edges (Stage
 5.3) identically to an uploaded one — no `source` branch anywhere in
 those code paths. Voice capture (if built this stage): a known audio
 fixture transcribes to expected text before entering the same pipeline.
+**Done:** migration `0018_phase5_5_quick_capture` (applied live,
+`get_advisors` clean) adds `documents.source` (`'upload'`/`'capture'`,
+defaulting existing rows to `'upload'`) and `documents.captured_text` —
+the only place a captured thought's text exists before chunking, since
+there's no Storage object to read it back from.
+`documents_storage.py`'s `create_capture` is the entire "upload" for
+this source type in one call: no signed URL, no PUT, no confirm — just
+a `documents` insert (`mime='text/plain'`, `status='processing'`,
+`source='capture'`) and an `ingest_jobs` insert starting at
+**`'extracting'`**, not `'uploading'`, reflecting that both upload and
+normalize are genuinely skipped, not fast-pathed through.
+`extract.py`'s `run_extract_job` gained one branch —
+`document["source"] == "capture"` chunks `document["captured_text"]`
+directly via the existing `extract_text_chunks`, calling neither
+`download_indexed` nor `download_original` — everything past that
+point (`insert_chunks`, `mark_extracted`, then `embed.py`'s
+`run_embed_job` → `mark_ready` → `place_new_document`) is the exact
+same generic pipeline every uploaded document already goes through,
+untouched. New route `POST /api/v1/documents/capture` (`routes/documents.py`)
+validates non-empty text and a `MAX_CAPTURE_CHARS` (20,000) cap — the
+real enforcement here, unlike the file-upload path's client-side-only
+size check, since there's no Storage bucket policy backstopping a pure
+text row — derives a truncated title when none is given, and schedules
+a new `_run_capture_pipeline` background task (extract → embed only,
+skipping `run_normalize_job` entirely). Frontend: a persistent
+`QuickCapture` component mounted once in `AppShell`'s topbar (not
+`/documents`-specific), so it's available on every authenticated page —
+a small `+` trigger opens an inline textarea/save popover, no full-page
+form. 9 new backend tests (2 `extract.py` branch tests including an
+explicit assertion that neither download method is ever called for a
+capture document, 1 `documents_storage.py` storage-level test against a
+fake httpx transport, 6 route-level validation/title-derivation/auth
+tests) — 375/375 backend tests passing, `ruff` clean on every file this
+stage touched.
+Frontend `lint`/`build` clean. Not live-verified end-to-end against a
+real authenticated session in this pass (no live session available at
+build time) — the individual pieces (extract skipping storage
+download, the real insert shape, route validation) are each verified
+directly; a real "capture a thought, watch it become retrievable and
+show up on the graph" pass is yours to run live, same category of gap
+Stage 2.3/2.4 already had at their own build time.
 
 ### Stage 5.6 — Editable playground (deferred half of Stage 4.4) ✅
 Stage 4.4 deliberately scoped down to a read-only breakdown and deferred

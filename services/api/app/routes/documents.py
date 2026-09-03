@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app.chat.action_items import extract_action_items
 from app.core.documents_storage import (
     ALLOWED_MIME_TYPES,
+    MAX_CAPTURE_CHARS,
     MAX_UPLOAD_BYTES,
     DocumentsStorageError,
     get_documents_storage,
@@ -40,6 +41,17 @@ async def _run_ingest_pipeline(*, user_jwt: str, user_id: str, document_id: str)
     normalized = await run_normalize_job(user_jwt=user_jwt, document_id=document_id)
     if not normalized:
         return
+    extracted = await run_extract_job(user_jwt=user_jwt, document_id=document_id)
+    if not extracted:
+        return
+    await _embed_then_place(user_jwt=user_jwt, user_id=user_id, document_id=document_id)
+
+
+async def _run_capture_pipeline(*, user_jwt: str, user_id: str, document_id: str) -> None:
+    """Stage 5.5 — extract -> embed only, deliberately skipping
+    run_normalize_job entirely: a captured thought has no file to
+    normalize (see documents_storage.py's create_capture and
+    extract.py's source == "capture" branch)."""
     extracted = await run_extract_job(user_jwt=user_jwt, document_id=document_id)
     if not extracted:
         return
@@ -125,6 +137,48 @@ async def upload_confirm(request: Request, document_id: str, background_tasks: B
         },
         status_code=200,
     )
+
+
+class CaptureBody(BaseModel):
+    text: str
+    title: str | None = None
+
+
+@router.post("/api/v1/documents/capture")
+async def capture(request: Request, body: CaptureBody, background_tasks: BackgroundTasks):
+    """Stage 5.5 — quick capture: a persistent, always-available way to
+    get a thought into the vault without going through the file-upload
+    flow. Feeds the same extract -> embed pipeline every uploaded
+    document does (_run_capture_pipeline), just skipping normalize —
+    see documents_storage.py's create_capture for why."""
+    text = body.text.strip()
+    if not text:
+        return _error("empty_text", "Capture text cannot be empty", 422)
+    if len(text) > MAX_CAPTURE_CHARS:
+        return _error(
+            "text_too_long", f"Capture text exceeds {MAX_CAPTURE_CHARS} characters", 413
+        )
+
+    title = (body.title or "").strip() or (
+        text[:60] + "…" if len(text) > 60 else text
+    )
+
+    storage = get_documents_storage()
+    document_id = await storage.create_capture(
+        user_jwt=request.state.user_jwt,
+        user_id=request.state.user["sub"],
+        title=title,
+        text=text,
+    )
+
+    background_tasks.add_task(
+        _run_capture_pipeline,
+        user_jwt=request.state.user_jwt,
+        user_id=request.state.user["sub"],
+        document_id=document_id,
+    )
+
+    return JSONResponse({"id": document_id, "state": "extracting"}, status_code=201)
 
 
 @router.get("/api/v1/documents")

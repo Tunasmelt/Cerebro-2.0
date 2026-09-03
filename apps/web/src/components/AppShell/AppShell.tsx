@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
 import Logo from "@/components/Logo";
+import QuickCapture from "@/components/QuickCapture";
 import { createClient } from "@/lib/supabase/client";
 import styles from "./AppShell.module.css";
 
@@ -87,6 +88,7 @@ export default function AppShell({
       <div className={styles.main}>
         <div className={styles.topbar}>
           <div className={styles.topbarRight}>
+            <QuickCapture />
             <div className={styles.avatar} onClick={() => setMenuOpen((o) => !o)}>
               <span className={styles.avatarInner}>{initials(userEmail)}</span>
               {menuOpen && (
