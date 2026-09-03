@@ -29,10 +29,10 @@ import io
 import os
 from typing import Any, Protocol
 
-import httpx
 import pikepdf
 from PIL import Image
 
+from app.core.http_client import CachedHttpClientMixin
 from app.ingest.concurrency import INGEST_LOCK
 
 MAX_IMAGE_DIMENSION = 2048  # px — not a number the docs specify; chosen
@@ -109,7 +109,7 @@ class NormalizeStorage(Protocol):
     async def mark_failed(self, *, user_jwt: str, document_id: str, error_code: str) -> None: ...
 
 
-class SupabaseNormalizeStorage:
+class SupabaseNormalizeStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -118,23 +118,23 @@ class SupabaseNormalizeStorage:
         return {"apikey": self._anon_key, "Authorization": f"Bearer {user_jwt}"}
 
     async def get_document(self, *, user_jwt: str, document_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={"id": f"eq.{document_id}", "select": "*"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{document_id}", "select": "*"},
+        )
         rows = response.json()
         if not rows:
             raise NormalizeError("document_not_found", document_id)
         return rows[0]
 
     async def download_original(self, *, user_jwt: str, path: str) -> bytes:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/storage/v1/object/originals/{path}",
-                headers=self._headers(user_jwt),
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/storage/v1/object/originals/{path}",
+            headers=self._headers(user_jwt),
+        )
         if response.status_code >= 400:
             raise NormalizeError("original_download_failed", path)
         return response.content
@@ -144,45 +144,45 @@ class SupabaseNormalizeStorage:
         content: bytes, mime: str,
     ) -> str:
         path = f"{user_id}/{document_id}/indexed.{ext}"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self._supabase_url}/storage/v1/object/indexed/{path}",
-                headers={**self._headers(user_jwt), "Content-Type": mime},
-                content=content,
-            )
+        client = self._client()
+        response = await client.post(
+            f"{self._supabase_url}/storage/v1/object/indexed/{path}",
+            headers={**self._headers(user_jwt), "Content-Type": mime},
+            content=content,
+        )
         if response.status_code >= 400:
             raise NormalizeError("indexed_upload_failed", path)
         return path
 
     async def mark_normalized(self, *, user_jwt: str, document_id: str, storage_path: str) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"id": f"eq.{document_id}"},
-                json={"storage_path": storage_path},
-            )
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"document_id": f"eq.{document_id}"},
-                json={"state": "extracting"},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{document_id}"},
+            json={"storage_path": storage_path},
+        )
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": "extracting"},
+        )
 
     async def mark_failed(self, *, user_jwt: str, document_id: str, error_code: str) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"document_id": f"eq.{document_id}"},
-                json={"state": "failed", "last_error": error_code},
-            )
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"id": f"eq.{document_id}"},
-                json={"status": "failed"},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": "failed", "last_error": error_code},
+        )
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{document_id}"},
+            json={"status": "failed"},
+        )
 
 
 _storage: NormalizeStorage = SupabaseNormalizeStorage()

@@ -25,10 +25,11 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
+from app.core.http_client import CachedHttpClientMixin
 from app.core.documents_storage import get_documents_storage
 
 
-class AccountStorage:
+class AccountStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -62,19 +63,19 @@ class AccountStorage:
         for document in documents:
             await documents_storage.delete_document(user_jwt=user_jwt, document_id=document["id"])
 
-        async with httpx.AsyncClient() as client:
-            # boards cascades cards; chat_sessions cascades chat_messages.
-            # clusters (Stage 2.1) has its own user_id FK to auth.users
-            # and isn't cascaded by anything else here — document_clusters
-            # cascades FROM a clusters delete, not the other way around,
-            # so it needed its own explicit delete (a real gap a security
-            # review caught: without this, a user's cluster rows —
-            # label, centroid coordinates derived from their own document
-            # embeddings — survived a "delete everything" indefinitely).
-            await self._bulk_delete(client, user_jwt, "boards", user_id)
-            await self._bulk_delete(client, user_jwt, "todos", user_id)
-            await self._bulk_delete(client, user_jwt, "chat_sessions", user_id)
-            await self._bulk_delete(client, user_jwt, "clusters", user_id)
+        client = self._client()
+        # boards cascades cards; chat_sessions cascades chat_messages.
+        # clusters (Stage 2.1) has its own user_id FK to auth.users
+        # and isn't cascaded by anything else here — document_clusters
+        # cascades FROM a clusters delete, not the other way around,
+        # so it needed its own explicit delete (a real gap a security
+        # review caught: without this, a user's cluster rows —
+        # label, centroid coordinates derived from their own document
+        # embeddings — survived a "delete everything" indefinitely).
+        await self._bulk_delete(client, user_jwt, "boards", user_id)
+        await self._bulk_delete(client, user_jwt, "todos", user_id)
+        await self._bulk_delete(client, user_jwt, "chat_sessions", user_id)
+        await self._bulk_delete(client, user_jwt, "clusters", user_id)
 
         return {"documents_deleted": len(documents)}
 

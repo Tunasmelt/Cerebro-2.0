@@ -26,6 +26,8 @@ from typing import AsyncIterator, Protocol
 
 import httpx
 
+from app.core.http_client import CachedHttpClientMixin
+
 GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 # gemini-3.7-flash was tried first (per CLAUDE.md's Gemini-for-generation
 # choice) but real-tested at ~83s to first visible text for a trivial
@@ -74,8 +76,16 @@ def parse_sse_line(line: str) -> str | None:
     return None
 
 
-class GeminiGenerateClient:
+class GeminiGenerateClient(CachedHttpClientMixin):
     model = GEMINI_MODEL
+    # 30s wasn't enough — a live production request hit httpx.ReadTimeout
+    # mid-generation (caught by a Phase 1 audit that actually made a real
+    # chat call, not just local testing, where every prior call finished
+    # in ~3s). 90s gives real headroom against network variance from
+    # Render; stream.py now also surfaces a real `error` SSE event if
+    # this still isn't enough, instead of the connection just dying
+    # silently.
+    _HTTP_CLIENT_KWARGS = {"timeout": 90.0}
 
     def __init__(self) -> None:
         self._api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -83,36 +93,29 @@ class GeminiGenerateClient:
     async def stream_text(
         self, *, system_instruction: str, input_text: str
     ) -> AsyncIterator[str]:
-        # 30s wasn't enough — a live production request hit
-        # httpx.ReadTimeout mid-generation (caught by a Phase 1 audit
-        # that actually made a real chat call, not just local testing,
-        # where every prior call finished in ~3s). 90s gives real
-        # headroom against network variance from Render; stream.py now
-        # also surfaces a real `error` SSE event if this still isn't
-        # enough, instead of the connection just dying silently.
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            async with client.stream(
-                "POST",
-                GEMINI_INTERACTIONS_URL,
-                headers={
-                    "x-goog-api-key": self._api_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": GEMINI_MODEL,
-                    "input": input_text,
-                    "system_instruction": system_instruction,
-                    "stream": True,
-                },
-            ) as response:
-                if response.status_code >= 400:
-                    body = await response.aread()
-                    raise GenerateError("generate_call_failed", body.decode())
+        client = self._client()
+        async with client.stream(
+            "POST",
+            GEMINI_INTERACTIONS_URL,
+            headers={
+                "x-goog-api-key": self._api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": GEMINI_MODEL,
+                "input": input_text,
+                "system_instruction": system_instruction,
+                "stream": True,
+            },
+        ) as response:
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise GenerateError("generate_call_failed", body.decode())
 
-                async for line in response.aiter_lines():
-                    text = parse_sse_line(line)
-                    if text:
-                        yield text
+            async for line in response.aiter_lines():
+                text = parse_sse_line(line)
+                if text:
+                    yield text
 
 
 async def run_interaction(

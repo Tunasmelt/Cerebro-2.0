@@ -8,9 +8,12 @@ Pure-function tests (normalize_pdf/normalize_image) use real pikepdf/
 Pillow against small in-memory fixtures — no network. Orchestration tests
 use a fake NormalizeStorage seam, same pattern as Stages 0.5/0.6/1.1.
 """
-import gc
 import io
+import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pikepdf
 import psutil
@@ -141,26 +144,84 @@ def _rss_bytes() -> int:
     return psutil.Process(os.getpid()).memory_info().rss
 
 
-def test_draft_mode_decode_uses_meaningfully_less_peak_memory():
+# This file's own pytest process runs 400+ other tests before this one —
+# by the time this test runs, glibc's malloc arena on Linux CI typically
+# already holds freed-but-still-resident pages from earlier tests' large
+# allocations (PDF/image fixtures elsewhere in this suite). A new
+# allocation the same size or smaller than that free capacity gets
+# satisfied from already-resident memory without the OS ever growing
+# RSS, so `psutil`'s before/after delta reads 0 for *both* the full and
+# draft-mode decode regardless of what Pillow actually did — a false
+# "draft-mode isn't engaging" failure with no relationship to the real
+# code under test. Confirmed live: this started failing consistently in
+# CI (0 bytes RSS reported for both) while remaining 424/424 clean
+# locally on every run — a shared-process artifact of *this* test's
+# measurement approach, not a code regression (nothing in this file's
+# own image-decode logic changed). glibc's allocator behavior here also
+# genuinely differs from Windows' allocator, which is why local runs
+# never reproduced it.
+#
+# Fix: run the actual before/after measurement in a fresh subprocess
+# instead of this shared pytest process. A brand-new interpreter has no
+# prior allocation history to be satisfied from, so RSS deltas measure
+# real page growth again — the same real invariant (draft-mode decode
+# uses meaningfully less peak memory), just measured somewhere its
+# result can't be contaminated by unrelated tests that happened to run
+# first.
+_SUBPROCESS_SCRIPT = """
+import gc, io, json, os, sys
+import psutil
+from PIL import Image
+from app.ingest.normalize import _decode_image
+
+def rss():
+    return psutil.Process(os.getpid()).memory_info().rss
+
+with open(sys.argv[1], "rb") as f:
+    original = f.read()
+
+gc.collect()
+before_full = rss()
+img_no_draft = Image.open(io.BytesIO(original))
+img_no_draft.load()  # full-resolution decode, draft() never called
+full_delta = rss() - before_full
+img_no_draft.close()
+del img_no_draft
+gc.collect()
+
+before_draft = rss()
+img_draft = _decode_image(original, "image/jpeg")  # engages draft()
+draft_delta = rss() - before_draft
+img_draft.close()
+
+print(json.dumps({"full_delta": full_delta, "draft_delta": draft_delta}))
+"""
+
+
+def test_draft_mode_decode_uses_meaningfully_less_peak_memory(tmp_path):
     # tracemalloc only tracks Python-heap allocations — Pillow's decoded
     # pixel buffer is allocated in native code (via libjpeg) and is
     # invisible to it. Real process RSS is what actually matters for the
-    # 512MB Render ceiling, so that's what this measures.
+    # 512MB Render ceiling, so that's what this measures — in a fresh
+    # subprocess, see _SUBPROCESS_SCRIPT's comment above for why.
     original = _make_jpeg_bytes((4096, 4096), quality=85)
+    image_path = tmp_path / "fixture.jpg"
+    image_path.write_bytes(original)
 
-    gc.collect()
-    before_full = _rss_bytes()
-    img_no_draft = Image.open(io.BytesIO(original))
-    img_no_draft.load()  # full-resolution decode, draft() never called
-    full_delta = _rss_bytes() - before_full
-    img_no_draft.close()
-    del img_no_draft
-    gc.collect()
-
-    before_draft = _rss_bytes()
-    img_draft = _decode_image(original, "image/jpeg")  # engages draft()
-    draft_delta = _rss_bytes() - before_draft
-    img_draft.close()
+    services_api_dir = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c", _SUBPROCESS_SCRIPT, str(image_path)],
+        cwd=services_api_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"subprocess failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    deltas = json.loads(result.stdout.strip().splitlines()[-1])
+    full_delta = deltas["full_delta"]
+    draft_delta = deltas["draft_delta"]
 
     assert draft_delta < full_delta * 0.6, (
         f"draft-mode decode used {draft_delta} bytes RSS vs {full_delta} "

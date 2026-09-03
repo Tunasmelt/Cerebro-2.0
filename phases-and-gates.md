@@ -1921,6 +1921,100 @@ reaches the actual generation call, and that a broken title lookup
 degrades to the flat format rather than failing the turn (new). 418/418
 backend tests passing (up from 411), `ruff` clean on the whole repo.
 
+### Production memory leak: shared httpx clients ✅
+Found live: Render's automated alert reported `cerebro-api` (the free
+tier's 512MB ceiling) restarting on an out-of-memory kill. Investigated
+with Render's own metrics/logs (not guessed): memory climbed in a
+smooth, unbroken, **linear** line from ~230MB to the ceiling over
+~1h40m with CPU staying near-idle the whole time, then restarted —
+reproduced identically across at least two independent process
+restarts, present from within the first 10 minutes of a freshly-started
+process (ruling out normal post-start warm-up, which plateaus). Request
+logs for the leak window showed only two endpoints being hit, on a
+steady ~5-60s poll cadence (a client left open on `/graph`):
+`GET /graph/nodes` and `GET /graph/edges?include=associative`.
+
+Ruled out with evidence before concluding: `core/rate_limit.py`'s
+in-memory limiter (properly bounded — prunes its deque every check),
+`core/auth.py`'s JWKS client (a real cached singleton, 10-min TTL, not
+refetched per request), the route handlers themselves (simple,
+stateless), and `core/tracing.py`'s Langfuse client (also a real cached
+singleton).
+
+**Root cause:** every `Supabase*Storage` class (plus
+`CohereRerankClient`, `GeminiGenerateClient`, `JinaEmbedClient`, …) —
+literally every outbound-HTTP class in `services/api` — opened a
+brand-new `httpx.AsyncClient()` on *every single call* instead of
+reusing one pooled client. httpx's own docs warn against exactly this:
+each construction builds a fresh SSL context (re-parsing the full
+certifi CA bundle) and a fresh connection pool with zero keep-alive
+reuse across calls. `/graph/edges?include=associative` alone fires two
+such constructions per request — directly matching the two endpoints
+actually being hit in the leak window.
+
+**Done:** new `core/http_client.py` — a `CachedHttpClientMixin` giving
+each class ONE lazily-created `httpx.AsyncClient`, cached as an instance
+attribute and reused for the class's whole lifetime. Deliberately a
+*per-instance* cache, not a single global client threaded through
+FastAPI's lifespan — every one of these storage classes is already a
+process-lifetime singleton (`_storage: DocumentsStorage =
+SupabaseDocumentsStorage()` at module import time, this codebase's own
+established `get_x_storage()` pattern throughout), so a client cached on
+it lives just as long and gets the same pooling benefit, but critically
+this also means **zero changes needed to any of the 15 existing test
+files** that monkeypatch `httpx.AsyncClient` directly and construct a
+fresh `SupabaseXStorage()` inside the test body afterward (this
+codebase's established fake-httpx-transport pattern) — a fresh
+instance's cache starts empty, so the very next `_client()` call still
+picks up that test's patch. Converted 14 files / 73 call sites this
+way: `chat/generate.py` (`GeminiGenerateClient` only —
+`_HTTP_CLIENT_KWARGS = {"timeout": 90.0}` preserves its longer timeout),
+`chat/playground.py`, `chat/storage.py`, `core/account_storage.py`,
+`core/documents_storage.py`, `core/kanban_storage.py`,
+`core/sealed_storage.py`, `core/todo_storage.py`, `graph/edges.py`,
+`graph/storage.py`, `ingest/embed.py` (all three provider clients plus
+`SupabaseEmbedStorage`), `ingest/extract.py`, `ingest/normalize.py`,
+`retrieve/retrieve.py` (`CohereRerankClient` and
+`SupabaseRetrieveStorage`).
+
+**Deliberately not converted:** `chat/action_items.py`'s two module-
+level functions, `retrieve/image_caption.py`'s `caption_image`, and
+`chat/generate.py`'s module-level `run_interaction` — these have no
+`self` to cache a client on, are meaningfully lower-frequency (fire
+only during an actual chat/action-item/captioning call, never from
+passive polling), and a module-level cache for them would have silently
+broken per-test transport isolation in 3+ test files (each test in
+`test_stage_1_5_image_caption.py`, for one, monkeypatches a *different*
+fake transport per test — a persisted module-level client would leak
+the first test's transport into every later one). Not worth the risk
+for call sites that weren't implicated in the actual observed leak.
+
+**Tests:** new `test_http_client.py` — lazy creation, same instance
+reused across repeated calls (the actual fix), different instances get
+different clients (why the fake-transport test pattern still works,
+proven directly), `_HTTP_CLIENT_KWARGS` applied correctly and not
+leaking across subclasses via a shared mutable default, and an explicit
+proof that a `monkeypatch.setattr(httpx, "AsyncClient", fake)` before a
+fresh instance's first use is still honored. 424/424 backend tests
+passing (up from 418), `ruff` clean on the whole repo — including the
+full existing suite passing unmodified, confirming no test-file
+changes were actually needed.
+
+**Unrelated CI casualty, fixed alongside:** this PR's own CI run hit
+`test_draft_mode_decode_uses_meaningfully_less_peak_memory`
+(`test_stage_1_2_normalize.py`) failing consistently — 3/3 identical
+"0 bytes RSS for both" failures — despite staying 424/424 clean
+locally on every run and touching code nowhere near this change. Root
+cause: that test's own pytest process runs 400+ other tests first; by
+the time it runs, glibc's malloc arena on Linux CI typically already
+holds freed-but-resident pages from earlier tests' large allocations,
+so its new allocation gets satisfied without RSS ever growing —
+Windows' allocator behaves differently, hence never reproducing
+locally. Fixed by isolating the actual before/after measurement in a
+fresh subprocess, which has no prior allocation history to be
+satisfied from. Confirmed stable: passed 3/3 on repeated local runs and
+green on this PR's next CI run.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks

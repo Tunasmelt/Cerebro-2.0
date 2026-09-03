@@ -31,6 +31,8 @@ from typing import Any, Protocol
 import httpx
 from fastapi import HTTPException
 
+from app.core.http_client import CachedHttpClientMixin
+
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 52,428,800 bytes — Supabase Free
 # plan's hard global ceiling, binary MiB not decimal MB, empirically
 # pinned to the exact byte (52428800 succeeds, 52428801 fails with
@@ -123,7 +125,7 @@ class DocumentsStorage(Protocol):
     ) -> str: ...
 
 
-class SupabaseDocumentsStorage:
+class SupabaseDocumentsStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -151,51 +153,51 @@ class SupabaseDocumentsStorage:
         ext = ALLOWED_MIME_TYPES[mime]
         path = f"{user_id}/{document_id}/original.{ext}"
 
-        async with httpx.AsyncClient() as client:
-            doc_resp = await client.post(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={
-                    **self._headers(user_jwt),
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation",
-                },
-                json={
-                    "id": document_id,
-                    "user_id": user_id,
-                    "title": title,
-                    "mime": mime,
-                    "size_bytes": 0,
-                    "original_storage_path": path,
-                    "status": "processing",
-                },
-            )
-            if doc_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="document_insert_failed")
+        client = self._client()
+        doc_resp = await client.post(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={
+                **self._headers(user_jwt),
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json={
+                "id": document_id,
+                "user_id": user_id,
+                "title": title,
+                "mime": mime,
+                "size_bytes": 0,
+                "original_storage_path": path,
+                "status": "processing",
+            },
+        )
+        if doc_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="document_insert_failed")
 
-            job_resp = await client.post(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={
-                    **self._headers(user_jwt),
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation",
-                },
-                json={
-                    "document_id": document_id,
-                    "user_id": user_id,
-                    "state": "uploading",
-                },
-            )
-            if job_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="ingest_job_insert_failed")
+        job_resp = await client.post(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={
+                **self._headers(user_jwt),
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json={
+                "document_id": document_id,
+                "user_id": user_id,
+                "state": "uploading",
+            },
+        )
+        if job_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="ingest_job_insert_failed")
 
-            sign_resp = await client.post(
-                f"{self._supabase_url}/storage/v1/object/upload/sign/originals/{path}",
-                headers=self._headers(user_jwt),
-                json={},
-            )
-            if sign_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="signed_url_failed")
-            sign_body = sign_resp.json()
+        sign_resp = await client.post(
+            f"{self._supabase_url}/storage/v1/object/upload/sign/originals/{path}",
+            headers=self._headers(user_jwt),
+            json={},
+        )
+        if sign_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="signed_url_failed")
+        sign_body = sign_resp.json()
 
         upload_url = f"{self._supabase_url}/storage/v1{sign_body['url']}"
         return SignedUpload(document_id=document_id, upload_url=upload_url)
@@ -203,52 +205,52 @@ class SupabaseDocumentsStorage:
     async def confirm(
         self, *, user_jwt: str, user_id: str, document_id: str
     ) -> ConfirmedUpload:
-        async with httpx.AsyncClient() as client:
-            document = await self._get_document(client, user_jwt, document_id)
-            if document is None:
-                raise HTTPException(status_code=404, detail="document_not_found")
+        client = self._client()
+        document = await self._get_document(client, user_jwt, document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="document_not_found")
 
-            path = document["original_storage_path"]
-            prefix = "/".join(path.split("/")[:-1])
-            filename = path.split("/")[-1]
+        path = document["original_storage_path"]
+        prefix = "/".join(path.split("/")[:-1])
+        filename = path.split("/")[-1]
 
-            list_resp = await client.post(
-                f"{self._supabase_url}/storage/v1/object/list/originals",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                json={"prefix": prefix},
-            )
-            if list_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="storage_list_failed")
+        list_resp = await client.post(
+            f"{self._supabase_url}/storage/v1/object/list/originals",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            json={"prefix": prefix},
+        )
+        if list_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="storage_list_failed")
 
-            matching = [
-                obj for obj in list_resp.json() if obj.get("name") == filename
-            ]
-            if not matching:
-                raise HTTPException(status_code=422, detail="upload_not_found")
+        matching = [
+            obj for obj in list_resp.json() if obj.get("name") == filename
+        ]
+        if not matching:
+            raise HTTPException(status_code=422, detail="upload_not_found")
 
-            size_bytes = matching[0]["metadata"]["size"]
-            if size_bytes > MAX_UPLOAD_BYTES:
-                await client.patch(
-                    f"{self._supabase_url}/rest/v1/ingest_jobs",
-                    headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                    params={"document_id": f"eq.{document_id}"},
-                    json={"state": "failed", "last_error": "file_too_large"},
-                )
-                raise HTTPException(status_code=413, detail="file_too_large")
-
-            new_state = "normalizing"
+        size_bytes = matching[0]["metadata"]["size"]
+        if size_bytes > MAX_UPLOAD_BYTES:
             await client.patch(
                 f"{self._supabase_url}/rest/v1/ingest_jobs",
                 headers={**self._headers(user_jwt), "Content-Type": "application/json"},
                 params={"document_id": f"eq.{document_id}"},
-                json={"state": new_state},
+                json={"state": "failed", "last_error": "file_too_large"},
             )
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"id": f"eq.{document_id}"},
-                json={"size_bytes": size_bytes, "original_size_bytes": size_bytes},
-            )
+            raise HTTPException(status_code=413, detail="file_too_large")
+
+        new_state = "normalizing"
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": new_state},
+        )
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{document_id}"},
+            json={"size_bytes": size_bytes, "original_size_bytes": size_bytes},
+        )
 
         return ConfirmedUpload(
             document_id=document_id, state=new_state, size_bytes=size_bytes
@@ -257,16 +259,16 @@ class SupabaseDocumentsStorage:
     async def list_documents(
         self, *, user_jwt: str, user_id: str
     ) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={
-                    "user_id": f"eq.{user_id}",
-                    "select": "id,title,mime,size_bytes,original_size_bytes,status,created_at",
-                    "order": "created_at.desc",
-                },
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={
+                "user_id": f"eq.{user_id}",
+                "select": "id,title,mime,size_bytes,original_size_bytes,status,created_at",
+                "order": "created_at.desc",
+            },
+        )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="documents_list_failed")
         return response.json()
@@ -274,33 +276,33 @@ class SupabaseDocumentsStorage:
     async def get_document(
         self, *, user_jwt: str, document_id: str
     ) -> dict[str, Any] | None:
-        async with httpx.AsyncClient() as client:
-            doc_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={
-                    "id": f"eq.{document_id}",
-                    "select": "id,title,mime,size_bytes,status,created_at",
-                },
-            )
-            if doc_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="document_lookup_failed")
-            doc_rows = doc_resp.json()
-            if not doc_rows:
-                return None
-            document = doc_rows[0]
+        client = self._client()
+        doc_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={
+                "id": f"eq.{document_id}",
+                "select": "id,title,mime,size_bytes,status,created_at",
+            },
+        )
+        if doc_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="document_lookup_failed")
+        doc_rows = doc_resp.json()
+        if not doc_rows:
+            return None
+        document = doc_rows[0]
 
-            job_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers=self._headers(user_jwt),
-                params={
-                    "document_id": f"eq.{document_id}",
-                    "select": "state,last_error",
-                },
-            )
-            if job_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="ingest_job_lookup_failed")
-            job_rows = job_resp.json()
+        job_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers=self._headers(user_jwt),
+            params={
+                "document_id": f"eq.{document_id}",
+                "select": "state,last_error",
+            },
+        )
+        if job_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="ingest_job_lookup_failed")
+        job_rows = job_resp.json()
 
         document["ingest_state"] = job_rows[0]["state"] if job_rows else None
         document["last_error"] = job_rows[0]["last_error"] if job_rows else None
@@ -319,12 +321,12 @@ class SupabaseDocumentsStorage:
         build_system_instruction)."""
         if not document_ids:
             return {}
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={"id": f"in.({','.join(document_ids)})", "select": "id,title"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"id": f"in.({','.join(document_ids)})", "select": "id,title"},
+        )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="document_titles_lookup_failed")
         return {d["id"]: d["title"] for d in response.json()}
@@ -337,66 +339,66 @@ class SupabaseDocumentsStorage:
             if variant == "indexed"
             else ("originals", "original_storage_path")
         )
-        async with httpx.AsyncClient() as client:
-            document = await self._get_document(client, user_jwt, document_id)
-            if document is None:
-                raise DocumentsStorageError("not_found", "Document not found")
-            # Sealing (Stage 3.3) only ever removed plaintext from
-            # `chunks` — the underlying Storage object was never
-            # re-encrypted. A signed URL bypasses the passphrase
-            # entirely, so this has to fail closed here; there is no
-            # unlock-claim mechanism that gates raw Storage bytes yet.
-            if document["status"] == "sealed":
-                raise DocumentsStorageError(
-                    "document_sealed", "This document is sealed and cannot be downloaded"
-                )
-            path = document.get(path_column)
-            if not path:
-                raise DocumentsStorageError(
-                    "not_available", f"No {variant} file available for this document yet"
-                )
-
-            sign_resp = await client.post(
-                f"{self._supabase_url}/storage/v1/object/sign/{bucket}/{path}",
-                headers=self._headers(user_jwt),
-                json={"expiresIn": SIGNED_URL_TTL_SECONDS},
+        client = self._client()
+        document = await self._get_document(client, user_jwt, document_id)
+        if document is None:
+            raise DocumentsStorageError("not_found", "Document not found")
+        # Sealing (Stage 3.3) only ever removed plaintext from
+        # `chunks` — the underlying Storage object was never
+        # re-encrypted. A signed URL bypasses the passphrase
+        # entirely, so this has to fail closed here; there is no
+        # unlock-claim mechanism that gates raw Storage bytes yet.
+        if document["status"] == "sealed":
+            raise DocumentsStorageError(
+                "document_sealed", "This document is sealed and cannot be downloaded"
             )
-            if sign_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="signed_url_failed")
-            signed_path = sign_resp.json()["signedURL"]
+        path = document.get(path_column)
+        if not path:
+            raise DocumentsStorageError(
+                "not_available", f"No {variant} file available for this document yet"
+            )
+
+        sign_resp = await client.post(
+            f"{self._supabase_url}/storage/v1/object/sign/{bucket}/{path}",
+            headers=self._headers(user_jwt),
+            json={"expiresIn": SIGNED_URL_TTL_SECONDS},
+        )
+        if sign_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="signed_url_failed")
+        signed_path = sign_resp.json()["signedURL"]
 
         return f"{self._supabase_url}/storage/v1{signed_path}"
 
     async def delete_document(self, *, user_jwt: str, document_id: str) -> bool:
-        async with httpx.AsyncClient() as client:
-            document = await self._get_document(client, user_jwt, document_id)
-            if document is None:
-                return False
+        client = self._client()
+        document = await self._get_document(client, user_jwt, document_id)
+        if document is None:
+            return False
 
-            # Best-effort — a Storage delete failure shouldn't block
-            # removing the row the user actually asked to delete; an
-            # orphaned Storage object with no documents row pointing to
-            # it is inert (unreachable, never surfaced by any route).
-            for bucket, path in (
-                ("indexed", document.get("storage_path")),
-                ("originals", document.get("original_storage_path")),
-            ):
-                if not path:
-                    continue
-                await client.request(
-                    "DELETE",
-                    f"{self._supabase_url}/storage/v1/object/{bucket}",
-                    headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                    json={"prefixes": [path]},
-                )
-
-            delete_resp = await client.delete(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={"id": f"eq.{document_id}"},
+        # Best-effort — a Storage delete failure shouldn't block
+        # removing the row the user actually asked to delete; an
+        # orphaned Storage object with no documents row pointing to
+        # it is inert (unreachable, never surfaced by any route).
+        for bucket, path in (
+            ("indexed", document.get("storage_path")),
+            ("originals", document.get("original_storage_path")),
+        ):
+            if not path:
+                continue
+            await client.request(
+                "DELETE",
+                f"{self._supabase_url}/storage/v1/object/{bucket}",
+                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                json={"prefixes": [path]},
             )
-            if delete_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="document_delete_failed")
+
+        delete_resp = await client.delete(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{document_id}"},
+        )
+        if delete_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="document_delete_failed")
 
         return True
 
@@ -410,13 +412,13 @@ class SupabaseDocumentsStorage:
         reason. Works regardless of status (processing/ready/sealed) —
         renaming is a metadata-only change, never touches chunk content,
         so it's safe even on a sealed document."""
-        async with httpx.AsyncClient() as client:
-            response = await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Prefer": "return=representation"},
-                params={"id": f"eq.{document_id}"},
-                json={"title": title},
-            )
+        client = self._client()
+        response = await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+            params={"id": f"eq.{document_id}"},
+            json={"title": title},
+        )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="document_rename_failed")
         return bool(response.json())
@@ -432,43 +434,43 @@ class SupabaseDocumentsStorage:
         at 'extracting' (not 'uploading'/'normalizing'), reflecting that
         both of those stages are genuinely skipped for this source
         type, not just fast-pathed through."""
-        async with httpx.AsyncClient() as client:
-            doc_resp = await client.post(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={
-                    **self._headers(user_jwt),
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation",
-                },
-                json={
-                    "user_id": user_id,
-                    "title": title,
-                    "mime": "text/plain",
-                    "size_bytes": len(text.encode("utf-8")),
-                    "status": "processing",
-                    "source": "capture",
-                    "captured_text": text,
-                },
-            )
-            if doc_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="capture_insert_failed")
-            document_id = doc_resp.json()[0]["id"]
+        client = self._client()
+        doc_resp = await client.post(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={
+                **self._headers(user_jwt),
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json={
+                "user_id": user_id,
+                "title": title,
+                "mime": "text/plain",
+                "size_bytes": len(text.encode("utf-8")),
+                "status": "processing",
+                "source": "capture",
+                "captured_text": text,
+            },
+        )
+        if doc_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="capture_insert_failed")
+        document_id = doc_resp.json()[0]["id"]
 
-            job_resp = await client.post(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={
-                    **self._headers(user_jwt),
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation",
-                },
-                json={
-                    "document_id": document_id,
-                    "user_id": user_id,
-                    "state": "extracting",
-                },
-            )
-            if job_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="ingest_job_insert_failed")
+        job_resp = await client.post(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={
+                **self._headers(user_jwt),
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json={
+                "document_id": document_id,
+                "user_id": user_id,
+                "state": "extracting",
+            },
+        )
+        if job_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="ingest_job_insert_failed")
 
         return document_id
 

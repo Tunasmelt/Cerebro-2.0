@@ -28,6 +28,8 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException
 
+from app.core.http_client import CachedHttpClientMixin
+
 UNLOCK_CLAIM_TTL = timedelta(minutes=15)
 
 
@@ -97,7 +99,7 @@ class SealedStorage(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
-class SupabaseSealedStorage:
+class SupabaseSealedStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -128,83 +130,83 @@ class SupabaseSealedStorage:
             }
             for c in chunks
         ]
-        async with httpx.AsyncClient() as client:
-            # Found live (Stage 3.5 adversarial testing): sealing a
-            # document whose background ingest pipeline (normalize ->
-            # extract -> embed, kicked off by upload-confirm) was still
-            # in flight let that pipeline finish AFTER this function
-            # returned, re-writing plaintext + a fresh embedding into
-            # `chunks` and overwriting status back to 'ready' — silently
-            # un-sealing content that had just been sealed. This single
-            # PostgREST PATCH with `status=eq.ready` in the filter is
-            # the fix: it atomically flips ready -> sealed at the
-            # database level, so it can only ever succeed once ingest
-            # has already finished writing every chunk for this
-            # document (mark_ready in embed.py is unconditionally the
-            # LAST write embed.py makes) — there is no window where
-            # ingest can still be mid-flight when this succeeds, and no
-            # window where a second concurrent seal attempt could also
-            # succeed (only one PATCH call can ever match a row still at
-            # status='ready').
-            status_resp = await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Prefer": "return=representation"},
-                params={"id": f"eq.{document_id}", "status": "eq.ready"},
-                json={"status": "sealed"},
+        client = self._client()
+        # Found live (Stage 3.5 adversarial testing): sealing a
+        # document whose background ingest pipeline (normalize ->
+        # extract -> embed, kicked off by upload-confirm) was still
+        # in flight let that pipeline finish AFTER this function
+        # returned, re-writing plaintext + a fresh embedding into
+        # `chunks` and overwriting status back to 'ready' — silently
+        # un-sealing content that had just been sealed. This single
+        # PostgREST PATCH with `status=eq.ready` in the filter is
+        # the fix: it atomically flips ready -> sealed at the
+        # database level, so it can only ever succeed once ingest
+        # has already finished writing every chunk for this
+        # document (mark_ready in embed.py is unconditionally the
+        # LAST write embed.py makes) — there is no window where
+        # ingest can still be mid-flight when this succeeds, and no
+        # window where a second concurrent seal attempt could also
+        # succeed (only one PATCH call can ever match a row still at
+        # status='ready').
+        status_resp = await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+            params={"id": f"eq.{document_id}", "status": "eq.ready"},
+            json={"status": "sealed"},
+        )
+        if status_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="seal_status_update_failed")
+        if not status_resp.json():
+            raise SealedStorageError(
+                "not_ready",
+                "Document must finish processing (status=ready) before it can be sealed",
             )
-            if status_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="seal_status_update_failed")
-            if not status_resp.json():
-                raise SealedStorageError(
-                    "not_ready",
-                    "Document must finish processing (status=ready) before it can be sealed",
-                )
 
-            # From here on, status is already 'sealed'. If either write
-            # below fails partway, the document must not be left stuck:
-            # sealed status with no compensating action would mean the
-            # `status=eq.ready` guard above can never match again, so a
-            # retry could never re-attempt this seal, and depending on
-            # which write failed the document could still hold plaintext
-            # in `chunks`, or the caller's ciphertext, or neither. On any
-            # failure here, best-effort revert status back to 'ready' so
-            # the caller can simply retry sealing.
+        # From here on, status is already 'sealed'. If either write
+        # below fails partway, the document must not be left stuck:
+        # sealed status with no compensating action would mean the
+        # `status=eq.ready` guard above can never match again, so a
+        # retry could never re-attempt this seal, and depending on
+        # which write failed the document could still hold plaintext
+        # in `chunks`, or the caller's ciphertext, or neither. On any
+        # failure here, best-effort revert status back to 'ready' so
+        # the caller can simply retry sealing.
+        try:
+            insert_resp = await client.post(
+                f"{self._supabase_url}/rest/v1/sealed_chunks",
+                headers=self._headers(user_jwt),
+                json=rows,
+            )
+            if insert_resp.status_code >= 400:
+                raise HTTPException(status_code=502, detail="seal_insert_failed")
+
+            # Sealed content must never remain in the retrieval-path
+            # table — delete the plaintext/embedding rows this
+            # document had in `chunks` now that the ciphertext copy
+            # is stored. Safe to do only now, after the status flip
+            # above proved ingest had already finished writing them.
+            delete_resp = await client.delete(
+                f"{self._supabase_url}/rest/v1/chunks",
+                headers=self._headers(user_jwt),
+                params={"document_id": f"eq.{document_id}"},
+            )
+            if delete_resp.status_code >= 400:
+                raise HTTPException(status_code=502, detail="seal_chunk_delete_failed")
+        except Exception:
+            # Best-effort — if this itself fails (network error), the
+            # caller must still see the ORIGINAL failure, not this
+            # one, so it's swallowed rather than left to replace the
+            # exception being propagated below.
             try:
-                insert_resp = await client.post(
-                    f"{self._supabase_url}/rest/v1/sealed_chunks",
+                await client.patch(
+                    f"{self._supabase_url}/rest/v1/documents",
                     headers=self._headers(user_jwt),
-                    json=rows,
+                    params={"id": f"eq.{document_id}", "status": "eq.sealed"},
+                    json={"status": "ready"},
                 )
-                if insert_resp.status_code >= 400:
-                    raise HTTPException(status_code=502, detail="seal_insert_failed")
-
-                # Sealed content must never remain in the retrieval-path
-                # table — delete the plaintext/embedding rows this
-                # document had in `chunks` now that the ciphertext copy
-                # is stored. Safe to do only now, after the status flip
-                # above proved ingest had already finished writing them.
-                delete_resp = await client.delete(
-                    f"{self._supabase_url}/rest/v1/chunks",
-                    headers=self._headers(user_jwt),
-                    params={"document_id": f"eq.{document_id}"},
-                )
-                if delete_resp.status_code >= 400:
-                    raise HTTPException(status_code=502, detail="seal_chunk_delete_failed")
             except Exception:
-                # Best-effort — if this itself fails (network error), the
-                # caller must still see the ORIGINAL failure, not this
-                # one, so it's swallowed rather than left to replace the
-                # exception being propagated below.
-                try:
-                    await client.patch(
-                        f"{self._supabase_url}/rest/v1/documents",
-                        headers=self._headers(user_jwt),
-                        params={"id": f"eq.{document_id}", "status": "eq.sealed"},
-                        json={"status": "ready"},
-                    )
-                except Exception:
-                    pass
-                raise
+                pass
+            raise
 
     async def _first_sealed_chunk(
         self, client: httpx.AsyncClient, user_jwt: str, document_id: str
@@ -227,28 +229,28 @@ class SupabaseSealedStorage:
     async def create_unlock_claim(
         self, *, user_jwt: str, user_id: str, document_id: str, key_b64: str
     ) -> UnlockClaim:
-        async with httpx.AsyncClient() as client:
-            probe = await self._first_sealed_chunk(client, user_jwt, document_id)
-            if probe is None:
-                raise SealedStorageError("not_found", "No sealed content for this document")
+        client = self._client()
+        probe = await self._first_sealed_chunk(client, user_jwt, document_id)
+        if probe is None:
+            raise SealedStorageError("not_found", "No sealed content for this document")
 
-            # Raises SealedStorageError("invalid_key", ...) on a wrong
-            # key — propagates straight to the caller, no claim issued.
-            _decrypt(key_b64, probe["nonce"], probe["content_ciphertext"])
+        # Raises SealedStorageError("invalid_key", ...) on a wrong
+        # key — propagates straight to the caller, no claim issued.
+        _decrypt(key_b64, probe["nonce"], probe["content_ciphertext"])
 
-            expires_at = datetime.now(timezone.utc) + UNLOCK_CLAIM_TTL
-            claim_resp = await client.post(
-                f"{self._supabase_url}/rest/v1/unlock_claims",
-                headers={**self._headers(user_jwt), "Prefer": "return=representation"},
-                json={
-                    "document_id": document_id,
-                    "user_id": user_id,
-                    "expires_at": expires_at.isoformat(),
-                },
-            )
-            if claim_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="claim_insert_failed")
-            claim_row = claim_resp.json()[0]
+        expires_at = datetime.now(timezone.utc) + UNLOCK_CLAIM_TTL
+        claim_resp = await client.post(
+            f"{self._supabase_url}/rest/v1/unlock_claims",
+            headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+            json={
+                "document_id": document_id,
+                "user_id": user_id,
+                "expires_at": expires_at.isoformat(),
+            },
+        )
+        if claim_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="claim_insert_failed")
+        claim_row = claim_resp.json()[0]
 
         return UnlockClaim(claim_id=claim_row["id"], expires_at=claim_row["expires_at"])
 
@@ -274,37 +276,37 @@ class SupabaseSealedStorage:
         claim_id: str,
         key_b64: str,
     ) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            claim = await self._get_claim(client, user_jwt, claim_id)
-            if claim is None:
-                # RLS already scopes this to the caller's own claims, so
-                # a missing row means "doesn't exist or isn't yours" —
-                # same 404-not-403 pattern as documents.py.
-                raise SealedStorageError("claim_not_found", "Unlock claim not found")
+        client = self._client()
+        claim = await self._get_claim(client, user_jwt, claim_id)
+        if claim is None:
+            # RLS already scopes this to the caller's own claims, so
+            # a missing row means "doesn't exist or isn't yours" —
+            # same 404-not-403 pattern as documents.py.
+            raise SealedStorageError("claim_not_found", "Unlock claim not found")
 
-            # Scope check — a claim issued for one document must never
-            # unseal a different one, even the same user's.
-            if claim["document_id"] != document_id:
-                raise SealedStorageError(
-                    "claim_scope_mismatch", "Claim is not scoped to this document"
-                )
-
-            expires_at = datetime.fromisoformat(claim["expires_at"])
-            if is_claim_expired(expires_at):
-                raise SealedStorageError("claim_expired", "Unlock claim has expired")
-
-            list_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/sealed_chunks",
-                headers=self._headers(user_jwt),
-                params={
-                    "document_id": f"eq.{document_id}",
-                    "select": "ordinal,content_ciphertext,salt,nonce",
-                    "order": "ordinal.asc",
-                },
+        # Scope check — a claim issued for one document must never
+        # unseal a different one, even the same user's.
+        if claim["document_id"] != document_id:
+            raise SealedStorageError(
+                "claim_scope_mismatch", "Claim is not scoped to this document"
             )
-            if list_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="sealed_chunks_list_failed")
-            sealed_rows = list_resp.json()
+
+        expires_at = datetime.fromisoformat(claim["expires_at"])
+        if is_claim_expired(expires_at):
+            raise SealedStorageError("claim_expired", "Unlock claim has expired")
+
+        list_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/sealed_chunks",
+            headers=self._headers(user_jwt),
+            params={
+                "document_id": f"eq.{document_id}",
+                "select": "ordinal,content_ciphertext,salt,nonce",
+                "order": "ordinal.asc",
+            },
+        )
+        if list_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="sealed_chunks_list_failed")
+        sealed_rows = list_resp.json()
 
         # Decrypted plaintext is returned directly in this response and
         # never written to any table — the isolation Stage 3.1 built

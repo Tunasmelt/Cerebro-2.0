@@ -40,8 +40,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import httpx
 
+from app.core.http_client import CachedHttpClientMixin
 from app.core.sealed_storage import SealedStorageError, get_sealed_storage
 from app.core.tracing import get_tracer
 from app.ingest.embed import get_embed_client
@@ -112,27 +112,27 @@ class RerankClient(Protocol):
         ...
 
 
-class CohereRerankClient:
+class CohereRerankClient(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._api_key = os.environ.get("COHERE_API_KEY", "")
 
     async def rerank(
         self, *, query: str, documents: list[str], top_n: int
     ) -> list[tuple[int, float]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                COHERE_RERANK_URL,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": COHERE_RERANK_MODEL,
-                    "query": query,
-                    "documents": documents,
-                    "top_n": top_n,
-                },
-            )
+        client = self._client()
+        response = await client.post(
+            COHERE_RERANK_URL,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": COHERE_RERANK_MODEL,
+                "query": query,
+                "documents": documents,
+                "top_n": top_n,
+            },
+        )
         if response.status_code >= 400:
             raise RetrieveError("rerank_failed", response.text)
         return [
@@ -168,7 +168,7 @@ class RetrieveStorage(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
-class SupabaseRetrieveStorage:
+class SupabaseRetrieveStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -188,16 +188,16 @@ class SupabaseRetrieveStorage:
         match_count: int,
         primary_provider: str,
     ) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self._supabase_url}/rest/v1/rpc/match_chunks_vector",
-                headers=self._headers(user_jwt),
-                json={
-                    "query_embedding": query_embedding,
-                    "match_count": match_count,
-                    "primary_provider": primary_provider,
-                },
-            )
+        client = self._client()
+        response = await client.post(
+            f"{self._supabase_url}/rest/v1/rpc/match_chunks_vector",
+            headers=self._headers(user_jwt),
+            json={
+                "query_embedding": query_embedding,
+                "match_count": match_count,
+                "primary_provider": primary_provider,
+            },
+        )
         if response.status_code >= 400:
             raise RetrieveError("vector_search_failed", response.text)
         return response.json()
@@ -205,12 +205,12 @@ class SupabaseRetrieveStorage:
     async def fts_search(
         self, *, user_jwt: str, query_text: str, match_count: int
     ) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self._supabase_url}/rest/v1/rpc/match_chunks_fts",
-                headers=self._headers(user_jwt),
-                json={"query_text": query_text, "match_count": match_count},
-            )
+        client = self._client()
+        response = await client.post(
+            f"{self._supabase_url}/rest/v1/rpc/match_chunks_fts",
+            headers=self._headers(user_jwt),
+            json={"query_text": query_text, "match_count": match_count},
+        )
         if response.status_code >= 400:
             raise RetrieveError("fts_search_failed", response.text)
         return response.json()

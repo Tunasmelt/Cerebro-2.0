@@ -74,9 +74,9 @@ import io
 import os
 from typing import Any, Protocol
 
-import httpx
 from PIL import Image
 
+from app.core.http_client import CachedHttpClientMixin
 from app.ingest.concurrency import INGEST_LOCK
 
 TEXT_MODEL = "jina-embeddings-v5-text-small"
@@ -120,22 +120,22 @@ class EmbedClient(Protocol):
     async def embed_image(self, image_bytes: bytes, task: str = "retrieval.passage") -> list[float]: ...
 
 
-class JinaEmbedClient:
+class JinaEmbedClient(CachedHttpClientMixin):
     provider = PROVIDER_JINA
 
     def __init__(self) -> None:
         self._api_key = os.environ.get("JINA_API_KEY", "")
 
     async def _call(self, model: str, input_item: dict[str, str], task: str) -> list[float]:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                JINA_EMBEDDINGS_URL,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"model": model, "input": [input_item], "task": task},
-            )
+        client = self._client()
+        response = await client.post(
+            JINA_EMBEDDINGS_URL,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": model, "input": [input_item], "task": task},
+        )
         if response.status_code >= 400:
             raise EmbedError("embed_call_failed", response.text)
         return response.json()["data"][0]["embedding"]
@@ -148,7 +148,7 @@ class JinaEmbedClient:
         return await self._call(IMAGE_MODEL, {"image": f"data:image/png;base64,{b64}"}, task)
 
 
-class VoyageEmbedClient:
+class VoyageEmbedClient(CachedHttpClientMixin):
     """First fallback. voyage-multimodal-3.5 defaults to 1024-dim output
     (still passed explicitly), so no schema mismatch vs. Jina's 1024-dim
     — but the vector *space* still differs, hence the whole-job lock."""
@@ -167,20 +167,20 @@ class VoyageEmbedClient:
         # before vectorizing, same asymmetric-retrieval shape as Jina's
         # task and Cohere's input_type.
         input_type = "query" if task == "retrieval.query" else "document"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                VOYAGE_MULTIMODAL_URL,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "inputs": [{"content": [content_item]}],
-                    "model": VOYAGE_MODEL,
-                    "input_type": input_type,
-                    "output_dimension": EMBEDDING_DIMENSIONS,
-                },
-            )
+        client = self._client()
+        response = await client.post(
+            VOYAGE_MULTIMODAL_URL,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "inputs": [{"content": [content_item]}],
+                "model": VOYAGE_MODEL,
+                "input_type": input_type,
+                "output_dimension": EMBEDDING_DIMENSIONS,
+            },
+        )
         if response.status_code >= 400:
             raise EmbedError("embed_call_failed", response.text)
         return response.json()["data"][0]["embedding"]
@@ -195,7 +195,7 @@ class VoyageEmbedClient:
         )
 
 
-class CohereEmbedClient:
+class CohereEmbedClient(CachedHttpClientMixin):
     """Second fallback. embed-v4.0 defaults to 1536-dim — output_dimension
     must be set explicitly to 1024 or it won't fit chunks.embedding
     halfvec(1024) at all (not just a vector-space mismatch, a hard
@@ -207,21 +207,21 @@ class CohereEmbedClient:
         self._api_key = os.environ.get("COHERE_API_KEY", "")
 
     async def _call(self, *, input_type: str, key: str, value: str) -> list[float]:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                COHERE_EMBED_URL,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": COHERE_EMBED_MODEL,
-                    "input_type": input_type,
-                    key: [value],
-                    "embedding_types": ["float"],
-                    "output_dimension": EMBEDDING_DIMENSIONS,
-                },
-            )
+        client = self._client()
+        response = await client.post(
+            COHERE_EMBED_URL,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": COHERE_EMBED_MODEL,
+                "input_type": input_type,
+                key: [value],
+                "embedding_types": ["float"],
+                "output_dimension": EMBEDDING_DIMENSIONS,
+            },
+        )
         if response.status_code >= 400:
             raise EmbedError("embed_call_failed", response.text)
         return response.json()["embeddings"]["float"][0]
@@ -299,7 +299,7 @@ class EmbedStorage(Protocol):
     async def reset_job_to_embedding(self, *, user_jwt: str, document_id: str) -> None: ...
 
 
-class SupabaseEmbedStorage:
+class SupabaseEmbedStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -308,47 +308,47 @@ class SupabaseEmbedStorage:
         return {"apikey": self._anon_key, "Authorization": f"Bearer {user_jwt}"}
 
     async def get_document(self, *, user_jwt: str, document_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={"id": f"eq.{document_id}", "select": "*"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{document_id}", "select": "*"},
+        )
         rows = response.json()
         if not rows:
             raise EmbedError("document_not_found", document_id)
         return rows[0]
 
     async def get_chunks(self, *, user_jwt: str, document_id: str) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/chunks",
-                headers=self._headers(user_jwt),
-                params={
-                    "document_id": f"eq.{document_id}",
-                    "select": "id,ordinal,content,meta",
-                    "order": "ordinal",
-                },
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers=self._headers(user_jwt),
+            params={
+                "document_id": f"eq.{document_id}",
+                "select": "id,ordinal,content,meta",
+                "order": "ordinal",
+            },
+        )
         return response.json()
 
     async def download_original(self, *, user_jwt: str, path: str) -> bytes:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/storage/v1/object/originals/{path}",
-                headers=self._headers(user_jwt),
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/storage/v1/object/originals/{path}",
+            headers=self._headers(user_jwt),
+        )
         if response.status_code >= 400:
             raise EmbedError("original_download_failed", path)
         return response.content
 
     async def get_checkpoint(self, *, user_jwt: str, document_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers=self._headers(user_jwt),
-                params={"document_id": f"eq.{document_id}", "select": "checkpoint"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{document_id}", "select": "checkpoint"},
+        )
         rows = response.json()
         if not rows or not rows[0].get("checkpoint"):
             return {}
@@ -357,86 +357,86 @@ class SupabaseEmbedStorage:
     async def save_checkpoint(
         self, *, user_jwt: str, document_id: str, checkpoint: dict[str, Any]
     ) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"document_id": f"eq.{document_id}"},
-                json={"checkpoint": checkpoint},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"checkpoint": checkpoint},
+        )
 
     async def update_chunk_embedding(
         self, *, user_jwt: str, chunk_id: str, embedding: list[float]
     ) -> None:
-        async with httpx.AsyncClient() as client:
-            response = await client.patch(
-                f"{self._supabase_url}/rest/v1/chunks",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"id": f"eq.{chunk_id}"},
-                json={"embedding": embedding},
-            )
+        client = self._client()
+        response = await client.patch(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{chunk_id}"},
+            json={"embedding": embedding},
+        )
         if response.status_code >= 400:
             raise EmbedError("chunk_update_failed", chunk_id)
 
     async def mark_ready(self, *, user_jwt: str, document_id: str) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"document_id": f"eq.{document_id}"},
-                json={"state": "ready"},
-            )
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"id": f"eq.{document_id}"},
-                json={"status": "ready"},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": "ready"},
+        )
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{document_id}"},
+            json={"status": "ready"},
+        )
 
     async def mark_failed(self, *, user_jwt: str, document_id: str, error_code: str) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"document_id": f"eq.{document_id}"},
-                json={"state": "failed", "last_error": error_code},
-            )
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"id": f"eq.{document_id}"},
-                json={"status": "failed"},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": "failed", "last_error": error_code},
+        )
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{document_id}"},
+            json={"status": "failed"},
+        )
 
     async def set_document_embedding_provider(
         self, *, user_jwt: str, document_id: str, provider: str
     ) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"id": f"eq.{document_id}"},
-                json={"embedding_provider": provider},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{document_id}"},
+            json={"embedding_provider": provider},
+        )
 
     async def get_job_state(self, *, user_jwt: str, document_id: str) -> str | None:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers=self._headers(user_jwt),
-                params={"document_id": f"eq.{document_id}", "select": "state"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{document_id}", "select": "state"},
+        )
         rows = response.json()
         return rows[0]["state"] if rows else None
 
     async def reset_job_to_embedding(self, *, user_jwt: str, document_id: str) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"document_id": f"eq.{document_id}"},
-                json={"state": "embedding", "last_error": None},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": "embedding", "last_error": None},
+        )
 
 
 _storage: EmbedStorage = SupabaseEmbedStorage()

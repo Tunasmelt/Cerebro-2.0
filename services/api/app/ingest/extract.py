@@ -27,10 +27,10 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-import httpx
 import pdfplumber
 from PIL import Image
 
+from app.core.http_client import CachedHttpClientMixin
 from app.ingest.concurrency import INGEST_LOCK
 
 TEXT_CHUNK_SIZE = 1000  # chars — not specified anywhere in the docs;
@@ -140,7 +140,7 @@ class ExtractStorage(Protocol):
     async def mark_failed(self, *, user_jwt: str, document_id: str, error_code: str) -> None: ...
 
 
-class SupabaseExtractStorage:
+class SupabaseExtractStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -149,23 +149,23 @@ class SupabaseExtractStorage:
         return {"apikey": self._anon_key, "Authorization": f"Bearer {user_jwt}"}
 
     async def get_document(self, *, user_jwt: str, document_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={"id": f"eq.{document_id}", "select": "*"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{document_id}", "select": "*"},
+        )
         rows = response.json()
         if not rows:
             raise ExtractError("document_not_found", document_id)
         return rows[0]
 
     async def _download(self, *, bucket: str, path: str, user_jwt: str) -> bytes:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/storage/v1/object/{bucket}/{path}",
-                headers=self._headers(user_jwt),
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/storage/v1/object/{bucket}/{path}",
+            headers=self._headers(user_jwt),
+        )
         if response.status_code >= 400:
             raise ExtractError(f"{bucket}_download_failed", path)
         return response.content
@@ -191,38 +191,38 @@ class SupabaseExtractStorage:
             }
             for c in chunks
         ]
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self._supabase_url}/rest/v1/chunks",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                json=body,
-            )
+        client = self._client()
+        response = await client.post(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            json=body,
+        )
         if response.status_code >= 400:
             raise ExtractError("chunk_insert_failed", document_id)
 
     async def mark_extracted(self, *, user_jwt: str, document_id: str) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"document_id": f"eq.{document_id}"},
-                json={"state": "embedding"},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": "embedding"},
+        )
 
     async def mark_failed(self, *, user_jwt: str, document_id: str, error_code: str) -> None:
-        async with httpx.AsyncClient() as client:
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"document_id": f"eq.{document_id}"},
-                json={"state": "failed", "last_error": error_code},
-            )
-            await client.patch(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                params={"id": f"eq.{document_id}"},
-                json={"status": "failed"},
-            )
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": "failed", "last_error": error_code},
+        )
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{document_id}"},
+            json={"status": "failed"},
+        )
 
 
 _storage: ExtractStorage = SupabaseExtractStorage()

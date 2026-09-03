@@ -40,6 +40,8 @@ from typing import Any, Protocol
 import httpx
 from fastapi import HTTPException
 
+from app.core.http_client import CachedHttpClientMixin
+
 REINFORCEMENT_INCREMENT = 1.0  # added to weight per shared retrieval —
 # a reasonable, easy-to-retune default, same category as retrieve.py's
 # RRF_K or graph/cluster.py's choose_k heuristic.
@@ -184,7 +186,7 @@ def _parse_row(row: dict[str, Any]) -> ChunkEdge:
     )
 
 
-class SupabaseChunkEdgesStorage:
+class SupabaseChunkEdgesStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -223,74 +225,74 @@ class SupabaseChunkEdgesStorage:
             return
 
         now = datetime.now(timezone.utc).isoformat()
-        async with httpx.AsyncClient() as client:
-            for chunk_id_a, chunk_id_b in combinations(distinct_ids, 2):
-                source, target = _canonical_pair(chunk_id_a, chunk_id_b)
-                existing = await self._get_pair(client, user_jwt, source, target)
-                if existing is None:
-                    await client.post(
-                        f"{self._supabase_url}/rest/v1/chunk_edges",
-                        headers=self._headers(user_jwt),
-                        json={
-                            "user_id": user_id,
-                            "source_chunk_id": source,
-                            "target_chunk_id": target,
-                            "weight": REINFORCEMENT_INCREMENT,
-                            "co_retrieval_count": 1,
-                            "is_explicit": False,
-                            "last_reinforced_at": now,
-                        },
-                    )
-                elif not existing["is_explicit"]:
-                    # An explicit link is never touched by co-retrieval —
-                    # it keeps its fixed weight regardless of how often
-                    # the same pair also happens to be retrieved together.
-                    await client.patch(
-                        f"{self._supabase_url}/rest/v1/chunk_edges",
-                        headers=self._headers(user_jwt),
-                        params={"id": f"eq.{existing['id']}"},
-                        json={
-                            "weight": existing["weight"] + REINFORCEMENT_INCREMENT,
-                            "co_retrieval_count": existing["co_retrieval_count"] + 1,
-                            "last_reinforced_at": now,
-                        },
-                    )
+        client = self._client()
+        for chunk_id_a, chunk_id_b in combinations(distinct_ids, 2):
+            source, target = _canonical_pair(chunk_id_a, chunk_id_b)
+            existing = await self._get_pair(client, user_jwt, source, target)
+            if existing is None:
+                await client.post(
+                    f"{self._supabase_url}/rest/v1/chunk_edges",
+                    headers=self._headers(user_jwt),
+                    json={
+                        "user_id": user_id,
+                        "source_chunk_id": source,
+                        "target_chunk_id": target,
+                        "weight": REINFORCEMENT_INCREMENT,
+                        "co_retrieval_count": 1,
+                        "is_explicit": False,
+                        "last_reinforced_at": now,
+                    },
+                )
+            elif not existing["is_explicit"]:
+                # An explicit link is never touched by co-retrieval —
+                # it keeps its fixed weight regardless of how often
+                # the same pair also happens to be retrieved together.
+                await client.patch(
+                    f"{self._supabase_url}/rest/v1/chunk_edges",
+                    headers=self._headers(user_jwt),
+                    params={"id": f"eq.{existing['id']}"},
+                    json={
+                        "weight": existing["weight"] + REINFORCEMENT_INCREMENT,
+                        "co_retrieval_count": existing["co_retrieval_count"] + 1,
+                        "last_reinforced_at": now,
+                    },
+                )
 
     async def create_explicit_link(
         self, *, user_jwt: str, user_id: str, chunk_id_a: str, chunk_id_b: str
     ) -> ChunkEdge | None:
         source, target = _canonical_pair(chunk_id_a, chunk_id_b)
-        async with httpx.AsyncClient() as client:
-            # Both chunks must actually be the caller's own — an RLS-scoped
-            # lookup, same "explicit ownership check before a cross-
-            # reference insert" pattern kanban_storage.create_card already
-            # uses for board_id. A sealed document's chunk id can never
-            # appear here either: sealing deletes the chunks row entirely
-            # (Stage 3.3), so the lookup below just comes back short.
-            chunks_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chunks",
-                headers=self._headers(user_jwt),
-                params={"id": f"in.({source},{target})", "select": "id"},
-            )
-            if chunks_resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail="chunk_lookup_failed")
-            if len(chunks_resp.json()) != 2:
-                return None
+        client = self._client()
+        # Both chunks must actually be the caller's own — an RLS-scoped
+        # lookup, same "explicit ownership check before a cross-
+        # reference insert" pattern kanban_storage.create_card already
+        # uses for board_id. A sealed document's chunk id can never
+        # appear here either: sealing deletes the chunks row entirely
+        # (Stage 3.3), so the lookup below just comes back short.
+        chunks_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers=self._headers(user_jwt),
+            params={"id": f"in.({source},{target})", "select": "id"},
+        )
+        if chunks_resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail="chunk_lookup_failed")
+        if len(chunks_resp.json()) != 2:
+            return None
 
-            response = await client.post(
-                f"{self._supabase_url}/rest/v1/chunk_edges",
-                headers={**self._headers(user_jwt), "Prefer": "return=representation,resolution=merge-duplicates"},
-                params={"on_conflict": "user_id,source_chunk_id,target_chunk_id"},
-                json={
-                    "user_id": user_id,
-                    "source_chunk_id": source,
-                    "target_chunk_id": target,
-                    "weight": EXPLICIT_LINK_WEIGHT,
-                    "co_retrieval_count": 0,
-                    "is_explicit": True,
-                    "last_reinforced_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
+        response = await client.post(
+            f"{self._supabase_url}/rest/v1/chunk_edges",
+            headers={**self._headers(user_jwt), "Prefer": "return=representation,resolution=merge-duplicates"},
+            params={"on_conflict": "user_id,source_chunk_id,target_chunk_id"},
+            json={
+                "user_id": user_id,
+                "source_chunk_id": source,
+                "target_chunk_id": target,
+                "weight": EXPLICIT_LINK_WEIGHT,
+                "co_retrieval_count": 0,
+                "is_explicit": True,
+                "last_reinforced_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="chunk_edge_create_failed")
         rows = response.json()
@@ -302,26 +304,26 @@ class SupabaseChunkEdgesStorage:
         if not chunk_ids:
             return []
         in_list = ",".join(sorted(set(chunk_ids)))
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/chunk_edges",
-                headers=self._headers(user_jwt),
-                params={
-                    "or": f"(source_chunk_id.in.({in_list}),target_chunk_id.in.({in_list}))",
-                    "select": "*",
-                },
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/chunk_edges",
+            headers=self._headers(user_jwt),
+            params={
+                "or": f"(source_chunk_id.in.({in_list}),target_chunk_id.in.({in_list}))",
+                "select": "*",
+            },
+        )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="chunk_edges_list_failed")
         return [_parse_row(r) for r in response.json()]
 
     async def list_all_edges(self, *, user_jwt: str) -> list[ChunkEdge]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/chunk_edges",
-                headers=self._headers(user_jwt),
-                params={"select": "*"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/chunk_edges",
+            headers=self._headers(user_jwt),
+            params={"select": "*"},
+        )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="chunk_edges_list_failed")
         return [_parse_row(r) for r in response.json()]
@@ -332,12 +334,12 @@ class SupabaseChunkEdgesStorage:
         if not chunk_ids:
             return {}
         in_list = ",".join(sorted(set(chunk_ids)))
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/chunks",
-                headers=self._headers(user_jwt),
-                params={"id": f"in.({in_list})", "select": "id,document_id"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers=self._headers(user_jwt),
+            params={"id": f"in.({in_list})", "select": "id,document_id"},
+        )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="resolve_chunk_documents_failed")
         return {row["id"]: row["document_id"] for row in response.json()}
