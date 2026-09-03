@@ -4,7 +4,12 @@ Host-agnostic (no FastAPI imports), operates on document_id + user_jwt
 only — same design intent as normalize.py, see architecture-and-security.md
 §1.
 
-Text: no library needed, straight character-window chunking.
+Text: no library needed. Originally straight character-window chunking;
+Stage 7.1 kept the same window size/overlap but made the cut points
+boundary-aware (paragraph > sentence > line > word, searched within a
+fraction of the target size), so a chunk no longer opens or closes
+mid-word — which degraded both embedding quality and the readability of
+every chunk preview in the UI.
 
 PDF: pdfplumber for text extraction (chosen over pypdf/PyMuPDF — see the
 Stage 1.3 conversation record; PyMuPDF's AGPL licensing was a specific
@@ -38,6 +43,26 @@ TEXT_CHUNK_SIZE = 1000  # chars — not specified anywhere in the docs;
 # not a load-bearing architectural number.
 TEXT_CHUNK_OVERLAP = 100
 
+# Stage 7.1 — how far back from the ideal cut point `chunk_text` will
+# look for a real boundary before giving up and hard-cutting. 20% of the
+# target size: far enough back to reach the end of a normal sentence or
+# paragraph, near enough that chunks stay close to the size everything
+# downstream (embedding, rerank input, the UI's chunk previews) was
+# tuned around. A fraction rather than a fixed char count so a caller
+# passing a smaller `chunk_size` gets a proportional search window, not
+# one that could swallow the whole chunk.
+TEXT_CHUNK_BOUNDARY_SEARCH = 0.2
+
+_PARAGRAPH_BREAK = "\n\n"
+# Deliberately requires the trailing space/newline: a bare "." also ends
+# "3.14", "Fig.", and "e.g.", none of which are sentence boundaries.
+# This isn't a real sentence tokenizer and isn't trying to be — the
+# fallbacks below (line break, then any whitespace) already guarantee a
+# sane cut, so a missed sentence end costs chunk tidiness, never
+# correctness. A proper tokenizer (nltk/spacy) would mean a heavy new
+# dependency, which CLAUDE.md's memory governance rules out.
+_SENTENCE_ENDINGS = (". ", "! ", "? ", ".\n", "!\n", "?\n")
+
 IMAGE_TILE_THRESHOLD = 2048  # px — matches Stage 1.2's own
 # MAX_IMAGE_DIMENSION: anything the single normalized WebP would already
 # have downscaled is exactly what tiling the original is meant to recover
@@ -59,24 +84,95 @@ class Chunk:
     meta: dict[str, Any] = field(default_factory=dict)
 
 
+def _find_boundary(text: str, *, window_start: int, ideal_end: int) -> int:
+    """Best cut point in [window_start, ideal_end], preferring the
+    strongest structural break available in that window.
+
+    Returns a position to slice *up to* (exclusive), so the break itself
+    stays with the chunk that ends on it rather than opening the next
+    one. Falls back to `ideal_end` — the old hard character cut — when
+    the window holds no boundary at all, which is the right answer for
+    genuinely unbreakable input (a 1000-char base64 blob, minified
+    source, a CJK run with no spaces).
+    """
+    window = text[window_start:ideal_end]
+
+    paragraph_idx = window.rfind(_PARAGRAPH_BREAK)
+    if paragraph_idx != -1:
+        return window_start + paragraph_idx + len(_PARAGRAPH_BREAK)
+
+    sentence_end = -1
+    for ending in _SENTENCE_ENDINGS:
+        idx = window.rfind(ending)
+        if idx != -1:
+            sentence_end = max(sentence_end, idx + len(ending))
+    if sentence_end != -1:
+        return window_start + sentence_end
+
+    line_idx = window.rfind("\n")
+    if line_idx != -1:
+        return window_start + line_idx + 1
+
+    for i in range(ideal_end - 1, window_start - 1, -1):
+        if text[i].isspace():
+            return i + 1
+
+    return ideal_end
+
+
+def _snap_to_word_start(text: str, pos: int, *, limit: int) -> int:
+    """Move `pos` forward to the next word start, so a chunk never opens
+    mid-word. Clamped to `limit` (the previous chunk's end) so snapping
+    can only ever shrink the overlap, never skip past text entirely and
+    leave a gap between two chunks.
+    """
+    if pos <= 0 or pos >= len(text) or text[pos - 1].isspace():
+        return pos
+    while pos < len(text) and not text[pos].isspace():
+        pos += 1
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+    return min(pos, limit)
+
+
 def chunk_text(
     text: str, *, chunk_size: int = TEXT_CHUNK_SIZE, overlap: int = TEXT_CHUNK_OVERLAP
 ) -> list[str]:
+    """Stage 7.1 — chunks snap to real boundaries (paragraph > sentence >
+    line > word) within `TEXT_CHUNK_BOUNDARY_SEARCH` of the target size,
+    instead of the original raw character-offset slicing that could open
+    or close a chunk mid-word. Same target size and overlap as before;
+    only where the cut lands changed.
+    """
     text = text.strip()
     if not text:
         return []
     if len(text) <= chunk_size:
         return [text]
 
+    search_span = max(1, int(chunk_size * TEXT_CHUNK_BOUNDARY_SEARCH))
     chunks: list[str] = []
     start = 0
-    step = chunk_size - overlap
     while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end])
-        if end == len(text):
+        ideal_end = start + chunk_size
+        if ideal_end >= len(text):
+            tail = text[start:].strip()
+            if tail:
+                chunks.append(tail)
             break
-        start += step
+
+        window_start = max(start + 1, ideal_end - search_span)
+        end = _find_boundary(text, window_start=window_start, ideal_end=ideal_end)
+
+        piece = text[start:end].strip()
+        if piece:
+            chunks.append(piece)
+
+        next_start = _snap_to_word_start(text, end - overlap, limit=end)
+        # Forward progress is a hard guarantee, not a hope: a caller
+        # passing overlap >= chunk_size (or a boundary landing inside the
+        # overlap region) would otherwise loop forever.
+        start = next_start if next_start > start else end
     return chunks
 
 

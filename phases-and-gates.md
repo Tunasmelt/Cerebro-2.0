@@ -2240,7 +2240,7 @@ any of the retrieval/generation stages below once implemented; each
 stage's own hand-written tests carry that weight until RAGAS is
 unblocked.
 
-### Stage 7.1 — Sentence/paragraph-aware chunk boundaries
+### Stage 7.1 — Sentence/paragraph-aware chunk boundaries ✅
 **Exit criteria:** `extract.py`'s `chunk_text()` currently slices on
 raw character offsets (`TEXT_CHUNK_SIZE=1000`, `TEXT_CHUNK_OVERLAP=100`,
 both explicitly flagged in their own comments as untuned first-pass
@@ -2249,9 +2249,40 @@ start or end mid-word, mid-sentence. Boundaries should snap to the
 nearest sentence/paragraph break within a small tolerance of the
 target size, on both the plain-text and per-page PDF paths, preserving
 the existing overlap behavior.
-**Tests:** A chunk boundary never falls inside a word for realistic
-prose input; existing char-count-based fixture tests updated to assert
-boundary quality, not just count/length.
+**Done:** `chunk_text` now searches the last `TEXT_CHUNK_BOUNDARY_SEARCH`
+(20%) of each target-size window for the strongest real break —
+paragraph (`\n\n`) > sentence end (`. `/`! `/`? `, with the trailing
+space required so "3.14"/"Fig."/"e.g." don't false-positive) > line
+break > any whitespace — and only hard-cuts at the raw offset when the
+window holds none at all (a long base64 blob, minified source, a
+spaceless CJK run). The chunk's overlap start is then snapped forward
+to the next word boundary too, clamped so it can only shrink the
+overlap, never open a gap. Applies to both `extract_text_chunks` and
+`extract_pdf_chunks` (per-page) since both route through the same
+function — no separate PDF-path logic needed. No new dependency: a
+real sentence tokenizer (nltk/spacy) was deliberately not pulled in,
+consistent with CLAUDE.md's memory-governance posture; the paragraph/
+line/whitespace fallbacks already guarantee a sane cut even when the
+sentence heuristic misses, so a missed sentence end costs chunk
+tidiness, never correctness. Target chunk size and overlap are
+unchanged — same 1000/100 defaults, just where the cut lands moved.
+**Tests:** 7 new tests in `test_stage_1_3_extract.py` — no chunk edge
+falls mid-word across 300 sentences of varied-length realistic prose;
+a paragraph break inside the search window wins over any later word
+boundary; a sentence end wins over plain word boundaries with no
+terminator; among two equally-strong boundaries the one nearest the
+target size wins (least size sacrificed); a genuinely unbreakable
+3000-char run still hard-cuts into multiple ≤1000-char chunks instead
+of looping or emitting one giant chunk; no character of the source is
+ever lost or duplicated-with-a-gap across consecutive chunks; a
+pathological `overlap > chunk_size` caller still terminates instead of
+looping forever. All existing fixture tests (including the exact
+`2500 chars → 3 chunks` regression count) pass unchanged — the same
+number of chunks come out, only their edges moved. Verified with a
+direct before/after comparison on 120 sentences of realistic prose:
+old chunking put a mid-word edge on 8/8 chunks, new chunking on 0/8,
+with the same 8-chunk count either way (no size bloat from the
+boundary search). 444/444 backend tests passing, `ruff` clean.
 
 ### Stage 7.2 — Image content matchability for full-text search
 **Exit criteria:** Image chunks always have `content=""`

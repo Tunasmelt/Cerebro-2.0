@@ -89,6 +89,98 @@ def test_chunk_text_empty_input_produces_no_chunks():
     assert chunk_text("   \n  ", chunk_size=1000, overlap=100) == []
 
 
+# --- chunk_text boundary awareness (Stage 7.1) ---------------------------------
+
+
+def _prose(sentence_count: int) -> str:
+    # Varied sentence lengths so cut points don't land on a convenient
+    # repeating stride the way "word " * n does.
+    return " ".join(
+        f"Sentence number {i} carries {'a bit ' * (i % 4)}of filler text."
+        for i in range(sentence_count)
+    )
+
+
+def test_chunk_text_never_splits_a_word_across_chunks():
+    # The actual Stage 7.1 exit criterion: for realistic prose, no chunk
+    # may start or end mid-word.
+    text = _prose(300)
+    chunks = chunk_text(text, chunk_size=1000, overlap=100)
+
+    assert len(chunks) > 1  # otherwise this proves nothing
+    for chunk in chunks:
+        assert chunk == chunk.strip()
+        start = text.index(chunk)
+        end = start + len(chunk)
+        # A chunk edge is legal only at a document edge or against
+        # whitespace in the source — never in the middle of a token.
+        assert start == 0 or text[start - 1].isspace()
+        assert end == len(text) or text[end].isspace()
+
+
+def test_chunk_text_prefers_a_paragraph_break_over_a_word_boundary():
+    # The paragraph break sits inside the search window (last 20% of the
+    # 1000-char target), so it should win over any later word boundary.
+    head = "a" * 850 + " tail words here"
+    text = head + "\n\n" + "b" * 1200
+    chunks = chunk_text(text, chunk_size=1000, overlap=100)
+
+    assert chunks[0] == head
+
+
+def test_chunk_text_prefers_a_sentence_end_over_a_mid_sentence_word_boundary():
+    # No paragraph break available, and the sentence end is followed by
+    # plenty of later word boundaries still inside the window — the
+    # sentence end must win anyway, on strength rather than position.
+    head = "x" * 820 + " end of the sentence."
+    text = head + " then plain words follow with no terminator at all " + "y" * 1200
+    chunks = chunk_text(text, chunk_size=1000, overlap=100)
+
+    assert chunks[0] == head
+
+
+def test_chunk_text_snaps_to_the_latest_boundary_in_the_window():
+    # Among equally-strong boundaries, the one nearest the target size
+    # wins — snapping back should cost as little chunk size as possible.
+    text = "x" * 700 + " first. " + "y" * 100 + " second. " + "z" * 1200
+    chunks = chunk_text(text, chunk_size=1000, overlap=100)
+
+    assert chunks[0].endswith("second.")
+
+
+def test_chunk_text_hard_cuts_when_the_window_holds_no_boundary_at_all():
+    # An unbreakable token (base64 blob, minified source, spaceless CJK)
+    # must still chunk rather than loop or emit one giant chunk.
+    text = "z" * 3000
+    chunks = chunk_text(text, chunk_size=1000, overlap=100)
+
+    assert len(chunks) > 1
+    assert all(len(c) <= 1000 for c in chunks)
+    assert "".join(dict.fromkeys(chunks)) != ""  # produced real content
+
+
+def test_chunk_text_loses_no_text_between_consecutive_chunks():
+    # Boundary snapping must never open a gap — every character of the
+    # source has to survive into at least one chunk.
+    text = _prose(200)
+    chunks = chunk_text(text, chunk_size=1000, overlap=100)
+
+    cursor = 0
+    for chunk in chunks:
+        found = text.index(chunk, max(0, cursor - 1000))
+        assert found <= cursor, "gap between chunks — source text was dropped"
+        cursor = found + len(chunk)
+    assert cursor == len(text)
+
+
+def test_chunk_text_terminates_when_overlap_exceeds_chunk_size():
+    # Pathological caller input: without an explicit forward-progress
+    # guarantee this loops forever.
+    chunks = chunk_text(_prose(100), chunk_size=200, overlap=500)
+
+    assert len(chunks) > 1
+
+
 # --- extract_text_chunks -------------------------------------------------------
 
 
