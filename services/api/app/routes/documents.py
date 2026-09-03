@@ -276,6 +276,27 @@ async def extract_action_items_route(request: Request, document_id: str):
     return JSONResponse({"items": candidates}, status_code=200)
 
 
+class RenameDocumentBody(BaseModel):
+    title: str
+
+
+@router.patch("/api/v1/documents/{document_id}")
+async def rename_document(request: Request, document_id: str, body: RenameDocumentBody):
+    title = body.title.strip()
+    if not title:
+        return _error("empty_title", "Title cannot be empty", 422)
+    if len(title) > 500:
+        return _error("title_too_long", "Title exceeds 500 characters", 413)
+
+    storage = get_documents_storage()
+    renamed = await storage.rename_document(
+        user_jwt=request.state.user_jwt, document_id=document_id, title=title
+    )
+    if not renamed:
+        return _error("not_found", "Document not found", 404)
+    return JSONResponse({"id": document_id, "title": title}, status_code=200)
+
+
 @router.delete("/api/v1/documents/{document_id}")
 async def delete_document(request: Request, document_id: str):
     """Deletes both Storage objects (best-effort) then the documents

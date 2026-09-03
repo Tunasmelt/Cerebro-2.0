@@ -1674,6 +1674,61 @@ extended for the new delete route (happy path, another-user's-session
 404-not-403, nonexistent-session 404, unauthenticated). Frontend
 `lint`/`test`/`build` clean.
 
+### Document management and graph node identity pass ✅
+Not a numbered stage — another cross-cutting pass, done the same way as
+the chat management pass just above: no new gate, built on stages
+already ✅. Closes four real gaps in one go: `/documents` had no way to
+view, delete, or rename a file (Stage 3.6 built `GET`/`download`/
+`original`/`DELETE` routes months ago, but no page ever called any of
+them except delete-via-account-wipe); there was no rename endpoint at
+all; and the graph could neither be clicked into a real chat turn nor
+tell an image node from a document from a sealed one.
+
+**The sealed-node gap:** research surfaced a second real, previously
+invisible bug alongside the fix above — `graph/storage.py`'s `get_nodes`
+filtered `status=eq.ready` only, so sealing a document (Stage 3.3) made
+its node disappear from the graph entirely instead of just hiding its
+content. There was no node left to click, so "select a node and view
+what it's about" was actually impossible for any sealed document,
+not just visually unclear. Fixed by widening the filter to
+`status=in.(ready,sealed)` and returning `mime`/`status` per node
+(both already plain columns on `documents`, no new data exposed beyond
+what `/documents` already shows for the same row) — additive fields on
+the existing node shape, not a new endpoint.
+
+**Done (backend):** `documents_storage.py` gains `rename_document`
+(PATCH `/rest/v1/documents`, same `Prefer: return=representation`
+404-not-403 pattern `delete_session` established) behind a new
+`PATCH /api/v1/documents/{id}` route (422 on an empty/oversized title).
+`get_nodes` widened as above.
+**Done (frontend):** `/documents` gained inline rename (click a pencil
+icon, Enter/Escape to save/cancel), a "View" button (opens the signed
+download URL in a new tab — hidden for a sealed document, since the
+backend already 423s that download and always will, sealing never
+re-encrypts the underlying Storage object), and a "Delete" button
+(confirm, then the existing route). The graph's node color changed from
+cluster-hue to a type/sealed signal — violet for a document, teal for an
+image, amber for sealed (matching `--accent-locked`, the same amber
+every other sealed indicator in the app already uses) — sealed always
+wins regardless of mime. The side panel gained a type/sealed badge row,
+a sealed document now shows a clear "hidden until unlocked" message
+instead of skipping straight to an empty chunk list (and skips the now-
+pointless chunks fetch entirely, since sealing already deleted them from
+`chunks`), and a new "Chat about this" button runs the node's title
+through the exact same real retrieval+generation path (`sendQuery`,
+factored out of the existing chat form's submit handler) a typed
+question would — not a second, fake code path. `GraphCanvas`'s
+`clusterColor` module was removed outright now that node color no
+longer reads `cluster_id` — dead code, not kept around unreferenced.
+**Tests:** backend — `test_documents_graph_nodes_and_rename.py`
+(storage-level, fake httpx transport: `get_nodes` requests both
+statuses and returns `mime`/`status` per node; `rename_document` sends
+the right PATCH and returns `False` for an unmatched/not-owned
+document), `test_stage_3_6_document_lifecycle.py` extended for the new
+rename route (happy path, 404, empty-title 422, unauthenticated, works
+on a sealed document). 397/397 backend tests passing, `ruff` clean.
+Frontend `lint`/`test`/`build` clean.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks

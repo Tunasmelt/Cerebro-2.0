@@ -1,3 +1,9 @@
+// Node type/sealed coloring pass — mime/status were already columns on
+// `documents`, get_nodes (services/api/app/graph/storage.py) now
+// includes them per node so the graph can color by type and distinguish
+// a sealed node without a second per-node request. Also fixed a real
+// bug: get_nodes used to filter status=eq.ready only, so sealing a
+// document made its node vanish from the graph entirely.
 export type GraphNode = {
   id: string;
   title: string;
@@ -5,6 +11,8 @@ export type GraphNode = {
   x: number | null;
   y: number | null;
   z: number | null;
+  mime?: string | null;
+  status?: "ready" | "sealed";
 };
 
 export type GraphEdge = {

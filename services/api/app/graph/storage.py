@@ -176,19 +176,31 @@ class SupabaseGraphStorage:
                     )
 
     async def get_nodes(self, *, user_jwt: str) -> list[dict[str, Any]]:
-        """Every status=ready document, left-joined to its cluster
-        position — a document uploaded since the last recluster still
-        appears (cluster_id/x/y come back null), matching the exit
-        criteria's "no stale/missing nodes after an upload" directly:
-        node presence tracks documents.status live, not the last
-        recluster snapshot the way edges/positions do."""
+        """Every status=ready OR status=sealed document, left-joined to
+        its cluster position — a document uploaded since the last
+        recluster still appears (cluster_id/x/y come back null), matching
+        the exit criteria's "no stale/missing nodes after an upload"
+        directly: node presence tracks documents.status live, not the
+        last recluster snapshot the way edges/positions do.
+
+        Sealing (Stage 3.3) only ever deletes plaintext from `chunks` and
+        flips documents.status ready -> sealed; the documents row itself
+        (title, mime, its existing cluster placement) is untouched — this
+        used to filter status=eq.ready only, which meant sealing a
+        document made its node vanish from the graph entirely rather
+        than just hiding its content, with no way to even select it.
+        `mime` and `status` are returned so the frontend can color a node
+        by type (document vs. image) and distinguish sealed nodes,
+        without a second per-node request — both are already columns on
+        `documents`, no new data exposed beyond what /documents already
+        shows for the same row."""
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"{self._supabase_url}/rest/v1/documents",
                 headers=self._headers(user_jwt),
                 params={
-                    "status": "eq.ready",
-                    "select": "id,title,document_clusters(cluster_id,distance,clusters(centroid_x,centroid_y,centroid_z))",
+                    "status": "in.(ready,sealed)",
+                    "select": "id,title,mime,status,document_clusters(cluster_id,distance,clusters(centroid_x,centroid_y,centroid_z))",
                 },
             )
         if response.status_code >= 400:
@@ -205,6 +217,8 @@ class SupabaseGraphStorage:
                 {
                     "id": row["id"],
                     "title": row["title"],
+                    "mime": row.get("mime"),
+                    "status": row.get("status"),
                     "cluster_id": (dc or {}).get("cluster_id"),
                     "x": cluster.get("centroid_x"),
                     "y": cluster.get("centroid_y"),

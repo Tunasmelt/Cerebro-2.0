@@ -263,6 +263,43 @@
   cursor: not-allowed;
 }
 
+.dangerBtn {
+  color: var(--danger-hover);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.dangerBtn:hover {
+  background: var(--danger-subtle);
+}
+
+.titleEditBtn {
+  background: none;
+  border: none;
+  color: var(--text-disabled);
+  cursor: pointer;
+  padding: 2px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.titleEditBtn:hover {
+  color: var(--text-primary);
+}
+.titleInput {
+  background: var(--bg-base);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 3px var(--space-2);
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  min-width: 0;
+  flex: 1;
+}
+.titleText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .actionItemsCell {
   background: var(--bg-base);
   padding: var(--space-3) var(--space-4) !important;

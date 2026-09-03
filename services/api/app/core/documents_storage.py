@@ -109,6 +109,10 @@ class DocumentsStorage(Protocol):
 
     async def delete_document(self, *, user_jwt: str, document_id: str) -> bool: ...
 
+    async def rename_document(
+        self, *, user_jwt: str, document_id: str, title: str
+    ) -> bool: ...
+
     async def create_capture(
         self, *, user_jwt: str, user_id: str, title: str, text: str
     ) -> str: ...
@@ -367,6 +371,27 @@ class SupabaseDocumentsStorage:
                 raise HTTPException(status_code=502, detail="document_delete_failed")
 
         return True
+
+    async def rename_document(
+        self, *, user_jwt: str, document_id: str, title: str
+    ) -> bool:
+        """`Prefer: return=representation` on the PATCH is what lets a
+        "not this caller's document" (RLS makes it invisible, matched
+        zero rows) be told apart from a real update — same 404-not-403
+        pattern delete_session (chat/storage.py) uses for the same
+        reason. Works regardless of status (processing/ready/sealed) —
+        renaming is a metadata-only change, never touches chunk content,
+        so it's safe even on a sealed document."""
+        async with httpx.AsyncClient() as client:
+            response = await client.patch(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+                params={"id": f"eq.{document_id}"},
+                json={"title": title},
+            )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="document_rename_failed")
+        return bool(response.json())
 
     async def create_capture(
         self, *, user_jwt: str, user_id: str, title: str, text: str
