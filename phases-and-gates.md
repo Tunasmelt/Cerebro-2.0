@@ -2613,16 +2613,41 @@ logic, not an automated component test or a live browser session
 (no running Supabase-backed session was available in this pass) —
 flagged honestly rather than claimed as browser-verified.
 
-### Stage 7.11 — SSE heartbeat during retrieval/HyDE
+### Stage 7.11 — SSE heartbeat during retrieval/HyDE ✅
 **Exit criteria:** There's a silent gap today between the user's
 question and the first `token` event — HyDE alone adds a full extra
 Gemini call inside that gap with zero client-visible signal, and there
 is no heartbeat/keepalive event of any kind in the current SSE
 contract. Add a lightweight heartbeat/progress event so the UI can show
 a real "thinking…" state instead of looking frozen during a slow turn.
-**Tests:** A simulated slow retrieval/HyDE path produces at least one
-heartbeat event before the first token; the frontend visibly reflects
-it.
+**Done:** `chat/stream.py` used to fully `await retrieve(...)` before
+yielding anything — `retrieve()` now runs as an `asyncio.Task`, polled
+in a loop via `asyncio.wait(..., timeout=HEARTBEAT_INTERVAL_SECONDS)`
+(1.5s): every interval the task hasn't finished, a new `heartbeat` SSE
+event is yielded before looping again. `asyncio.create_task` snapshots
+the current `contextvars.Context`, so Langfuse's span propagation into
+retrieve()'s own spans (embed_query, vector_search, ...) is unaffected
+— they still nest under `chat_turn` exactly as before. Purely additive
+to the SSE contract: zero or more `heartbeat` events, only ever before
+`retrieval`, never interleaved elsewhere. Frontend (`/graph`, the only
+live-streaming render site): a new `heartbeatCount` state increments on
+each event; `renderAnswer()`'s "still thinking" placeholder switches
+from a static `"…"` to `"Thinking."`/`"Thinking.."`/`"Thinking..."`
+(cycling with the count) once at least one heartbeat has actually
+landed, so a slow turn visibly looks different from a fast one instead
+of both showing the same frozen ellipsis.
+**Tests:** Two new tests in `test_stage_1_7_chat.py` — a simulated slow
+retrieve (heartbeat interval patched down to 0.01s, fake retrieve sleeps
+0.05s) produces one or more `heartbeat` events, and only heartbeats,
+before the `retrieval` event; the existing fast fixture path (real
+retrieve pipeline, fake but instant embed/rerank/storage clients)
+emits zero heartbeat events, confirming the common case is unaffected.
+Full suite: 483/483 passing, ruff clean. Frontend: `tsc --noEmit`,
+`eslint`, `npm run build`, and the existing 19-test suite all clean —
+no automated frontend test exercises the heartbeat UI itself (no
+component-test infra, same caveat as Stage 7.10), so the visible
+"Thinking…" behavior was verified by code review, not a live browser
+session.
 
 ### Stage 7.12 — Generation retry/fallback on Gemini timeout or failure *(priority)*
 **Exit criteria:** Zero retry logic exists anywhere in generation

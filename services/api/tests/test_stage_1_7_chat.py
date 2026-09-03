@@ -14,6 +14,7 @@ Uses fake embed/rerank/retrieve-storage clients (same pattern as
 test_stage_1_5_retrieve.py) plus a fake generate client and fake chat
 storage, so the whole stream is deterministic and network-free.
 """
+import asyncio
 import json
 
 import pytest
@@ -209,6 +210,52 @@ async def test_long_detailed_query_is_passed_to_retrieve_with_hyde_disabled(monk
     )
 
     assert calls[0]["use_hyde"] is False
+
+
+# --- Stage 7.11: heartbeat events during a slow retrieval/HyDE gap -----------
+
+
+@pytest.mark.asyncio
+async def test_slow_retrieval_emits_at_least_one_heartbeat_before_retrieval_event(
+    monkeypatch,
+):
+    monkeypatch.setattr(stream_module, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+
+    async def slow_retrieve(**kwargs):
+        await asyncio.sleep(0.05)  # several heartbeat intervals
+        return []
+
+    monkeypatch.setattr(stream_module, "retrieve", slow_retrieve)
+    set_generate_client(_FakeGenerateClient(["ok"]))
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    events = await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query="anything"
+        )
+    )
+
+    event_names = [name for name, _ in events]
+    retrieval_index = event_names.index("retrieval")
+    # Only heartbeat events precede retrieval — never a token, never
+    # anything else — and there's at least one of them.
+    assert event_names[:retrieval_index] == ["heartbeat"] * retrieval_index
+    assert retrieval_index >= 1
+
+
+@pytest.mark.asyncio
+async def test_fast_retrieval_emits_no_heartbeat_events():
+    _wire_retrieve([_chunk("c1111111-1111-1111-1111-111111111111", "relevant content")])
+    set_generate_client(_FakeGenerateClient(["ok"]))
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    events = await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query="anything"
+        )
+    )
+
+    assert "heartbeat" not in [name for name, _ in events]
 
 
 # --- ordering: retrieval before any token, every run --------------------------
