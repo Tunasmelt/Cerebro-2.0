@@ -41,6 +41,7 @@ from app.chat.storage import get_chat_storage
 from app.core.documents_storage import get_documents_storage
 from app.core.tracing import get_tracer
 from app.graph.edges import get_chunk_edges_storage
+from app.retrieve.hyde import should_use_hyde
 from app.retrieve.retrieve import retrieve
 from app.retrieve.rewrite import HISTORY_MESSAGE_LIMIT
 
@@ -92,19 +93,24 @@ async def stream_chat(
 
             # Retrieval quality pass — Stage 5.2's HyDE was fully built
             # and tested but never actually turned on here (its own exit
-            # criteria wanted an A/B-able flag, not a silent default).
-            # A vague prompt is exactly where it earns its keep: a short
+            # criteria wanted an A/B-able flag, not a silent default). A
+            # vague prompt is exactly where it earns its keep: a short
             # query like "what's in the schedule" shares little
             # vocabulary with dense indexed passages, but a hypothetical
             # answer written in passage-shaped language closes that gap
-            # for vector search. Same "degrade, don't crash" contract as
-            # every other quality step in retrieve() — a failed or empty
-            # hypothetical falls back to embedding the real query.
+            # for vector search. Stage 7.9: turning it on for *every*
+            # turn re-broke that same "A/B-able, not a silent default"
+            # intent and added a full extra Gemini round-trip before the
+            # first token on every question regardless of whether it
+            # needed it — should_use_hyde() makes the call conditional
+            # again, on the query's own shape. Same "degrade, don't
+            # crash" contract either way — a failed or empty hypothetical
+            # falls back to embedding the real query.
             chunks = await retrieve(
                 user_jwt=user_jwt,
                 query=query,
                 recent_messages=recent_messages,
-                use_hyde=True,
+                use_hyde=should_use_hyde(query),
             )
 
             # Retrieval quality pass — chunks alone never told the model

@@ -2532,7 +2532,7 @@ candidate belongs to one document returns the identical `FINAL_TOP_K`
 result set, in the identical order, as before this stage. Full suite:
 475/475 passing, ruff clean.
 
-### Stage 7.9 — HyDE latency reconsideration
+### Stage 7.9 — HyDE latency reconsideration ✅
 **Exit criteria:** HyDE runs unconditionally on every chat turn
 (`stream.py`'s `use_hyde=True`), adding a full extra Gemini round-trip
 before the first token can appear — this overrides Stage 5.2's own
@@ -2541,10 +2541,25 @@ Either measure the real cost via Langfuse against production traffic
 and make a deliberate keep/drop call, or make it conditional (e.g. only
 for short/ambiguous queries where the vocabulary-gap problem it solves
 actually applies).
-**Tests:** Langfuse trace data (or a benchmark) quantifies the actual
-added latency; if made conditional, a fixture set confirms it still
-fires for the query shapes it's meant to help and skips for ones it
-isn't.
+**Done:** No production Langfuse traffic was available to this pass to
+measure against, so took the exit criteria's other allowed path: made
+it conditional. New `retrieve/hyde.py::should_use_hyde(query)` — a
+pure, no-I/O word-count heuristic (`HYDE_MAX_QUERY_WORDS=8`, plain
+`str.split()`, no tokenizer dependency) — returns `True` for short
+queries like this module's own motivating example ("what's in the
+schedule") and `False` for a query already carrying enough specific
+vocabulary of its own to match real passages directly. `chat/stream.py`
+now calls `retrieve(..., use_hyde=should_use_hyde(query))` instead of
+the hardcoded `use_hyde=True`. The threshold isn't tuned against real
+traffic (none was available) — documented as easy to retune once
+Langfuse data makes the actual short/long split visible.
+**Tests:** Four new tests directly on `should_use_hyde` in
+`test_stage_5_2_hyde.py` (short query enables it, a long detailed
+query disables it, and the exact word-count boundary in both
+directions), plus two new tests in `test_stage_1_7_chat.py` asserting
+`stream_chat` actually passes the right `use_hyde` value through to
+`retrieve()` for a short vs. a long query. Full suite: 481/481
+passing, ruff clean.
 
 ### Stage 7.10 — Real markdown rendering on chat answers
 **Exit criteria:** The current mitigation (`SYSTEM_PROMPT_HEADER`
