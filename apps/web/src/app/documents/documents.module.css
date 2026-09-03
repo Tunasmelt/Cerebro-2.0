@@ -369,9 +369,48 @@
 
 .actionsCell {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: var(--space-2);
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.iconActionBtn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.iconActionBtn:hover {
+  background: var(--bg-elevated-hover);
+  color: var(--text-primary);
+}
+.iconActionBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.iconActionBtnDanger {
+  color: var(--danger-hover);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.iconActionBtnDanger:hover {
+  background: var(--danger-subtle);
+  color: var(--danger-hover);
+}
+.spinning {
+  display: inline-flex;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .modalOverlay {
@@ -463,7 +502,14 @@
     overflow-x: auto;
   }
   .table {
-    min-width: 420px;
+    min-width: 280px;
+  }
+  .actionsCell {
+    gap: 4px;
+  }
+  .iconActionBtn {
+    width: 26px;
+    height: 26px;
   }
 
   .actionItemRow {

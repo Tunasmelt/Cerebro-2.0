@@ -4,6 +4,9 @@
   height: 100%;
   color: var(--text-primary);
   font-family: var(--font-ui);
+  background:
+    radial-gradient(ellipse 700px 400px at 100% 0%, rgba(139, 92, 246, 0.04), transparent 60%),
+    var(--bg-base);
 }
 
 .sessionList {
@@ -119,6 +122,27 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.backBtn {
+  display: none;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-right: var(--space-2);
+}
+.backBtn:hover {
+  background: var(--bg-elevated-hover);
+  color: var(--text-primary);
 }
 
 .messageRow {
@@ -173,10 +197,58 @@
 .emptyState {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   color: var(--text-disabled);
   font-size: var(--text-sm);
   padding: var(--space-6);
   text-align: center;
+  gap: var(--space-3);
+}
+.emptyStateIcon {
+  color: var(--text-disabled);
+  opacity: 0.6;
+}
+.emptyStateCta {
+  font-family: var(--font-ui);
+  font-weight: var(--weight-medium);
+  font-size: var(--text-sm);
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+  text-decoration: none;
+}
+.emptyStateCta:hover {
+  background: var(--accent-primary-hover);
+}
+
+/* Grid never collapsed below desktop width at all — a fixed 300px
+   session rail plus transcript squeezed into whatever was left made
+   both panes unreadable on a phone. Below the breakpoint, show one
+   pane at a time: the session list until a chat is picked, then the
+   transcript with a back button to return to the list. */
+@media (max-width: 720px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  .sessionList {
+    border-right: none;
+  }
+  .sessionList.hiddenOnMobile,
+  .transcript.hiddenOnMobile {
+    display: none;
+  }
+  .backBtn {
+    display: flex;
+  }
+  .messages {
+    padding: var(--space-4) var(--space-3);
+  }
+  .messageBubble {
+    max-width: 100%;
+  }
 }

@@ -1729,6 +1729,39 @@ rename route (happy path, 404, empty-title 422, unauthenticated, works
 on a sealed document). 397/397 backend tests passing, `ruff` clean.
 Frontend `lint`/`test`/`build` clean.
 
+### Mobile and action-icon polish pass ✅
+Prompted directly by four screenshots showing the app on a phone: the
+Documents action column wrapped its text-label buttons ("Extract action
+items"/"Seal"/"View"/"Delete") across ragged, differently-sized rows on
+desktop and forced horizontal scrolling on mobile; the graph's side
+panel (a fixed 320px block pinned `right: 24px`) had no mobile
+breakpoint at all and would overflow off-screen below ~370px viewport
+width; and `/chat` had no mobile breakpoint either — its `300px 1fr`
+grid squeezed both the session list and transcript into an unreadable
+sliver on a phone, and read flat/empty even on desktop.
+**Done (frontend only — no backend touched):** Documents' per-row
+actions became fixed 28px icon buttons (retry/extract/seal/view/delete,
+each with a `title`/`aria-label` for what a bare glyph can't convey) in
+one non-wrapping row instead of ragged text pills; a loading action gets
+a spin animation on its own icon rather than swapping to a "…" label,
+same visual-feedback intent, no layout jump. The graph's `.sidePanel`
+gained a `max-width: 640px` breakpoint that repositions it as a
+bottom-anchored panel spanning the viewport width (matching the existing
+chat dock's positioning) instead of a fixed 320px block off the right
+edge; the legend (decorative at that width) hides. `/chat`'s grid
+collapses to one pane at a time below 720px — the session list until a
+conversation is picked, then the transcript with a back button — instead
+of both panes squeezed side by side; the transcript also gained a
+centered max-width column, a real empty-state icon plus a "Start a
+chat" link to `/graph`, and a subtle background gradient matching the
+rest of the app's shell chrome, replacing what was a flat, unstyled
+block.
+**Tests:** frontend-only change; `eslint`, `tsc --noEmit` (pre-existing,
+unrelated `seal.test.ts` lib-typing errors aside), and `next build` all
+clean. No authenticated Playwright pass was run this time — every
+touched page requires a real Supabase session, which wasn't stood up for
+this change; noted here rather than claimed.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks

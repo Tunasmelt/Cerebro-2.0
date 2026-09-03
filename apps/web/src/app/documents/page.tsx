@@ -67,6 +67,52 @@ function typeLabel(mime: string): string {
   return ALLOWED_MIME_TYPES[mime] ?? mime.split("/")[1]?.toUpperCase() ?? "FILE";
 }
 
+// Compact icon buttons for the actions column — text-label buttons
+// ("Extract action items", "Retry", …) wrapped unpredictably across two
+// ragged rows once a document had more than two available actions (see
+// the messy multi-row layout this replaced). Icons at a fixed 28px each
+// fit every action in one row on both desktop and mobile, with the
+// action name preserved as a title/aria-label tooltip.
+const ACTION_ICONS: Record<string, React.ReactNode> = {
+  retry: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M11.5 7A4.5 4.5 0 1 1 9.8 3.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M9.2 2.2L9.8 3.9L8 4.3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  extract: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M2.5 4.3L3.3 5.1L5 3.3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 4H11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M2.5 8.3L3.3 9.1L5 7.3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 8H11.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  ),
+  seal: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect x="3" y="6.5" width="8" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M4.5 6.5V4.5a2.5 2.5 0 0 1 5 0V6.5" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  ),
+  view: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M1.5 7S3.8 3 7 3s5.5 4 5.5 4-2.3 4-5.5 4S1.5 7 1.5 7Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <circle cx="7" cy="7" r="1.6" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  ),
+  delete: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path
+        d="M2.5 3.5H11.5M5.2 3.5V2.3a.8.8 0 0 1 .8-.8h2a.8.8 0 0 1 .8.8V3.5M4.5 3.5V11a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V3.5"
+        stroke="currentColor"
+        strokeWidth="1.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ),
+};
+
 export default function DocumentsPage() {
   const { checking, email } = useAuthedUser();
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
@@ -539,43 +585,57 @@ export default function DocumentsPage() {
                     <div className={styles.actionsCell}>
                       {doc.status === "failed" && (
                         <button
-                          className={styles.retryBtn}
+                          className={styles.iconActionBtn}
                           disabled={retryingId === doc.id}
                           onClick={() => handleRetry(doc.id)}
+                          title={retryingId === doc.id ? "Retrying…" : "Retry ingest"}
+                          aria-label="Retry ingest"
                         >
-                          {retryingId === doc.id ? "Retrying…" : "Retry"}
+                          <span className={retryingId === doc.id ? styles.spinning : ""}>
+                            {ACTION_ICONS.retry}
+                          </span>
                         </button>
                       )}
                       {doc.status === "ready" && (
                         <>
                           <button
-                            className={styles.retryBtn}
+                            className={styles.iconActionBtn}
                             disabled={extractingId === doc.id}
                             onClick={() => handleExtractActionItems(doc.id)}
+                            title={extractingId === doc.id ? "Scanning…" : "Extract action items"}
+                            aria-label="Extract action items"
                           >
-                            {extractingId === doc.id ? "Scanning…" : "Extract action items"}
+                            {ACTION_ICONS.extract}
                           </button>
-                          <button className={styles.retryBtn} onClick={() => openSealPrompt(doc.id)}>
-                            Seal
+                          <button
+                            className={styles.iconActionBtn}
+                            onClick={() => openSealPrompt(doc.id)}
+                            title="Seal"
+                            aria-label="Seal"
+                          >
+                            {ACTION_ICONS.seal}
                           </button>
                         </>
                       )}
                       {doc.status !== "sealed" && (
                         <button
-                          className={styles.retryBtn}
+                          className={styles.iconActionBtn}
                           disabled={viewingId === doc.id}
                           onClick={() => handleView(doc)}
-                          title="Open the file in a new tab"
+                          title={viewingId === doc.id ? "Opening…" : "Open the file in a new tab"}
+                          aria-label="View"
                         >
-                          {viewingId === doc.id ? "Opening…" : "View"}
+                          {ACTION_ICONS.view}
                         </button>
                       )}
                       <button
-                        className={`${styles.retryBtn} ${styles.dangerBtn}`}
+                        className={`${styles.iconActionBtn} ${styles.iconActionBtnDanger}`}
                         disabled={deletingId === doc.id}
                         onClick={() => requestDelete(doc)}
+                        title={deletingId === doc.id ? "Deleting…" : "Delete"}
+                        aria-label="Delete"
                       >
-                        {deletingId === doc.id ? "Deleting…" : "Delete"}
+                        {ACTION_ICONS.delete}
                       </button>
                     </div>
                   </td>
