@@ -2,9 +2,10 @@
 
 Two layers: **third-party APIs** this project depends on (check current
 docs before integrating — run `/api-check` first, provider SDKs and
-model names change faster than training data) and **Cerebro's own FastAPI
-surface**, documented at a spec level here since the implementation
-doesn't exist yet.
+model names change faster than training data) and **Cerebro's own
+FastAPI surface**, documented here against the real implementation in
+`services/api/app/routes/` — every route below exists and is covered by
+tests, not a forward-looking spec.
 
 ---
 
@@ -26,7 +27,7 @@ doesn't exist yet.
 | FastAPI | Route/middleware patterns | https://fastapi.tiangolo.com |
 | pikepdf | Lossless PDF structural optimization | https://pikepdf.readthedocs.io |
 | Pillow | Image decode/resize, draft-mode | https://pillow.readthedocs.io |
-| react-force-graph | Graph rendering | https://github.com/vasturiano/react-force-graph |
+| three.js | WebGL brain-graph rendering (`GraphCanvas.tsx`) — replaced an earlier Canvas 2D + d3-force implementation, see phases-and-gates.md's "3D graph rendering upgrade" | https://threejs.org/docs |
 
 Before wiring any of these in code, confirm current endpoint names, auth
 headers, and model identifiers against the live docs — this table is a
@@ -114,6 +115,37 @@ GET    /documents/{id}             Stage 3.6 — metadata + status, PLUS
                                     isn't the caller's (RLS) — same
                                     404-not-403 pattern as every other
                                     per-document route in this API.
+PATCH  /documents/{id}             Body: `{ title }`. Rename. Same
+                                    RLS-scoped 404-not-403 pattern.
+POST   /documents/{id}/extract-action-items  No body. Vision/text model
+                                    call over the document's real
+                                    content proposing candidate action
+                                    items (title + description) — never
+                                    auto-created, the caller still picks
+                                    which ones (if any) become real
+                                    kanban cards or todos client-side.
+POST   /documents/capture          Body: `{ text }`. Quick-capture — a
+                                    thought typed directly (not a file
+                                    upload) runs through the same
+                                    extract → embed pipeline every
+                                    uploaded document goes through.
+                                    Capped at the same MAX_CAPTURE_CHARS
+                                    server enforces, client-side hint
+                                    only.
+GET    /documents/{id}/seal-salt   Stage 3.3 follow-up — the Argon2id
+                                    salt a client needs before it can
+                                    even attempt /unlock (every chunk of
+                                    a sealed document carries the same
+                                    salt, since sealing derives one key
+                                    per document, not one per chunk — see
+                                    the "multi-chunk sealing" fix in
+                                    phases-and-gates.md). Not secret by
+                                    cryptographic design — a salt's job
+                                    is uniqueness against precomputation,
+                                    not confidentiality — so exposing it
+                                    doesn't weaken the security model.
+                                    404 if nothing is sealed for this
+                                    document.
 GET    /documents/{id}/download    Stage 3.6 — signed URL (60s TTL) to
                                     the normalized (indexed) file.
                                     **Sealed documents reject this with
@@ -200,7 +232,15 @@ POST   /chat/sessions              Create a session.
 GET    /chat/sessions              List the caller's own sessions, most
                                     recent first (Stage 2.4) — the "past
                                     conversations" picker for replaying
-                                    a graph pulse.
+                                    a graph pulse. Each session also
+                                    carries `preview` (the session's
+                                    first user message, truncated —
+                                    chat management pass) for the /chat
+                                    page's session list.
+DELETE /chat/sessions/{id}         Chat management pass. `chat_messages`
+                                    cascades via its own FK — no
+                                    separate cleanup needed. RLS-scoped
+                                    404-not-403.
 GET    /chat/sessions/{id}/messages  History (Stage 2.4), each message's
                                     retrieved_chunk_ids resolved to
                                     retrieved_document_ids server-side —
@@ -208,9 +248,45 @@ GET    /chat/sessions/{id}/messages  History (Stage 2.4), each message's
                                     animation for past conversations.
                                     Chunks from the same document
                                     collapse to one document id, not a
-                                    duplicate pulse entry. 404 if the
-                                    session doesn't exist or isn't the
-                                    caller's own.
+                                    duplicate pulse entry. Each assistant
+                                    message also carries a resolved
+                                    `citations` array (chunk_id,
+                                    document_id, document_title — chat
+                                    management pass, reuses
+                                    `chat/prompt.py`'s real
+                                    extract_citations rather than a
+                                    second parsing implementation) so a
+                                    reopened conversation's citation
+                                    chips work exactly like a live one's.
+                                    404 if the session doesn't exist or
+                                    isn't the caller's own.
+GET    /chat/sessions/{id}/messages/{message_id}/prompt  Stage 5.6 — the
+                                    real assembled prompt for a past
+                                    turn (sections + per-section token
+                                    counts) for the playground to render
+                                    and let the caller edit.
+POST   /chat/sessions/{id}/playground/run  Stage 5.6. Body: the edited
+                                    assembly (system_instructions,
+                                    context_sections, user_query). Runs
+                                    it for real against the live model —
+                                    never the normal chat path, and
+                                    nothing about an edited run is
+                                    persisted. Returns the response plus
+                                    real token/cost/latency totals.
+POST   /chat/sessions/{id}/agent-turn  Stage 4.5 (stretch). Body:
+                                    { message }. A tool-calling turn,
+                                    distinct from the plain-generation
+                                    playground above — can create real
+                                    kanban cards as a side effect,
+                                    returned in the response alongside
+                                    the model's reply.
+POST   /chunks/{id}/link           Stage 5.3. Body: { target_chunk_id }.
+                                    An explicit, user-drawn associative
+                                    edge between two of the caller's own
+                                    chunks — stored `is_explicit=true`,
+                                    never decayed, reads as meaningfully
+                                    stronger on the graph than any
+                                    number of coincidental co-retrievals.
 POST   /chat/sessions/{id}/stream  Body: { query }. SSE. Emits, in order:
                                       event: retrieval
                                         data: { chunk_ids, document_ids }
@@ -257,12 +333,15 @@ POST   /graph/recluster            No body. Triggers a full re-cluster
                                     after the response is sent. Always a
                                     full recompute for now — Stage 2.5
                                     adds incremental placement.
-GET    /graph/nodes                Document nodes + cluster_id + 2D
-                                    centroid position. Reflects every
+GET    /graph/nodes                Document nodes + cluster_id + 3D
+                                    centroid position (x/y/z — the "3D
+                                    graph rendering upgrade" extended
+                                    the original 2D PCA projection to a
+                                    third component). Reflects every
                                     status=ready document live —
                                     uploaded-since-last-recluster
                                     documents still appear, with
-                                    cluster_id/x/y null rather than
+                                    cluster_id/x/y/z null rather than
                                     being missing.
 GET    /graph/edges                kNN edges (3 nearest neighbors per
                                     document at last cluster run) —
@@ -270,20 +349,64 @@ GET    /graph/edges                kNN edges (3 nearest neighbors per
                                     /graph/recluster, not live; this one
                                     DOES lag new uploads until the next
                                     recluster, unlike /graph/nodes.
+                                    `?include=associative` also returns
+                                    an `associative_edges` array (Stage
+                                    5.3/5.4) — document-level edges
+                                    aggregated from real chunk
+                                    co-retrieval, computed live on every
+                                    call (not stored/lagged like the kNN
+                                    edges above), weight-filtered so a
+                                    single shared retrieval doesn't
+                                    render as a permanent edge — see
+                                    architecture-and-security.md's
+                                    "Associative memory graph" section.
 GET    /graph/nodes/{id}/chunks    Chunk satellites for an expanded node.
                                     404 if the document doesn't exist or
                                     isn't the caller's own.
 ```
 
-### Playground (Phase 4)
+### Kanban (Phase 4)
 
 ```
-POST   /playground/assemble        Body: session_id, query. Returns the
-                                    editable prompt assembly (sections,
-                                    token counts per section).
-POST   /playground/run             Body: edited assembly. Runs it as-is,
-                                    returns the model response + actual
-                                    token/cost totals.
+POST   /boards                     Body: { title }. columns defaults to
+                                    ["Backlog", "In Progress", "Done"].
+GET    /boards                     Flat list, own boards only.
+GET    /boards/{id}                Board + its cards, ordered by
+                                    position within each column.
+POST   /boards/{id}/cards          Body: { column_name, title,
+                                    description?, document_id? }.
+PATCH  /cards/{id}                 Body: any of column_name/position
+                                    (the move/reorder call — position is
+                                    a float the client computes by
+                                    averaging its new neighbors',
+                                    Stage 4.1)/title/description.
+DELETE /cards/{id}                 RLS-scoped 404-not-403.
+```
+
+### Todos (Phase 4)
+
+```
+POST   /todos                      Body: { title, document_id? }.
+GET    /todos                      Flat list, own todos only.
+PATCH  /todos/{id}                 Body: { completed } — completed_at is
+                                    always derived server-side, a
+                                    client-supplied timestamp is never
+                                    trusted.
+DELETE /todos/{id}                 RLS-scoped 404-not-403.
+```
+
+### Account
+
+```
+DELETE /account                    Stage 4.7. Permanently deletes every
+                                    document, chat, kanban board, and
+                                    task, including sealed documents —
+                                    the account itself remains able to
+                                    sign in, empty. Profile fields
+                                    (display name, avatar URL, email,
+                                    password) are updated directly
+                                    against Supabase Auth from the
+                                    client — no backend route for those.
 ```
 
 ### Health
