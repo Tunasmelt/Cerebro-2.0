@@ -13,6 +13,7 @@ from app.core.documents_storage import (
 from app.graph.cluster import place_new_document
 from app.ingest.embed import RetryError, check_retry_eligible, run_embed_job
 from app.ingest.extract import run_extract_job
+from app.ingest.mem_watchdog import track_rss
 from app.ingest.normalize import run_normalize_job
 
 router = APIRouter()
@@ -25,7 +26,8 @@ async def _embed_then_place(*, user_jwt: str, user_id: str, document_id: str) ->
     success: a failed embed has nothing to place, and check_retry_eligible
     already scopes retries to embed-stage failures specifically, so
     retry-ingest reaches this same path once it actually succeeds."""
-    embedded = await run_embed_job(user_jwt=user_jwt, document_id=document_id)
+    with track_rss(stage="embed", document_id=document_id):
+        embedded = await run_embed_job(user_jwt=user_jwt, document_id=document_id)
     if embedded:
         await place_new_document(user_jwt=user_jwt, user_id=user_id, document_id=document_id)
 
@@ -37,11 +39,15 @@ async def _run_ingest_pipeline(*, user_jwt: str, user_id: str, document_id: str)
     design intent) — this is the only place that knows the pipeline
     order. Stops early if a stage fails; each stage's own checkpoint
     (embed's ingest_jobs.checkpoint) is what actually makes a crash mid-
-    pipeline resumable, not this wrapper."""
-    normalized = await run_normalize_job(user_jwt=user_jwt, document_id=document_id)
+    pipeline resumable, not this wrapper. Stage 7.4: each stage call is
+    bracketed by mem_watchdog's track_rss, so an OOM restart is
+    traceable to a specific document and stage from the logs alone."""
+    with track_rss(stage="normalize", document_id=document_id):
+        normalized = await run_normalize_job(user_jwt=user_jwt, document_id=document_id)
     if not normalized:
         return
-    extracted = await run_extract_job(user_jwt=user_jwt, document_id=document_id)
+    with track_rss(stage="extract", document_id=document_id):
+        extracted = await run_extract_job(user_jwt=user_jwt, document_id=document_id)
     if not extracted:
         return
     await _embed_then_place(user_jwt=user_jwt, user_id=user_id, document_id=document_id)
@@ -52,7 +58,8 @@ async def _run_capture_pipeline(*, user_jwt: str, user_id: str, document_id: str
     run_normalize_job entirely: a captured thought has no file to
     normalize (see documents_storage.py's create_capture and
     extract.py's source == "capture" branch)."""
-    extracted = await run_extract_job(user_jwt=user_jwt, document_id=document_id)
+    with track_rss(stage="extract", document_id=document_id):
+        extracted = await run_extract_job(user_jwt=user_jwt, document_id=document_id)
     if not extracted:
         return
     await _embed_then_place(user_jwt=user_jwt, user_id=user_id, document_id=document_id)
