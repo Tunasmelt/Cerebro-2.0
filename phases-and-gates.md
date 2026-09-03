@@ -2377,7 +2377,7 @@ exercise the real logging path, a Windows dev machine exercises the
 "never raises, logs nothing" path instead). Full suite: 452/452
 passing, ruff clean.
 
-### Stage 7.5 — Stalled-upload expiry sweep + normalize/extract retry path
+### Stage 7.5 — Stalled-upload expiry sweep + normalize/extract retry path ✅
 **Exit criteria:** Two gaps the architecture doc and `embed.py`'s own
 `check_retry_eligible` docstring already flag as missing: (1) a job
 stuck at `ingest_jobs.state='uploading'` forever (signed URL issued,
@@ -2388,9 +2388,36 @@ normalize→extract→embed on retry risks duplicate `chunks` rows (no
 skip-if-already-done check exists in either stage). Close both: an
 expiry sweep for stalled uploads, and a real, safe retry path for
 normalize/extract failures.
-**Tests:** A stalled `uploading` row past its expiry window gets swept
-to `failed` (or deleted) automatically. Retrying a normalize/extract
-failure does not produce duplicate `chunks` rows for the same document.
+**Done:** (1) `documents_storage.py`'s new `sweep_stalled_uploads`
+finds this user's `ingest_jobs` rows still at `state='uploading'` past
+`UPLOAD_STALL_EXPIRY_SECONDS` (1 hour) and marks both the job and its
+document `failed` (`last_error="upload_expired"`) — called lazily from
+`list_documents` (no separate worker process, per CLAUDE.md's Render
+free-tier constraint: cleanup piggybacks on real request traffic
+instead), best-effort so a sweep failure can never break the listing
+it's attached to. (2) `check_retry_eligible` now returns which stage
+to resume from instead of only ever handling `embedding`: if chunks
+already exist for the document, only embed failed (unchanged path,
+resets to `embedding`); if none exist yet, normalize/extract is what
+failed, and it's provably safe to restart the whole pre-embed pipeline
+from scratch — `extract.py`'s `insert_chunks` is one all-or-nothing
+bulk insert called exactly once, right before `mark_extracted`, so a
+document either has every one of its chunks or none of them, never a
+partial set a restart could duplicate into. Resets to `normalizing`
+(or `extracting` for a Stage 5.5 captured thought, which has no
+normalize stage at all). `routes/documents.py`'s `retry_ingest` route
+schedules `_embed_then_place`, `_run_ingest_pipeline`, or
+`_run_capture_pipeline` based on that resume stage.
+**Tests:** New `test_stage_7_5_ingest_recovery.py` — the sweep marks
+stale `uploading` jobs and their documents `failed` (fake httpx
+transport, real `SupabaseDocumentsStorage`); does nothing when nothing
+is stale; swallows a transport failure instead of raising; and
+`list_documents` triggers it. The retry route dispatches to the right
+background pipeline for each of the three resume stages, and surfaces
+a `RetryError` as the right HTTP status. `test_retry_ingest.py`
+rewritten for the new three-way `check_retry_eligible` behavior,
+including a captured thought resuming from `extracting`. Full suite:
+461/461 passing, ruff clean.
 
 ### Stage 7.6 — Embed failure-mode hardening
 **Exit criteria:** `embed.py`'s `provider_clients[locked_provider]`

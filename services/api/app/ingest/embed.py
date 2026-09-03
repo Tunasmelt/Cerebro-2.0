@@ -315,7 +315,7 @@ class EmbedStorage(Protocol):
     async def get_job_state(self, *, user_jwt: str, document_id: str) -> str | None:
         """None if no ingest_jobs row exists for this document at all."""
         ...
-    async def reset_job_to_embedding(self, *, user_jwt: str, document_id: str) -> None: ...
+    async def reset_job_to_stage(self, *, user_jwt: str, document_id: str, state: str) -> None: ...
 
 
 class SupabaseEmbedStorage(CachedHttpClientMixin):
@@ -461,13 +461,13 @@ class SupabaseEmbedStorage(CachedHttpClientMixin):
         rows = response.json()
         return rows[0]["state"] if rows else None
 
-    async def reset_job_to_embedding(self, *, user_jwt: str, document_id: str) -> None:
+    async def reset_job_to_stage(self, *, user_jwt: str, document_id: str, state: str) -> None:
         client = self._client()
         await client.patch(
             f"{self._supabase_url}/rest/v1/ingest_jobs",
             headers={**self._headers(user_jwt), "Content-Type": "application/json"},
             params={"document_id": f"eq.{document_id}"},
-            json={"state": "embedding", "last_error": None},
+            json={"state": state, "last_error": None},
         )
 
 
@@ -608,23 +608,30 @@ class RetryError(Exception):
         super().__init__(message)
 
 
-async def check_retry_eligible(*, user_jwt: str, document_id: str) -> None:
+async def check_retry_eligible(*, user_jwt: str, document_id: str) -> str:
     """Checked synchronously by the retry-ingest route before scheduling
-    run_embed_job as a background task (same request/response shape as
-    upload-confirm). Raises RetryError if not eligible; otherwise resets
-    the job to `embedding` so its state reflects reality immediately,
-    before the background task even starts.
+    a background task (same request/response shape as upload-confirm).
+    Raises RetryError if not eligible; otherwise resets the job to the
+    stage it should resume from and returns that stage name, so the
+    route knows which pipeline function to schedule.
 
-    Deliberately scoped to embed-stage failures only. run_embed_job's
-    checkpoint + provider-lock make it safe to re-call at any point — but
-    normalize.py has no skip-if-already-done check, and extract.py's
-    behavior on an already-extracted document is unverified, so blindly
-    re-running the whole normalize->extract->embed chain on retry risks
-    duplicate chunk rows. "Chunks already exist for this document" is
-    used as the proxy for "extract already completed, so the failure
-    that needs retrying is embed's" — a job that failed earlier than
-    that raises RetryError instead of silently attempting an unsafe
-    full-pipeline re-run.
+    Two eligible cases:
+    - Chunks already exist for this document ("embedding" failed, since
+      extract.py only ever produces chunks right before mark_extracted).
+      run_embed_job's checkpoint + provider-lock make it safe to re-call
+      at any point — resets to `embedding`.
+    - No chunks exist yet (Stage 7.5 — normalize or extract failed).
+      Safe to restart the whole pre-embed part of the pipeline from
+      scratch: extract.py's insert_chunks is one all-or-nothing bulk
+      insert called exactly once, right at the end of run_extract_job,
+      so by construction either every chunk for a document exists or
+      none do — there is no partial-chunks state a restart could ever
+      duplicate into. normalize.py is also safely re-runnable: it
+      overwrites the same `indexed` storage path and re-patches the
+      same `documents` row, never inserts a row. Resets to
+      `normalizing` — or `extracting` for a captured thought (Stage
+      5.5's source == "capture" documents have no normalize stage at
+      all, per _run_capture_pipeline).
     """
     storage = get_embed_storage()
 
@@ -637,12 +644,15 @@ async def check_retry_eligible(*, user_jwt: str, document_id: str) -> None:
         )
 
     chunks = await storage.get_chunks(user_jwt=user_jwt, document_id=document_id)
-    if not chunks:
-        raise RetryError(
-            "not_retryable",
-            "Job failed before extraction produced any chunks — retrying the "
-            "normalize/extract stages isn't supported yet, only embed-stage "
-            "failures are retryable",
+    if chunks:
+        await storage.reset_job_to_stage(
+            user_jwt=user_jwt, document_id=document_id, state="embedding"
         )
+        return "embedding"
 
-    await storage.reset_job_to_embedding(user_jwt=user_jwt, document_id=document_id)
+    document = await storage.get_document(user_jwt=user_jwt, document_id=document_id)
+    resume_stage = "extracting" if document.get("source") == "capture" else "normalizing"
+    await storage.reset_job_to_stage(
+        user_jwt=user_jwt, document_id=document_id, state=resume_stage
+    )
+    return resume_stage

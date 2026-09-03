@@ -199,24 +199,41 @@ async def list_documents(request: Request):
 
 @router.post("/api/v1/documents/{document_id}/retry-ingest")
 async def retry_ingest(request: Request, document_id: str, background_tasks: BackgroundTasks):
-    """Retries a document whose embed stage failed. Scoped to embed-stage
-    failures only — see check_retry_eligible's docstring for why
-    normalize/extract failures aren't auto-retried here yet."""
+    """Retries a failed ingest job from wherever it's safe to resume —
+    see check_retry_eligible's docstring for the embedding vs.
+    normalizing/extracting split (Stage 7.5 closed the gap where only
+    embed-stage failures were retryable)."""
     try:
-        await check_retry_eligible(
+        resume_stage = await check_retry_eligible(
             user_jwt=request.state.user_jwt, document_id=document_id
         )
     except RetryError as exc:
         status_code = 404 if exc.code == "not_found" else 409
         return _error(exc.code, exc.message, status_code)
 
-    background_tasks.add_task(
-        _embed_then_place,
-        user_jwt=request.state.user_jwt,
-        user_id=request.state.user["sub"],
-        document_id=document_id,
-    )
-    return JSONResponse({"id": document_id, "state": "embedding"}, status_code=202)
+    if resume_stage == "embedding":
+        background_tasks.add_task(
+            _embed_then_place,
+            user_jwt=request.state.user_jwt,
+            user_id=request.state.user["sub"],
+            document_id=document_id,
+        )
+    elif resume_stage == "extracting":
+        # Captured thought (Stage 5.5) — no normalize stage exists for it.
+        background_tasks.add_task(
+            _run_capture_pipeline,
+            user_jwt=request.state.user_jwt,
+            user_id=request.state.user["sub"],
+            document_id=document_id,
+        )
+    else:  # "normalizing"
+        background_tasks.add_task(
+            _run_ingest_pipeline,
+            user_jwt=request.state.user_jwt,
+            user_id=request.state.user["sub"],
+            document_id=document_id,
+        )
+    return JSONResponse({"id": document_id, "state": resume_stage}, status_code=202)
 
 
 @router.get("/api/v1/documents/{document_id}")
