@@ -33,12 +33,41 @@ built, tested capability sitting unused. Never a new way for retrieval
 to fail either way: a failed or empty generation falls back to `None`,
 and `retrieve()` falls back to embedding the real query exactly as it
 does when `use_hyde` is False.
+
+Stage 7.9 — made conditional. Turning HyDE on for *every* turn (the
+retrieval-quality pass above) overrode this stage's own original "an
+A/B-able flag, not a silent default" intent, and added a full extra
+Gemini round-trip before the first token can appear on every single
+question, whether or not the vocabulary-gap problem HyDE exists to
+solve actually applies to it. No production Langfuse traffic was
+available to this pass to measure the real cost against, so the
+resolution taken is the exit criteria's other allowed path: make it
+conditional. `should_use_hyde` — a short query is exactly the
+"what's in the schedule"-shaped case this module's own docstring
+above already uses as HyDE's motivating example: too few words to
+share much vocabulary with dense indexed prose, which is precisely
+where a hypothetical answer's passage-shaped language closes the gap.
+A long, already-detailed query already contains specific vocabulary
+likely to overlap real passages directly — HyDE's extra round-trip
+buys it little, so skipping it there gets the latency back on exactly
+the turns least likely to need it.
 """
 import logging
 
 from app.chat import generate as generate_module
 
 logger = logging.getLogger(__name__)
+
+HYDE_MAX_QUERY_WORDS = 8  # Stage 7.9 — a whitespace word count, not a
+# token count: cheap, no tokenizer dependency, and good enough for a
+# threshold that's a heuristic to begin with. Picked to separate short,
+# vague prompts ("what's in the schedule", "explain the diagram") from
+# queries that already carry enough specific vocabulary of their own
+# ("how does the sealed-document unlock flow verify the passphrase-
+# derived key server-side") to match real passages without HyDE's help.
+# Not tuned against production data (none was available to this pass)
+# — easy to retune later once Langfuse traffic makes the actual
+# short/long split visible.
 
 HYDE_SYSTEM_HEADER = (
     "Write a short, plausible passage (2-4 sentences) that would answer "
@@ -50,6 +79,14 @@ HYDE_SYSTEM_HEADER = (
     "say. Respond with ONLY the passage, no quotes, no explanation, no "
     "markdown."
 )
+
+
+def should_use_hyde(query: str) -> bool:
+    """Stage 7.9 — the caller-side decision of whether this turn's
+    query is short/ambiguous enough for HyDE's extra Gemini round-trip
+    to be worth paying for. Pure, no I/O — safe to call before
+    retrieve() even starts."""
+    return len(query.split()) <= HYDE_MAX_QUERY_WORDS
 
 
 def _extract_text(interaction: dict) -> str:

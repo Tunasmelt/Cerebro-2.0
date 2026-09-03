@@ -162,6 +162,55 @@ async def _collect_events(agen):
     return events
 
 
+# --- Stage 7.9: HyDE is conditional on query shape, not unconditional --------
+
+
+@pytest.mark.asyncio
+async def test_short_query_is_passed_to_retrieve_with_hyde_enabled(monkeypatch):
+    calls: list[dict] = []
+
+    async def fake_retrieve(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(stream_module, "retrieve", fake_retrieve)
+    set_generate_client(_FakeGenerateClient(["ok"]))
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query="what's in the schedule"
+        )
+    )
+
+    assert calls[0]["use_hyde"] is True
+
+
+@pytest.mark.asyncio
+async def test_long_detailed_query_is_passed_to_retrieve_with_hyde_disabled(monkeypatch):
+    calls: list[dict] = []
+
+    async def fake_retrieve(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(stream_module, "retrieve", fake_retrieve)
+    set_generate_client(_FakeGenerateClient(["ok"]))
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    long_query = (
+        "how does the sealed-document unlock flow derive the passphrase-based "
+        "key client-side and verify it against the stored claim server-side"
+    )
+    await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query=long_query
+        )
+    )
+
+    assert calls[0]["use_hyde"] is False
+
+
 # --- ordering: retrieval before any token, every run --------------------------
 
 

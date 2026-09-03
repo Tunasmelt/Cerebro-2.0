@@ -14,7 +14,7 @@ from app.chat.generate import GenerateError
 from app.ingest import embed as embed_module
 from app.retrieve import hyde as hyde_module
 from app.retrieve import retrieve as retrieve_module
-from app.retrieve.hyde import generate_hypothetical_answer
+from app.retrieve.hyde import HYDE_MAX_QUERY_WORDS, generate_hypothetical_answer, should_use_hyde
 from app.retrieve.retrieve import retrieve
 
 
@@ -304,3 +304,29 @@ async def test_hyde_recovers_a_result_direct_retrieval_alone_misses(monkeypatch)
 
     assert "relevant-1" not in [r.chunk_id for r in direct_results]
     assert "relevant-1" in [r.chunk_id for r in hyde_results]
+
+
+# --- should_use_hyde (Stage 7.9 — conditional HyDE) --------------------------
+
+
+def test_short_query_uses_hyde():
+    assert should_use_hyde("what's in the schedule") is True
+
+
+def test_long_detailed_query_skips_hyde():
+    long_query = (
+        "how does the sealed-document unlock flow derive the passphrase-based "
+        "key client-side and verify it against the stored claim server-side"
+    )
+    assert len(long_query.split()) > HYDE_MAX_QUERY_WORDS
+    assert should_use_hyde(long_query) is False
+
+
+def test_query_at_exactly_the_word_limit_still_uses_hyde():
+    query = " ".join(["word"] * HYDE_MAX_QUERY_WORDS)
+    assert should_use_hyde(query) is True
+
+
+def test_query_one_word_over_the_limit_skips_hyde():
+    query = " ".join(["word"] * (HYDE_MAX_QUERY_WORDS + 1))
+    assert should_use_hyde(query) is False
