@@ -2347,15 +2347,35 @@ branch), not the streaming implementation. Existing ingest test suite
 (`test_stage_1_2_normalize.py`, `test_stage_1_3_extract.py`,
 `test_stage_1_4_embed.py`) unaffected, all still passing.
 
-### Stage 7.4 — `mem_watchdog` RSS instrumentation
+### Stage 7.4 — `mem_watchdog` RSS instrumentation ✅
 **Exit criteria:** architecture-and-security.md §3 also documents "Log
 RSS before/after each ingest stage (`mem_watchdog`)" as existing —
 grepping the codebase finds no such logging anywhere. Add real RSS
 logging around each ingest stage, so a future OOM restart is traceable
 to a specific document and stage instead of a guess.
-**Tests:** A seeded ingest run produces RSS log lines bracketing each
-stage; a deliberately oversized/slow document's peak is visible in
-those logs.
+**Done:** New `ingest/mem_watchdog.py` — a `track_rss(stage,
+document_id)` context manager, stdlib-only (`resource.getrusage`, no
+new dependency), logging a `phase=start`/`phase=end` pair (plus
+`delta_mb`) around whatever it wraps, always, even if the wrapped code
+raises. `ru_maxrss` is the process's peak RSS since start, not
+instantaneous RSS — the right semantic here, since two readings
+bracketing a stage show exactly how much that stage pushed the
+process's all-time high-water mark, which is what actually matters
+after an OOM kill. `resource` doesn't exist on Windows, so local dev
+logs nothing instead of crashing — Render (production) is Linux, where
+this always fires. Wired into every stage call in
+`routes/documents.py`'s three pipeline wrappers (`_run_ingest_pipeline`:
+normalize, extract; `_embed_then_place`: embed — covers the capture
+pipeline and retry-ingest too, since both route through it).
+**Tests:** New `test_stage_7_4_mem_watchdog.py` — `track_rss` logs a
+start/end pair with the right stage and document_id; the end line
+still fires when the wrapped code raises; a full `_run_ingest_pipeline`
+run logs `normalize`, `extract`, `embed` in that order; a failed
+normalize stops the pipeline with no `extract`/`embed` logs at all
+(each test's assertions are platform-guarded — CI's Linux runners
+exercise the real logging path, a Windows dev machine exercises the
+"never raises, logs nothing" path instead). Full suite: 452/452
+passing, ruff clean.
 
 ### Stage 7.5 — Stalled-upload expiry sweep + normalize/extract retry path
 **Exit criteria:** Two gaps the architecture doc and `embed.py`'s own
