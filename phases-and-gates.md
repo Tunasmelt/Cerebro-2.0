@@ -2419,7 +2419,7 @@ rewritten for the new three-way `check_retry_eligible` behavior,
 including a captured thought resuming from `extracting`. Full suite:
 461/461 passing, ruff clean.
 
-### Stage 7.6 — Embed failure-mode hardening
+### Stage 7.6 — Embed failure-mode hardening ✅
 **Exit criteria:** `embed.py`'s `provider_clients[locked_provider]`
 lookup raises a raw `KeyError` — not caught by the surrounding `except
 EmbedError` — if a document's locked provider ever has no matching
@@ -2430,10 +2430,31 @@ decoding before downscaling) only works for JPEG — PNG/WebP uploads
 always decode at full native resolution regardless of size. Needs
 either a real mitigation for those formats or an explicit, documented
 size cap specific to them.
-**Tests:** An embed job with a `locked_provider` value absent from the
-configured client map fails gracefully (`mark_failed`, real error code)
-instead of raising. A large PNG/WebP upload either downscales safely or
-is rejected with a clear error before it can threaten the RAM ceiling.
+**Done:** (1) `run_embed_job` now does an explicit
+`provider_clients.get(locked_provider)` before the try/except instead
+of an unguarded `[...]` lookup inside it — a `None` (provider named on
+the document but not configured, e.g. a fallback client removed after
+a document already locked to it) calls `mark_failed` with a new
+`"provider_not_configured"` error code and returns, exactly like any
+other embed failure; no more unhandled `KeyError` escaping
+`run_embed_job`. (2) New `MAX_NON_JPEG_DECODE_PIXELS` (25,000,000px,
+~100MB as worst-case RGBA) in `normalize.py`: PNG/WebP have no
+draft-mode equivalent (Pillow's own docs — JPEG/MPO only), so
+`_decode_image` now reads `img.size` — header-only, no pixel data,
+free — and raises a new `"image_too_large"` `NormalizeError` before
+`img.load()` if the pixel count is over the cap. JPEG is unaffected
+(draft() already protects it); PNG/WebP under the cap still normalize
+exactly as before.
+**Tests:** New `test_locked_provider_with_no_matching_client_fails_
+gracefully_not_a_keyerror` in `test_embed_fallback_chain.py` — a
+locked provider absent from `provider_clients` fails the job with
+`provider_not_configured` instead of raising, and never touches the
+primary client. Four new tests in `test_stage_1_2_normalize.py` — an
+oversized PNG and an oversized WebP (26M px, same fixture dimensions
+for both) are both rejected with `image_too_large`; a PNG under the
+cap still normalizes; a JPEG at the same oversized dimensions is
+*not* rejected by this cap at all (draft() handles it instead). Full
+suite: 466/466 passing, ruff clean.
 
 ### Stage 7.7 — Retrieval resilience: soft-fail rerank/vector/FTS
 **Exit criteria:** Query rewrite and HyDE both already degrade

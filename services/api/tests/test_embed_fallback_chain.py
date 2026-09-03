@@ -182,3 +182,22 @@ async def test_no_fallback_triggered_when_primary_succeeds_immediately():
     assert result is True
     assert voyage.text_calls == []
     assert storage.embedding_provider == "jina"
+
+
+@pytest.mark.asyncio
+async def test_locked_provider_with_no_matching_client_fails_gracefully_not_a_keyerror():
+    # Stage 7.6 regression: documents.embedding_provider names a
+    # provider ("cohere") that isn't in provider_clients at all (e.g. a
+    # fallback client removed from config after this document already
+    # locked to it) — used to be a raw, uncaught KeyError.
+    jina = _FakeClient("jina")  # must not be tried — provider is locked
+    storage = _FakeStorage(chunks=_chunks(1), embedding_provider="cohere")
+    embed_module.set_embed_storage(storage)
+    embed_module.set_embed_client(jina)
+    embed_module.set_fallback_embed_clients([])  # no cohere client configured
+
+    result = await run_embed_job(user_jwt="t", document_id="doc-6")
+
+    assert result is False
+    assert storage.marked_failed == "provider_not_configured"
+    assert jina.text_calls == []
