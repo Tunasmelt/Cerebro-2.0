@@ -25,7 +25,17 @@ confirmed live before writing this code, not from memory.
 The relevance floor after rerank — not a forced top-k — is what makes
 "no relevant content" return empty rather than always handing back K
 results regardless of quality, per this stage's exit criteria.
+
+Fixed post-launch: image chunks (extract.py leaves their `content`
+permanently empty) were surviving vector_search/rrf_fuse on a real
+embedding, then almost always dying at rerank — a text reranker scored
+against an empty string reads as "not relevant" and RELEVANCE_FLOOR
+drops it, so a correctly-embedded image essentially never reached a
+chat answer or the graph's retrieved-chunk pulse. See
+retrieve/image_caption.py — a query-time caption stands in for the
+missing text right before rerank.
 """
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -36,6 +46,7 @@ from app.core.sealed_storage import SealedStorageError, get_sealed_storage
 from app.core.tracing import get_tracer
 from app.ingest.embed import get_embed_client
 from app.retrieve.hyde import generate_hypothetical_answer
+from app.retrieve.image_caption import caption_image
 from app.retrieve.rewrite import rewrite_query
 
 RRF_K = 60  # standard constant from the original RRF paper, not tunable
@@ -390,7 +401,42 @@ async def retrieve(
             )
         return []
 
-    candidates = [by_id[chunk_id] for chunk_id in fused_ids]
+    # `dict(...)` copies — image chunks (empty `content`, extract.py never
+    # captions them) get a captioned stand-in filled in below for rerank
+    # scoring and citation text; mutating the shared row objects from
+    # by_id/vector_results/fts_results in place would be a surprising
+    # side effect for no reason.
+    candidates = [dict(by_id[chunk_id]) for chunk_id in fused_ids]
+
+    # Cohere's reranker is text-only — scored against an empty string,
+    # an image chunk vector_search legitimately found reads as "not
+    # relevant" and gets dropped by RELEVANCE_FLOOR before ever reaching
+    # the caller. One caption per distinct document (not persisted, only
+    # for this call) stands in for the missing text. Best-effort: a
+    # caption that fails to generate just leaves that candidate's content
+    # empty exactly as before, same "degrade, don't crash" contract as
+    # rewrite_query/generate_hypothetical_answer above — never a new way
+    # for retrieve() itself to fail. Deliberately not given its own
+    # Langfuse span, same reasoning as the rewrite step: Stage 1.8's
+    # six-span shape is a fixed, regression-tested contract.
+    uncaptioned_document_ids = {c["document_id"] for c in candidates if not c["content"]}
+    if uncaptioned_document_ids:
+        captions = dict(
+            zip(
+                uncaptioned_document_ids,
+                await asyncio.gather(
+                    *(
+                        caption_image(user_jwt=user_jwt, document_id=document_id)
+                        for document_id in uncaptioned_document_ids
+                    )
+                ),
+            )
+        )
+        for candidate in candidates:
+            caption = captions.get(candidate["document_id"])
+            if not candidate["content"] and caption:
+                candidate["content"] = caption
+
     with tracer.start_as_current_observation(
         as_type="span",
         name="rerank",

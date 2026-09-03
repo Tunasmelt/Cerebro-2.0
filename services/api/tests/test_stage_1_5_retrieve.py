@@ -19,6 +19,7 @@ something a unit test should assert.
 import pytest
 
 from app.ingest import embed as embed_module
+from app.retrieve import image_caption as image_caption_module
 from app.retrieve import retrieve as retrieve_module
 from app.retrieve.retrieve import (
     FINAL_TOP_K,
@@ -195,6 +196,74 @@ async def test_relevance_floor_is_applied_per_result_not_all_or_nothing():
     results = await retrieve(user_jwt="t", query="q")
 
     assert [r.chunk_id for r in results] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_image_chunk_with_empty_content_is_captioned_before_rerank(monkeypatch):
+    """The bug: an image chunk's `content` is always "" (extract.py never
+    captions it), so the old code fed the reranker an empty string and
+    RELEVANCE_FLOOR dropped it — a real, correctly-embedded image chunk
+    never reached the caller. This proves the fix: a captioned stand-in
+    reaches the reranker instead, and a real caption lets an image chunk
+    rank exactly like any text chunk would."""
+    image_chunk = _chunk("img-1", "", meta={"bbox": [0, 0, 100, 100]})
+    text_chunk = _chunk("noise-1", "Bananas are a good source of potassium")
+    storage = _FakeRetrieveStorage(
+        vector_results=[image_chunk, text_chunk], fts_results=[]
+    )
+
+    captioned_calls = []
+
+    async def fake_caption_image(*, user_jwt, document_id):
+        captioned_calls.append(document_id)
+        return "A whiteboard with a project timeline sketched on it"
+
+    monkeypatch.setattr(retrieve_module, "caption_image", fake_caption_image)
+
+    rerank = _FakeRerankClient(
+        scores_by_content={
+            "A whiteboard with a project timeline sketched on it": 0.9,
+            text_chunk["content"]: 0.1,
+        }
+    )
+
+    embed_module.set_embed_client(_FakeEmbedClient())
+    retrieve_module.set_rerank_client(rerank)
+    retrieve_module.set_retrieve_storage(storage)
+
+    results = await retrieve(user_jwt="t", query="what's the project timeline")
+
+    assert captioned_calls == [image_chunk["document_id"]]
+    assert results[0].chunk_id == "img-1"
+    assert results[0].content == "A whiteboard with a project timeline sketched on it"
+    # The original row in vector_results must be untouched — retrieve()
+    # copies candidates before filling in the caption.
+    assert image_chunk["content"] == ""
+
+
+@pytest.mark.asyncio
+async def test_image_chunk_caption_failure_degrades_to_empty_content(monkeypatch):
+    """A captioning failure (network error, no signed url, empty model
+    output) must never fail retrieve() itself — same "degrade, don't
+    crash" contract as rewrite_query/generate_hypothetical_answer."""
+    image_chunk = _chunk("img-1", "", meta={"bbox": [0, 0, 100, 100]})
+    storage = _FakeRetrieveStorage(vector_results=[image_chunk], fts_results=[])
+
+    async def failing_caption_image(*, user_jwt, document_id):
+        return None
+
+    monkeypatch.setattr(retrieve_module, "caption_image", failing_caption_image)
+
+    rerank = _FakeRerankClient(scores_by_content={"": 0.01})
+
+    embed_module.set_embed_client(_FakeEmbedClient())
+    retrieve_module.set_rerank_client(rerank)
+    retrieve_module.set_retrieve_storage(storage)
+
+    results = await retrieve(user_jwt="t", query="anything")
+
+    assert rerank.last_call["documents"] == [""]
+    assert results == []
 
 
 @pytest.mark.asyncio
