@@ -22,9 +22,11 @@ from app.ingest import embed as embed_module
 from app.retrieve import retrieve as retrieve_module
 from app.retrieve.retrieve import (
     FINAL_TOP_K,
+    MAX_PER_DOCUMENT_IN_TOP_K,
     RELEVANCE_FLOOR,
     RRF_K,
     RetrieveError,
+    _select_with_diversity,
     retrieve,
     rrf_fuse,
 )
@@ -119,10 +121,10 @@ class _FailingRerankClient:
         raise RetrieveError("rerank_failed", "simulated rerank outage")
 
 
-def _chunk(chunk_id, content, ordinal=0, meta=None):
+def _chunk(chunk_id, content, ordinal=0, meta=None, document_id=None):
     return {
         "id": chunk_id,
-        "document_id": f"doc-for-{chunk_id}",
+        "document_id": document_id or f"doc-for-{chunk_id}",
         "ordinal": ordinal,
         "content": content,
         "meta": meta or {},
@@ -370,3 +372,106 @@ async def test_both_search_legs_failing_returns_empty_not_a_crash():
 
     assert results == []
     assert rerank.last_call is None  # nothing to rerank once both legs are empty
+
+
+# --- Stage 7.8: per-document diversity in top-K results ----------------------
+
+
+def test_select_with_diversity_caps_one_document_leaving_room_for_others():
+    # 5 candidates from doc-A (all higher scoring) + 2 from doc-B, cap=2,
+    # top_k=4: doc-A should fill only 2 slots, doc-B's 2 fill the rest.
+    scored = [(0, 0.9), (1, 0.85), (2, 0.8), (3, 0.75), (4, 0.7), (5, 0.6), (6, 0.5)]
+    document_ids = ["A", "A", "A", "A", "A", "B", "B"]
+
+    selected = _select_with_diversity(scored, top_k=4, max_per_document=2, document_ids=document_ids)
+
+    selected_docs = [document_ids[i] for i, _ in selected]
+    assert len(selected) == 4
+    assert selected_docs.count("A") == 2
+    assert selected_docs.count("B") == 2
+
+
+def test_select_with_diversity_backfills_from_a_single_document_when_no_others_exist():
+    # Only doc-A has any candidates at all — the cap must not shrink the
+    # result set below top_k when there's nothing else to diversify with.
+    scored = [(0, 0.9), (1, 0.8), (2, 0.7), (3, 0.6), (4, 0.5)]
+    document_ids = ["A"] * 5
+
+    selected = _select_with_diversity(scored, top_k=4, max_per_document=2, document_ids=document_ids)
+
+    assert len(selected) == 4
+    assert [i for i, _ in selected] == [0, 1, 2, 3]  # still best-score-first
+
+
+def test_select_with_diversity_preserves_score_order_within_the_cap():
+    scored = [(0, 0.9), (1, 0.8), (2, 0.7)]
+    document_ids = ["A", "A", "A"]
+
+    selected = _select_with_diversity(scored, top_k=2, max_per_document=5, document_ids=document_ids)
+
+    assert selected == [(0, 0.9), (1, 0.8)]
+
+
+@pytest.mark.asyncio
+async def test_cross_document_question_surfaces_more_than_one_document():
+    # One dominant document with 5 highly-relevant chunks (enough to
+    # fill FINAL_TOP_K on relevance alone) plus 2 tangential documents
+    # with one relevant chunk each. Without diversity, the dominant
+    # document would take every slot.
+    dominant = [
+        _chunk(f"dom-{i}", f"dominant relevant content {i}", document_id="doc-dominant")
+        for i in range(5)
+    ]
+    other_a = _chunk("other-a", "tangential but real content A", document_id="doc-other-a")
+    other_b = _chunk("other-b", "tangential but real content B", document_id="doc-other-b")
+    all_chunks = dominant + [other_a, other_b]
+
+    storage = _FakeRetrieveStorage(vector_results=all_chunks, fts_results=[])
+    rerank = _FakeRerankClient(
+        scores_by_content={
+            **{c["content"]: 0.9 for c in dominant},
+            other_a["content"]: 0.5,
+            other_b["content"]: 0.4,
+        }
+    )
+
+    embed_module.set_embed_client(_FakeEmbedClient())
+    retrieve_module.set_rerank_client(rerank)
+    retrieve_module.set_retrieve_storage(storage)
+
+    results = await retrieve(user_jwt="t", query="cross-document question")
+
+    result_docs = {r.document_id for r in results}
+    assert len(results) == FINAL_TOP_K
+    assert "doc-other-a" in result_docs
+    assert "doc-other-b" in result_docs
+    # The dominant document is still capped, not excluded — it should
+    # still have the plurality of slots.
+    dominant_count = sum(1 for r in results if r.document_id == "doc-dominant")
+    assert dominant_count == MAX_PER_DOCUMENT_IN_TOP_K
+
+
+@pytest.mark.asyncio
+async def test_single_document_question_is_unchanged_by_diversity():
+    # Every real candidate belongs to the same document — diversity has
+    # nothing to diversify with, so the result set must be exactly what
+    # it would have been without this stage: FINAL_TOP_K chunks, all
+    # from that one document, best-score-first.
+    chunks = [
+        _chunk(f"c{i}", f"relevant content {i}", document_id="doc-only")
+        for i in range(FINAL_TOP_K + 3)
+    ]
+    storage = _FakeRetrieveStorage(vector_results=chunks, fts_results=[])
+    rerank = _FakeRerankClient(
+        scores_by_content={c["content"]: 0.9 - i * 0.01 for i, c in enumerate(chunks)}
+    )
+
+    embed_module.set_embed_client(_FakeEmbedClient())
+    retrieve_module.set_rerank_client(rerank)
+    retrieve_module.set_retrieve_storage(storage)
+
+    results = await retrieve(user_jwt="t", query="single document question")
+
+    assert len(results) == FINAL_TOP_K
+    assert all(r.document_id == "doc-only" for r in results)
+    assert [r.chunk_id for r in results] == [f"c{i}" for i in range(FINAL_TOP_K)]
