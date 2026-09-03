@@ -15,6 +15,7 @@ import pikepdf
 import pytest
 from PIL import Image
 
+from app.ingest import extract as extract_module
 from app.ingest.extract import (
     IMAGE_TILE_THRESHOLD,
     ExtractError,
@@ -24,8 +25,6 @@ from app.ingest.extract import (
     extract_text_chunks,
     run_extract_job,
 )
-from app.ingest import extract as extract_module
-
 
 # --- fixtures ----------------------------------------------------------------
 
@@ -161,27 +160,42 @@ def test_extract_image_chunks_corrupt_input_raises_specific_error():
 
 
 class _FakeExtractStorage:
-    def __init__(self, *, mime: str, indexed_content: bytes = b"", original_content: bytes = b""):
+    def __init__(
+        self,
+        *,
+        mime: str,
+        indexed_content: bytes = b"",
+        original_content: bytes = b"",
+        source: str = "upload",
+        captured_text: str | None = None,
+    ):
         self.mime = mime
         self.indexed_content = indexed_content
         self.original_content = original_content
+        self.source = source
+        self.captured_text = captured_text
         self.inserted_chunks = None
         self.marked_extracted = None
         self.marked_failed = None
+        self.download_calls: list[str] = []
 
     async def get_document(self, *, user_jwt, document_id):
         return {
             "id": document_id,
             "user_id": "11111111-1111-1111-1111-111111111111",
             "mime": self.mime,
+            "source": self.source,
+            "captured_text": self.captured_text,
             "storage_path": f"u/{document_id}/indexed.bin",
             "original_storage_path": f"u/{document_id}/original.bin",
         }
 
     async def download_indexed(self, *, user_jwt, path):
+        self.download_calls.append("indexed")
         return self.indexed_content
 
     async def download_original(self, *, user_jwt, path):
+        self.download_calls.append("original")
         return self.original_content
 
     async def insert_chunks(self, *, user_jwt, document_id, user_id, chunks):
@@ -252,3 +266,37 @@ async def test_run_extract_job_corrupt_pdf_marks_failed_not_hangs_or_crashes():
     assert storage.inserted_chunks is None
     assert storage.marked_extracted is None
     assert storage.marked_failed[0] == "doc-4"
+
+
+# --- Stage 5.5: source == "capture" skips any storage download ------------------
+
+
+@pytest.mark.asyncio
+async def test_run_extract_job_for_a_capture_document_chunks_the_row_text_directly():
+    storage = _FakeExtractStorage(
+        mime="text/plain",
+        source="capture",
+        captured_text="word " * 500,
+    )
+    extract_module.set_extract_storage(storage)
+
+    result = await run_extract_job(user_jwt="t", document_id="doc-5")
+
+    assert result is True
+    assert storage.inserted_chunks is not None
+    assert len(storage.inserted_chunks) > 0
+    # The whole point of Stage 5.5: no Storage object exists for a
+    # capture document, so neither download method should ever be
+    # called for one.
+    assert storage.download_calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_extract_job_for_a_capture_document_with_empty_text_produces_no_chunks():
+    storage = _FakeExtractStorage(mime="text/plain", source="capture", captured_text="")
+    extract_module.set_extract_storage(storage)
+
+    result = await run_extract_job(user_jwt="t", document_id="doc-6")
+
+    assert result is True
+    assert storage.download_calls == []

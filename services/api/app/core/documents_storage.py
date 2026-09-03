@@ -49,6 +49,12 @@ SIGNED_URL_TTL_SECONDS = 60  # short-lived — a fresh signed URL is one
 # API call away for a legitimate request; there's no reason for a link
 # handed to the browser to remain valid longer than it takes to use it.
 
+MAX_CAPTURE_CHARS = 20_000  # a captured thought, not a document upload —
+# there's no Storage bucket size limit backstopping this one (Stage
+# 5.5's whole point is no Storage round-trip for pure text capture), so
+# this cap is the real enforcement, not just fast client-side feedback
+# the way MAX_UPLOAD_BYTES is for the file-upload path.
+
 
 @dataclass
 class Document:
@@ -102,6 +108,10 @@ class DocumentsStorage(Protocol):
     ) -> str: ...
 
     async def delete_document(self, *, user_jwt: str, document_id: str) -> bool: ...
+
+    async def create_capture(
+        self, *, user_jwt: str, user_id: str, title: str, text: str
+    ) -> str: ...
 
 
 class SupabaseDocumentsStorage:
@@ -357,6 +367,57 @@ class SupabaseDocumentsStorage:
                 raise HTTPException(status_code=502, detail="document_delete_failed")
 
         return True
+
+    async def create_capture(
+        self, *, user_jwt: str, user_id: str, title: str, text: str
+    ) -> str:
+        """Stage 5.5 — no signed URL, no PUT, no confirm: a captured
+        thought has no file at all, so this is the entire "upload" for
+        this source type in one call. `captured_text` is the only place
+        this text exists before extract.py chunks it — there's no
+        Storage object to read it back from. `ingest_jobs.state` starts
+        at 'extracting' (not 'uploading'/'normalizing'), reflecting that
+        both of those stages are genuinely skipped for this source
+        type, not just fast-pathed through."""
+        async with httpx.AsyncClient() as client:
+            doc_resp = await client.post(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers={
+                    **self._headers(user_jwt),
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                json={
+                    "user_id": user_id,
+                    "title": title,
+                    "mime": "text/plain",
+                    "size_bytes": len(text.encode("utf-8")),
+                    "status": "processing",
+                    "source": "capture",
+                    "captured_text": text,
+                },
+            )
+            if doc_resp.status_code >= 400:
+                raise HTTPException(status_code=502, detail="capture_insert_failed")
+            document_id = doc_resp.json()[0]["id"]
+
+            job_resp = await client.post(
+                f"{self._supabase_url}/rest/v1/ingest_jobs",
+                headers={
+                    **self._headers(user_jwt),
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                json={
+                    "document_id": document_id,
+                    "user_id": user_id,
+                    "state": "extracting",
+                },
+            )
+            if job_resp.status_code >= 400:
+                raise HTTPException(status_code=502, detail="ingest_job_insert_failed")
+
+        return document_id
 
 
 _storage: DocumentsStorage = SupabaseDocumentsStorage()

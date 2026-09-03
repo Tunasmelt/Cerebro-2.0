@@ -248,7 +248,13 @@ async def run_extract_job(*, user_jwt: str, document_id: str) -> bool:
 
     try:
         async with INGEST_LOCK:
-            if mime == "application/pdf":
+            if document.get("source") == "capture":
+                # Stage 5.5 — the whole point: no Storage object exists
+                # for a captured thought, so there's nothing to
+                # download. The text is chunked directly from the row
+                # extract.py already has in hand.
+                chunks = extract_text_chunks(document["captured_text"] or "")
+            elif mime == "application/pdf":
                 content = await storage.download_indexed(
                     user_jwt=user_jwt, path=document["storage_path"]
                 )
