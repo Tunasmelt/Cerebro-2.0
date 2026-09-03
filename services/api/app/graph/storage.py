@@ -29,8 +29,8 @@ import json
 import os
 from typing import Any
 
-import httpx
 
+from app.core.http_client import CachedHttpClientMixin
 from app.graph.cluster import ClusterAssignment, Edge
 
 
@@ -49,7 +49,7 @@ class GraphStorageError(Exception):
         super().__init__(message)
 
 
-class SupabaseGraphStorage:
+class SupabaseGraphStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -60,12 +60,12 @@ class SupabaseGraphStorage:
     async def get_ready_documents_with_chunk_embeddings(
         self, *, user_jwt: str
     ) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={"status": "eq.ready", "select": "id,chunks(embedding)"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"status": "eq.ready", "select": "id,chunks(embedding)"},
+        )
         if response.status_code >= 400:
             raise GraphStorageError("fetch_documents_failed", response.text)
         rows = response.json()
@@ -92,88 +92,88 @@ class SupabaseGraphStorage:
         edges: list[Edge],
     ) -> None:
         headers = self._headers(user_jwt)
-        async with httpx.AsyncClient() as client:
-            # document_clusters before clusters — it references clusters,
-            # so it must be cleared first, not after. document_edges has
-            # no such ordering constraint (both ends reference documents
-            # directly) but is cleared alongside for the same full-replace
-            # semantics.
-            for table in ("document_clusters", "document_edges"):
-                del_resp = await client.delete(
-                    f"{self._supabase_url}/rest/v1/{table}",
-                    headers=headers,
-                    params={"user_id": f"eq.{user_id}"},
-                )
-                if del_resp.status_code >= 400:
-                    raise GraphStorageError(f"delete_{table}_failed", del_resp.text)
-
-            del_c = await client.delete(
-                f"{self._supabase_url}/rest/v1/clusters",
+        client = self._client()
+        # document_clusters before clusters — it references clusters,
+        # so it must be cleared first, not after. document_edges has
+        # no such ordering constraint (both ends reference documents
+        # directly) but is cleared alongside for the same full-replace
+        # semantics.
+        for table in ("document_clusters", "document_edges"):
+            del_resp = await client.delete(
+                f"{self._supabase_url}/rest/v1/{table}",
                 headers=headers,
                 params={"user_id": f"eq.{user_id}"},
             )
-            if del_c.status_code >= 400:
-                raise GraphStorageError("delete_clusters_failed", del_c.text)
+            if del_resp.status_code >= 400:
+                raise GraphStorageError(f"delete_{table}_failed", del_resp.text)
 
-            if not cluster_positions:
-                return
+        del_c = await client.delete(
+            f"{self._supabase_url}/rest/v1/clusters",
+            headers=headers,
+            params={"user_id": f"eq.{user_id}"},
+        )
+        if del_c.status_code >= 400:
+            raise GraphStorageError("delete_clusters_failed", del_c.text)
 
-            cluster_ids: list[str] = []
-            for (x, y, z), centroid_embedding in zip(cluster_positions, cluster_centroid_embeddings):
-                insert_resp = await client.post(
-                    f"{self._supabase_url}/rest/v1/clusters",
-                    headers={
-                        **headers,
-                        "Content-Type": "application/json",
-                        "Prefer": "return=representation",
-                    },
-                    json={
-                        "user_id": user_id,
-                        "centroid_x": x,
-                        "centroid_y": y,
-                        "centroid_z": z,
-                        "centroid_embedding": centroid_embedding,
-                    },
-                )
-                if insert_resp.status_code >= 400:
-                    raise GraphStorageError("insert_cluster_failed", insert_resp.text)
-                cluster_ids.append(insert_resp.json()[0]["id"])
+        if not cluster_positions:
+            return
 
-            dc_insert = await client.post(
-                f"{self._supabase_url}/rest/v1/document_clusters",
+        cluster_ids: list[str] = []
+        for (x, y, z), centroid_embedding in zip(cluster_positions, cluster_centroid_embeddings):
+            insert_resp = await client.post(
+                f"{self._supabase_url}/rest/v1/clusters",
+                headers={
+                    **headers,
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                json={
+                    "user_id": user_id,
+                    "centroid_x": x,
+                    "centroid_y": y,
+                    "centroid_z": z,
+                    "centroid_embedding": centroid_embedding,
+                },
+            )
+            if insert_resp.status_code >= 400:
+                raise GraphStorageError("insert_cluster_failed", insert_resp.text)
+            cluster_ids.append(insert_resp.json()[0]["id"])
+
+        dc_insert = await client.post(
+            f"{self._supabase_url}/rest/v1/document_clusters",
+            headers={**headers, "Content-Type": "application/json"},
+            json=[
+                {
+                    "document_id": a.document_id,
+                    "cluster_id": cluster_ids[a.cluster_index],
+                    "user_id": user_id,
+                    "distance": a.distance,
+                }
+                for a in assignments
+            ],
+        )
+        if dc_insert.status_code >= 400:
+            raise GraphStorageError("insert_document_clusters_failed", dc_insert.text)
+
+        if edges:
+            edges_insert = await client.post(
+                f"{self._supabase_url}/rest/v1/document_edges",
                 headers={**headers, "Content-Type": "application/json"},
                 json=[
                     {
-                        "document_id": a.document_id,
-                        "cluster_id": cluster_ids[a.cluster_index],
+                        "document_id": e.document_id,
+                        "neighbor_document_id": e.neighbor_document_id,
                         "user_id": user_id,
-                        "distance": a.distance,
+                        "distance": e.distance,
+                        "rank": e.rank,
                     }
-                    for a in assignments
+                    for e in edges
                 ],
             )
-            if dc_insert.status_code >= 400:
-                raise GraphStorageError("insert_document_clusters_failed", dc_insert.text)
-
-            if edges:
-                edges_insert = await client.post(
-                    f"{self._supabase_url}/rest/v1/document_edges",
-                    headers={**headers, "Content-Type": "application/json"},
-                    json=[
-                        {
-                            "document_id": e.document_id,
-                            "neighbor_document_id": e.neighbor_document_id,
-                            "user_id": user_id,
-                            "distance": e.distance,
-                            "rank": e.rank,
-                        }
-                        for e in edges
-                    ],
+            if edges_insert.status_code >= 400:
+                raise GraphStorageError(
+                    "insert_document_edges_failed", edges_insert.text
                 )
-                if edges_insert.status_code >= 400:
-                    raise GraphStorageError(
-                        "insert_document_edges_failed", edges_insert.text
-                    )
 
     async def get_nodes(self, *, user_jwt: str) -> list[dict[str, Any]]:
         """Every status=ready OR status=sealed document, left-joined to
@@ -194,15 +194,15 @@ class SupabaseGraphStorage:
         without a second per-node request — both are already columns on
         `documents`, no new data exposed beyond what /documents already
         shows for the same row."""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={
-                    "status": "in.(ready,sealed)",
-                    "select": "id,title,mime,status,document_clusters(cluster_id,distance,clusters(centroid_x,centroid_y,centroid_z))",
-                },
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={
+                "status": "in.(ready,sealed)",
+                "select": "id,title,mime,status,document_clusters(cluster_id,distance,clusters(centroid_x,centroid_y,centroid_z))",
+            },
+        )
         if response.status_code >= 400:
             raise GraphStorageError("fetch_nodes_failed", response.text)
         nodes = []
@@ -228,12 +228,12 @@ class SupabaseGraphStorage:
         return nodes
 
     async def get_edges(self, *, user_jwt: str) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/document_edges",
-                headers=self._headers(user_jwt),
-                params={"select": "document_id,neighbor_document_id,distance,rank"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/document_edges",
+            headers=self._headers(user_jwt),
+            params={"select": "document_id,neighbor_document_id,distance,rank"},
+        )
         if response.status_code >= 400:
             raise GraphStorageError("fetch_edges_failed", response.text)
         return response.json()
@@ -245,37 +245,37 @@ class SupabaseGraphStorage:
         (RLS already scopes the query — this just distinguishes "not
         found" from "found, zero chunks") vs. an empty list once it's
         confirmed to exist."""
-        async with httpx.AsyncClient() as client:
-            doc_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/documents",
-                headers=self._headers(user_jwt),
-                params={"id": f"eq.{document_id}", "select": "id"},
-            )
-            if doc_resp.status_code >= 400:
-                raise GraphStorageError("fetch_document_failed", doc_resp.text)
-            if not doc_resp.json():
-                return None
+        client = self._client()
+        doc_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{document_id}", "select": "id"},
+        )
+        if doc_resp.status_code >= 400:
+            raise GraphStorageError("fetch_document_failed", doc_resp.text)
+        if not doc_resp.json():
+            return None
 
-            chunks_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chunks",
-                headers=self._headers(user_jwt),
-                params={
-                    "document_id": f"eq.{document_id}",
-                    "select": "id,ordinal,content,meta",
-                    "order": "ordinal",
-                },
-            )
+        chunks_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers=self._headers(user_jwt),
+            params={
+                "document_id": f"eq.{document_id}",
+                "select": "id,ordinal,content,meta",
+                "order": "ordinal",
+            },
+        )
         if chunks_resp.status_code >= 400:
             raise GraphStorageError("fetch_chunks_failed", chunks_resp.text)
         return chunks_resp.json()
 
     async def get_clusters_with_centroids(self, *, user_jwt: str) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/clusters",
-                headers=self._headers(user_jwt),
-                params={"select": "id,centroid_embedding", "centroid_embedding": "not.is.null"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/clusters",
+            headers=self._headers(user_jwt),
+            params={"select": "id,centroid_embedding", "centroid_embedding": "not.is.null"},
+        )
         if response.status_code >= 400:
             raise GraphStorageError("fetch_clusters_failed", response.text)
         return [
@@ -284,12 +284,12 @@ class SupabaseGraphStorage:
         ]
 
     async def count_incremental_placements(self, *, user_jwt: str) -> int:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/document_clusters",
-                headers=self._headers(user_jwt),
-                params={"select": "document_id", "placement_method": "eq.incremental"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/document_clusters",
+            headers=self._headers(user_jwt),
+            params={"select": "document_id", "placement_method": "eq.incremental"},
+        )
         if response.status_code >= 400:
             raise GraphStorageError("count_incremental_failed", response.text)
         return len(response.json())
@@ -297,12 +297,12 @@ class SupabaseGraphStorage:
     async def get_document_chunk_embeddings(
         self, *, user_jwt: str, document_id: str
     ) -> list[list[float]]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/chunks",
-                headers=self._headers(user_jwt),
-                params={"document_id": f"eq.{document_id}", "select": "embedding"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{document_id}", "select": "embedding"},
+        )
         if response.status_code >= 400:
             raise GraphStorageError("fetch_document_chunks_failed", response.text)
         return [
@@ -320,17 +320,17 @@ class SupabaseGraphStorage:
         cluster_id: str,
         distance: float,
     ) -> None:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self._supabase_url}/rest/v1/document_clusters",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                json={
-                    "document_id": document_id,
-                    "cluster_id": cluster_id,
-                    "user_id": user_id,
-                    "distance": distance,
-                    "placement_method": "incremental",
-                },
-            )
+        client = self._client()
+        response = await client.post(
+            f"{self._supabase_url}/rest/v1/document_clusters",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            json={
+                "document_id": document_id,
+                "cluster_id": cluster_id,
+                "user_id": user_id,
+                "distance": distance,
+                "placement_method": "incremental",
+            },
+        )
         if response.status_code >= 400:
             raise GraphStorageError("insert_incremental_assignment_failed", response.text)

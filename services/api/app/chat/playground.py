@@ -26,8 +26,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 
+from app.core.http_client import CachedHttpClientMixin
 from app.chat.generate import GEMINI_MODEL, GenerateError, get_generate_client
 from app.chat.prompt import SYSTEM_PROMPT_HEADER, build_system_instruction
 from app.retrieve.retrieve import RetrievedChunk
@@ -69,7 +69,7 @@ class PromptSection:
         }
 
 
-class ChatPlaygroundStorage:
+class ChatPlaygroundStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -84,75 +84,75 @@ class ChatPlaygroundStorage:
     async def get_prompt_breakdown(
         self, *, user_jwt: str, session_id: str, message_id: str
     ) -> dict[str, Any] | None:
-        async with httpx.AsyncClient() as client:
-            session_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_sessions",
+        client = self._client()
+        session_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_sessions",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{session_id}", "select": "id"},
+        )
+        if not session_resp.json():
+            return None
+
+        messages_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_messages",
+            headers=self._headers(user_jwt),
+            params={
+                "session_id": f"eq.{session_id}",
+                "select": "id,role,content,retrieved_chunk_ids,created_at",
+                "order": "created_at.asc",
+            },
+        )
+        messages = messages_resp.json()
+
+        message = next((m for m in messages if m["id"] == message_id), None)
+        if message is None or message["role"] != "assistant":
+            return None
+
+        preceding_user_message = next(
+            (
+                m
+                for m in reversed(messages)
+                if m["role"] == "user" and m["created_at"] < message["created_at"]
+            ),
+            None,
+        )
+        query_text = preceding_user_message["content"] if preceding_user_message else ""
+
+        chunk_ids: list[str] = message.get("retrieved_chunk_ids") or []
+        chunks: list[RetrievedChunk] = []
+        document_titles: dict[str, str] = {}
+        if chunk_ids:
+            in_list = ",".join(chunk_ids)
+            chunks_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/chunks",
                 headers=self._headers(user_jwt),
-                params={"id": f"eq.{session_id}", "select": "id"},
+                params={"id": f"in.({in_list})", "select": "id,document_id,ordinal,content,meta"},
             )
-            if not session_resp.json():
-                return None
-
-            messages_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_messages",
-                headers=self._headers(user_jwt),
-                params={
-                    "session_id": f"eq.{session_id}",
-                    "select": "id,role,content,retrieved_chunk_ids,created_at",
-                    "order": "created_at.asc",
-                },
-            )
-            messages = messages_resp.json()
-
-            message = next((m for m in messages if m["id"] == message_id), None)
-            if message is None or message["role"] != "assistant":
-                return None
-
-            preceding_user_message = next(
-                (
-                    m
-                    for m in reversed(messages)
-                    if m["role"] == "user" and m["created_at"] < message["created_at"]
-                ),
-                None,
-            )
-            query_text = preceding_user_message["content"] if preceding_user_message else ""
-
-            chunk_ids: list[str] = message.get("retrieved_chunk_ids") or []
-            chunks: list[RetrievedChunk] = []
-            document_titles: dict[str, str] = {}
-            if chunk_ids:
-                in_list = ",".join(chunk_ids)
-                chunks_resp = await client.get(
-                    f"{self._supabase_url}/rest/v1/chunks",
+            rows = chunks_resp.json()
+            document_ids = sorted({r["document_id"] for r in rows})
+            if document_ids:
+                docs_in_list = ",".join(document_ids)
+                docs_resp = await client.get(
+                    f"{self._supabase_url}/rest/v1/documents",
                     headers=self._headers(user_jwt),
-                    params={"id": f"in.({in_list})", "select": "id,document_id,ordinal,content,meta"},
+                    params={"id": f"in.({docs_in_list})", "select": "id,title"},
                 )
-                rows = chunks_resp.json()
-                document_ids = sorted({r["document_id"] for r in rows})
-                if document_ids:
-                    docs_in_list = ",".join(document_ids)
-                    docs_resp = await client.get(
-                        f"{self._supabase_url}/rest/v1/documents",
-                        headers=self._headers(user_jwt),
-                        params={"id": f"in.({docs_in_list})", "select": "id,title"},
+                document_titles = {d["id"]: d["title"] for d in docs_resp.json()}
+            by_id = {r["id"]: r for r in rows}
+            for chunk_id in chunk_ids:
+                row = by_id.get(chunk_id)
+                if row is None:
+                    continue
+                chunks.append(
+                    RetrievedChunk(
+                        chunk_id=row["id"],
+                        document_id=row["document_id"],
+                        ordinal=row["ordinal"],
+                        content=row["content"],
+                        meta=row.get("meta") or {},
+                        relevance_score=0.0,
                     )
-                    document_titles = {d["id"]: d["title"] for d in docs_resp.json()}
-                by_id = {r["id"]: r for r in rows}
-                for chunk_id in chunk_ids:
-                    row = by_id.get(chunk_id)
-                    if row is None:
-                        continue
-                    chunks.append(
-                        RetrievedChunk(
-                            chunk_id=row["id"],
-                            document_id=row["document_id"],
-                            ordinal=row["ordinal"],
-                            content=row["content"],
-                            meta=row.get("meta") or {},
-                            relevance_score=0.0,
-                        )
-                    )
+                )
 
         sections: list[PromptSection] = [
             PromptSection(
@@ -222,14 +222,14 @@ class ChatPlaygroundStorage:
         the response with recalculated tokens/cost/latency. Returns None
         if the session isn't the caller's (RLS-scoped, 404-not-403 at the
         route layer, same pattern as get_prompt_breakdown)."""
-        async with httpx.AsyncClient() as client:
-            session_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_sessions",
-                headers=self._headers(user_jwt),
-                params={"id": f"eq.{session_id}", "select": "id"},
-            )
-            if not session_resp.json():
-                return None
+        client = self._client()
+        session_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_sessions",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{session_id}", "select": "id"},
+        )
+        if not session_resp.json():
+            return None
 
         # Mirrors build_system_instruction's block-join format exactly,
         # parameterized by the caller's edited header/content instead of

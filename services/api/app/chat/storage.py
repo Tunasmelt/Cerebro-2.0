@@ -19,8 +19,8 @@ not a second, drifting reimplementation.
 import os
 from typing import Any, Protocol
 
-import httpx
 
+from app.core.http_client import CachedHttpClientMixin
 from app.chat.prompt import extract_citations
 from app.retrieve.retrieve import RetrievedChunk
 
@@ -58,7 +58,7 @@ class ChatStorage(Protocol):
     async def delete_session(self, *, user_jwt: str, session_id: str) -> bool: ...
 
 
-class SupabaseChatStorage:
+class SupabaseChatStorage(CachedHttpClientMixin):
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -71,12 +71,12 @@ class SupabaseChatStorage:
         }
 
     async def create_session(self, *, user_jwt: str, user_id: str) -> str:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self._supabase_url}/rest/v1/chat_sessions",
-                headers={**self._headers(user_jwt), "Prefer": "return=representation"},
-                json={"user_id": user_id},
-            )
+        client = self._client()
+        response = await client.post(
+            f"{self._supabase_url}/rest/v1/chat_sessions",
+            headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+            json={"user_id": user_id},
+        )
         if response.status_code >= 400:
             raise ChatStorageError("session_create_failed", response.text)
         return response.json()[0]["id"]
@@ -84,12 +84,12 @@ class SupabaseChatStorage:
     async def get_session(
         self, *, user_jwt: str, session_id: str
     ) -> dict[str, Any] | None:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_sessions",
-                headers=self._headers(user_jwt),
-                params={"id": f"eq.{session_id}", "select": "id"},
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_sessions",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{session_id}", "select": "id"},
+        )
         rows = response.json()
         return rows[0] if rows else None
 
@@ -113,47 +113,47 @@ class SupabaseChatStorage:
         }
         if trace_id is not None:
             body["trace_id"] = trace_id
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self._supabase_url}/rest/v1/chat_messages",
-                headers=self._headers(user_jwt),
-                json=body,
-            )
+        client = self._client()
+        response = await client.post(
+            f"{self._supabase_url}/rest/v1/chat_messages",
+            headers=self._headers(user_jwt),
+            json=body,
+        )
         if response.status_code >= 400:
             raise ChatStorageError("message_save_failed", response.text)
 
     PREVIEW_MAX_CHARS = 80
 
     async def list_sessions(self, *, user_jwt: str) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
-            sessions_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_sessions",
-                headers=self._headers(user_jwt),
-                params={"select": "id,created_at", "order": "created_at.desc"},
-            )
-            if sessions_resp.status_code >= 400:
-                raise ChatStorageError("list_sessions_failed", sessions_resp.text)
-            sessions = sessions_resp.json()
-            if not sessions:
-                return []
+        client = self._client()
+        sessions_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_sessions",
+            headers=self._headers(user_jwt),
+            params={"select": "id,created_at", "order": "created_at.desc"},
+        )
+        if sessions_resp.status_code >= 400:
+            raise ChatStorageError("list_sessions_failed", sessions_resp.text)
+        sessions = sessions_resp.json()
+        if not sessions:
+            return []
 
-            # One extra query for every session's earliest user message,
-            # not N+1 — grouped in Python below to keep just the first
-            # per session_id (order.asc means the first row seen per
-            # session_id is the earliest).
-            session_ids = ",".join(s["id"] for s in sessions)
-            preview_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_messages",
-                headers=self._headers(user_jwt),
-                params={
-                    "session_id": f"in.({session_ids})",
-                    "role": "eq.user",
-                    "select": "session_id,content,created_at",
-                    "order": "created_at.asc",
-                },
-            )
-            if preview_resp.status_code >= 400:
-                raise ChatStorageError("list_sessions_preview_failed", preview_resp.text)
+        # One extra query for every session's earliest user message,
+        # not N+1 — grouped in Python below to keep just the first
+        # per session_id (order.asc means the first row seen per
+        # session_id is the earliest).
+        session_ids = ",".join(s["id"] for s in sessions)
+        preview_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_messages",
+            headers=self._headers(user_jwt),
+            params={
+                "session_id": f"in.({session_ids})",
+                "role": "eq.user",
+                "select": "session_id,content,created_at",
+                "order": "created_at.asc",
+            },
+        )
+        if preview_resp.status_code >= 400:
+            raise ChatStorageError("list_sessions_preview_failed", preview_resp.text)
 
         earliest_by_session: dict[str, str] = {}
         for row in preview_resp.json():
@@ -172,61 +172,61 @@ class SupabaseChatStorage:
     async def get_messages(
         self, *, user_jwt: str, session_id: str
     ) -> list[dict[str, Any]] | None:
-        async with httpx.AsyncClient() as client:
-            session_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_sessions",
+        client = self._client()
+        session_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_sessions",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{session_id}", "select": "id"},
+        )
+        if session_resp.status_code >= 400:
+            raise ChatStorageError("fetch_session_failed", session_resp.text)
+        if not session_resp.json():
+            return None
+
+        messages_resp = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_messages",
+            headers=self._headers(user_jwt),
+            params={
+                "session_id": f"eq.{session_id}",
+                "select": "id,role,content,retrieved_chunk_ids,created_at",
+                "order": "created_at.asc",
+            },
+        )
+        if messages_resp.status_code >= 400:
+            raise ChatStorageError("fetch_messages_failed", messages_resp.text)
+        messages = messages_resp.json()
+
+        all_chunk_ids = sorted(
+            {cid for m in messages for cid in (m.get("retrieved_chunk_ids") or [])}
+        )
+        chunk_to_document: dict[str, str] = {}
+        if all_chunk_ids:
+            in_list = ",".join(all_chunk_ids)
+            chunks_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/chunks",
                 headers=self._headers(user_jwt),
-                params={"id": f"eq.{session_id}", "select": "id"},
+                params={"id": f"in.({in_list})", "select": "id,document_id"},
             )
-            if session_resp.status_code >= 400:
-                raise ChatStorageError("fetch_session_failed", session_resp.text)
-            if not session_resp.json():
-                return None
+            if chunks_resp.status_code >= 400:
+                raise ChatStorageError("resolve_chunk_documents_failed", chunks_resp.text)
+            chunk_to_document = {c["id"]: c["document_id"] for c in chunks_resp.json()}
 
-            messages_resp = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_messages",
+        # Titles are new here — the original Stage 2.4 read only ever
+        # needed document *ids* (to pulse graph nodes), never titles.
+        # A real chat-transcript view needs a human-readable label
+        # for each citation chip.
+        document_titles: dict[str, str] = {}
+        document_ids = sorted(set(chunk_to_document.values()))
+        if document_ids:
+            docs_in_list = ",".join(document_ids)
+            docs_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/documents",
                 headers=self._headers(user_jwt),
-                params={
-                    "session_id": f"eq.{session_id}",
-                    "select": "id,role,content,retrieved_chunk_ids,created_at",
-                    "order": "created_at.asc",
-                },
+                params={"id": f"in.({docs_in_list})", "select": "id,title"},
             )
-            if messages_resp.status_code >= 400:
-                raise ChatStorageError("fetch_messages_failed", messages_resp.text)
-            messages = messages_resp.json()
-
-            all_chunk_ids = sorted(
-                {cid for m in messages for cid in (m.get("retrieved_chunk_ids") or [])}
-            )
-            chunk_to_document: dict[str, str] = {}
-            if all_chunk_ids:
-                in_list = ",".join(all_chunk_ids)
-                chunks_resp = await client.get(
-                    f"{self._supabase_url}/rest/v1/chunks",
-                    headers=self._headers(user_jwt),
-                    params={"id": f"in.({in_list})", "select": "id,document_id"},
-                )
-                if chunks_resp.status_code >= 400:
-                    raise ChatStorageError("resolve_chunk_documents_failed", chunks_resp.text)
-                chunk_to_document = {c["id"]: c["document_id"] for c in chunks_resp.json()}
-
-            # Titles are new here — the original Stage 2.4 read only ever
-            # needed document *ids* (to pulse graph nodes), never titles.
-            # A real chat-transcript view needs a human-readable label
-            # for each citation chip.
-            document_titles: dict[str, str] = {}
-            document_ids = sorted(set(chunk_to_document.values()))
-            if document_ids:
-                docs_in_list = ",".join(document_ids)
-                docs_resp = await client.get(
-                    f"{self._supabase_url}/rest/v1/documents",
-                    headers=self._headers(user_jwt),
-                    params={"id": f"in.({docs_in_list})", "select": "id,title"},
-                )
-                if docs_resp.status_code >= 400:
-                    raise ChatStorageError("resolve_document_titles_failed", docs_resp.text)
-                document_titles = {d["id"]: d["title"] for d in docs_resp.json()}
+            if docs_resp.status_code >= 400:
+                raise ChatStorageError("resolve_document_titles_failed", docs_resp.text)
+            document_titles = {d["id"]: d["title"] for d in docs_resp.json()}
 
         for m in messages:
             chunk_ids = m.get("retrieved_chunk_ids") or []
@@ -272,17 +272,17 @@ class SupabaseChatStorage:
         Fetched newest-first (cheapest way to get "the last N") then
         reversed to chronological order, matching the shape
         rewrite.rewrite_query expects."""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._supabase_url}/rest/v1/chat_messages",
-                headers=self._headers(user_jwt),
-                params={
-                    "session_id": f"eq.{session_id}",
-                    "select": "role,content",
-                    "order": "created_at.desc",
-                    "limit": str(limit),
-                },
-            )
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/chat_messages",
+            headers=self._headers(user_jwt),
+            params={
+                "session_id": f"eq.{session_id}",
+                "select": "role,content",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
+        )
         if response.status_code >= 400:
             raise ChatStorageError("fetch_recent_messages_failed", response.text)
         return list(reversed(response.json()))
@@ -294,12 +294,12 @@ class SupabaseChatStorage:
         the caller's own just deletes zero rows rather than erroring —
         `Prefer: return=representation` is what lets this method tell
         "deleted" from "not found/not owned" apart."""
-        async with httpx.AsyncClient() as client:
-            response = await client.delete(
-                f"{self._supabase_url}/rest/v1/chat_sessions",
-                headers={**self._headers(user_jwt), "Prefer": "return=representation"},
-                params={"id": f"eq.{session_id}"},
-            )
+        client = self._client()
+        response = await client.delete(
+            f"{self._supabase_url}/rest/v1/chat_sessions",
+            headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+            params={"id": f"eq.{session_id}"},
+        )
         if response.status_code >= 400:
             raise ChatStorageError("delete_session_failed", response.text)
         return bool(response.json())
