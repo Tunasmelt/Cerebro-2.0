@@ -43,6 +43,37 @@ failure before the first delta — the actual `httpx.ReadTimeout`/non-2xx
 scenario this stage's exit criteria describes — is the case that's
 actually safe to retry transparently, since the caller has seen
 nothing yet.
+
+Stage 7.13 — explicit generation config. Confirmed live against the
+current Interactions API reference before writing this (not assumed
+from the older generateContent/candidates shape or from training
+data): `temperature`, `top_p`, and `top_k` do not exist anywhere in
+this API at all — a real, load-bearing finding, not an oversight. The
+Interactions endpoint's `generation_config` only exposes
+`max_output_tokens`, `seed`, `stop_sequences`, `thinking_level`,
+`thinking_summaries`, `tool_choice`, and a few modality-specific
+configs (speech/transcription/video) — none of it a sampling-
+temperature knob. So "grounded, citation-heavy answers, not creative-
+writing variance" (this stage's own stated goal) is, and can only be,
+achieved through prompt design (`chat/prompt.py`'s
+`SYSTEM_PROMPT_HEADER`), not a generation-config parameter that simply
+isn't exposed. What *is* set explicitly now: `max_output_tokens`
+(`GEMINI_MAX_OUTPUT_TOKENS`, generous but no longer implicitly
+unbounded) and `safety_settings` (`GEMINI_SAFETY_SETTINGS`,
+`BLOCK_ONLY_HIGH` per category — a personal knowledge vault answers
+grounded in the user's own uploaded documents, which can legitimately
+contain sensitive-sounding-but-benign content — medical records, legal
+filings, security research — the platform default threshold risks
+false-positive blocking of real, legitimate content, but full immunity
+would defeat the point of having safety settings at all).
+`thinking_level`/`thinking_summaries`/`seed`/`stop_sequences`/
+`tool_choice` were deliberately left unset: `thinking_level` in
+particular is exactly what made gemini-3.7-flash unusably slow even at
+"low" (see above) — this codebase has zero live-tested data on how
+gemini-3.5-flash-lite's own default behaves under an explicit
+override, and guessing at one without a real timed call to confirm
+against would risk silently reintroducing that same latency
+regression this module's own model choice was made to avoid.
 """
 import asyncio
 import json
@@ -59,6 +90,27 @@ logger = logging.getLogger(__name__)
 GENERATE_MAX_RETRIES = 1  # bounded — one retry, never an infinite loop.
 GENERATE_RETRY_BACKOFF_SECONDS = 1.0  # a real backoff, not an immediate
 # re-hit of an API that may already be struggling.
+
+GEMINI_MAX_OUTPUT_TOKENS = 2048  # generous for a full grounded, cited
+# answer (a few paragraphs plus citation markers) — a ceiling against a
+# runaway/repetitive generation, not a target length.
+
+GEMINI_SAFETY_SETTINGS = [
+    {"category": category, "threshold": "BLOCK_ONLY_HIGH"}
+    for category in (
+        "HARM_CATEGORY_HATE_SPEECH",
+        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "HARM_CATEGORY_HARASSMENT",
+    )
+]
+# Every category confirmed live against the current SafetySetting/
+# HarmCategory reference. BLOCK_ONLY_HIGH (least aggressive of the
+# confirmed threshold values) over the platform default — see this
+# module's own docstring for why a personal vault of the user's own
+# documents needs looser filtering than a general-purpose default.
+
+GENERATION_CONFIG = {"max_output_tokens": GEMINI_MAX_OUTPUT_TOKENS}
 
 GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 # gemini-3.7-flash was tried first (per CLAUDE.md's Gemini-for-generation
@@ -142,6 +194,8 @@ class GeminiGenerateClient(CachedHttpClientMixin):
                         "input": input_text,
                         "system_instruction": system_instruction,
                         "stream": True,
+                        "generation_config": GENERATION_CONFIG,
+                        "safety_settings": GEMINI_SAFETY_SETTINGS,
                     },
                 ) as response:
                     if response.status_code >= 400:
@@ -196,6 +250,8 @@ async def run_interaction(
         "input": input_data,
         "system_instruction": system_instruction,
         "stream": False,
+        "generation_config": GENERATION_CONFIG,
+        "safety_settings": GEMINI_SAFETY_SETTINGS,
     }
     if tools:
         payload["tools"] = tools
