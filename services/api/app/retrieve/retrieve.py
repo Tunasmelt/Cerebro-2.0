@@ -34,8 +34,24 @@ drops it, so a correctly-embedded image essentially never reached a
 chat answer or the graph's retrieved-chunk pulse. See
 retrieve/image_caption.py — a query-time caption stands in for the
 missing text right before rerank.
+
+Stage 7.7 — resilience: query rewrite and HyDE already degrade
+gracefully on failure (see rewrite.py/hyde.py); vector_search,
+fts_search, and rerank used to be the exception — any RetrieveError
+from any of the three propagated straight out of retrieve() and killed
+the whole turn. Now all three catch their own RetrieveError and
+degrade instead: one search leg failing just means the other leg's
+results carry the whole fusion (both failing falls through to the
+existing "no fused ids" path — sealed matches, or an empty result —
+same code that already runs for a genuinely empty vault, no new
+branch needed); a rerank outage returns the top FINAL_TOP_K candidates
+in un-reranked RRF-fused order instead of failing outright, skipping
+RELEVANCE_FLOOR (a Cohere-relevance-scale threshold that has no
+meaning without a Cohere score) since "some real results, unranked"
+beats no answer at all.
 """
 import asyncio
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -48,6 +64,8 @@ from app.ingest.embed import get_embed_client
 from app.retrieve.hyde import generate_hypothetical_answer
 from app.retrieve.image_caption import caption_image
 from app.retrieve.rewrite import rewrite_query
+
+logger = logging.getLogger(__name__)
 
 RRF_K = 60  # standard constant from the original RRF paper, not tunable
 # in the way the other defaults below are.
@@ -371,20 +389,32 @@ async def retrieve(
     with tracer.start_as_current_observation(
         as_type="span", name="vector_search", input={"match_count": VECTOR_CANDIDATES}
     ) as span:
-        vector_results = await storage.vector_search(
-            user_jwt=user_jwt,
-            query_embedding=query_embedding,
-            match_count=VECTOR_CANDIDATES,
-            primary_provider=embed_client.provider,
-        )
+        try:
+            vector_results = await storage.vector_search(
+                user_jwt=user_jwt,
+                query_embedding=query_embedding,
+                match_count=VECTOR_CANDIDATES,
+                primary_provider=embed_client.provider,
+            )
+        except RetrieveError:
+            # Degrade, don't crash — same posture as rewrite_query/
+            # generate_hypothetical_answer: one search leg failing
+            # shouldn't fail the whole turn when the other leg might
+            # still carry it. fts_search below runs regardless.
+            logger.exception("vector_search failed, degrading to FTS-only results")
+            vector_results = []
         span.update(output={"result_count": len(vector_results)})
 
     with tracer.start_as_current_observation(
         as_type="span", name="fts_search", input={"match_count": FTS_CANDIDATES}
     ) as span:
-        fts_results = await storage.fts_search(
-            user_jwt=user_jwt, query_text=effective_query, match_count=FTS_CANDIDATES
-        )
+        try:
+            fts_results = await storage.fts_search(
+                user_jwt=user_jwt, query_text=effective_query, match_count=FTS_CANDIDATES
+            )
+        except RetrieveError:
+            logger.exception("fts_search failed, degrading to vector-only results")
+            fts_results = []
         span.update(output={"result_count": len(fts_results)})
 
     by_id: dict[str, dict[str, Any]] = {r["id"]: r for r in vector_results}
@@ -443,28 +473,52 @@ async def retrieve(
         name="rerank",
         input={"query": effective_query, "candidate_count": len(candidates)},
     ) as span:
-        rerank_results = await rerank_client.rerank(
-            query=effective_query,
-            documents=[c["content"] for c in candidates],
-            top_n=FINAL_TOP_K,
-        )
-        span.update(output={"result_count": len(rerank_results)})
+        try:
+            rerank_results = await rerank_client.rerank(
+                query=effective_query,
+                documents=[c["content"] for c in candidates],
+                top_n=FINAL_TOP_K,
+            )
+            span.update(output={"result_count": len(rerank_results)})
+        except RetrieveError:
+            # Degrade to un-reranked RRF order rather than fail the
+            # whole turn on a Cohere outage — "some real results,
+            # unranked" beats no answer at all. RELEVANCE_FLOOR is a
+            # Cohere relevance-score-scale threshold and has no meaning
+            # without a real Cohere score, so it's skipped here, not
+            # applied to a placeholder.
+            logger.exception("rerank failed, degrading to un-reranked RRF order")
+            span.update(output={"result_count": None, "degraded": True})
+            rerank_results = None
 
     results: list[RetrievedChunk] = []
-    for index, score in rerank_results:
-        if score < RELEVANCE_FLOOR:
-            continue
-        candidate = candidates[index]
-        results.append(
-            RetrievedChunk(
-                chunk_id=candidate["id"],
-                document_id=candidate["document_id"],
-                ordinal=candidate["ordinal"],
-                content=candidate["content"],
-                meta=candidate["meta"],
-                relevance_score=score,
+    if rerank_results is None:
+        for candidate in candidates[:FINAL_TOP_K]:
+            results.append(
+                RetrievedChunk(
+                    chunk_id=candidate["id"],
+                    document_id=candidate["document_id"],
+                    ordinal=candidate["ordinal"],
+                    content=candidate["content"],
+                    meta=candidate["meta"],
+                    relevance_score=1.0,
+                )
             )
-        )
+    else:
+        for index, score in rerank_results:
+            if score < RELEVANCE_FLOOR:
+                continue
+            candidate = candidates[index]
+            results.append(
+                RetrievedChunk(
+                    chunk_id=candidate["id"],
+                    document_id=candidate["document_id"],
+                    ordinal=candidate["ordinal"],
+                    content=candidate["content"],
+                    meta=candidate["meta"],
+                    relevance_score=score,
+                )
+            )
 
     if unlocked:
         results.extend(

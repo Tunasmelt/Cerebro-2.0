@@ -24,6 +24,7 @@ from app.retrieve.retrieve import (
     FINAL_TOP_K,
     RELEVANCE_FLOOR,
     RRF_K,
+    RetrieveError,
     retrieve,
     rrf_fuse,
 )
@@ -89,15 +90,33 @@ class _FakeRerankClient:
 
 
 class _FakeRetrieveStorage:
-    def __init__(self, *, vector_results: list[dict], fts_results: list[dict]):
+    def __init__(
+        self,
+        *,
+        vector_results: list[dict],
+        fts_results: list[dict],
+        fail_vector: bool = False,
+        fail_fts: bool = False,
+    ):
         self.vector_results = vector_results
         self.fts_results = fts_results
+        self.fail_vector = fail_vector
+        self.fail_fts = fail_fts
 
     async def vector_search(self, *, user_jwt, query_embedding, match_count, primary_provider):
+        if self.fail_vector:
+            raise RetrieveError("vector_search_failed", "simulated vector search outage")
         return self.vector_results[:match_count]
 
     async def fts_search(self, *, user_jwt, query_text, match_count):
+        if self.fail_fts:
+            raise RetrieveError("fts_search_failed", "simulated FTS outage")
         return self.fts_results[:match_count]
+
+
+class _FailingRerankClient:
+    async def rerank(self, *, query, documents, top_n):
+        raise RetrieveError("rerank_failed", "simulated rerank outage")
 
 
 def _chunk(chunk_id, content, ordinal=0, meta=None):
@@ -278,3 +297,76 @@ async def test_retrieve_never_returns_more_than_final_top_k():
     results = await retrieve(user_jwt="t", query="q")
 
     assert len(results) <= FINAL_TOP_K
+
+
+# --- Stage 7.7: retrieval resilience (soft-fail rerank/vector/FTS) -----------
+
+
+@pytest.mark.asyncio
+async def test_rerank_failure_degrades_to_unreranked_rrf_order_not_a_crash():
+    chunks = [_chunk(f"c{i}", f"relevant content {i}") for i in range(3)]
+    storage = _FakeRetrieveStorage(vector_results=chunks, fts_results=[])
+
+    embed_module.set_embed_client(_FakeEmbedClient())
+    retrieve_module.set_rerank_client(_FailingRerankClient())
+    retrieve_module.set_retrieve_storage(storage)
+
+    results = await retrieve(user_jwt="t", query="anything")
+
+    # A real, usable result set — not an exception, not empty — capped
+    # at FINAL_TOP_K, in the fused order (RELEVANCE_FLOOR doesn't apply
+    # without a real Cohere score).
+    assert len(results) == 3
+    assert {r.chunk_id for r in results} == {"c0", "c1", "c2"}
+    assert all(r.relevance_score == 1.0 for r in results)
+
+
+@pytest.mark.asyncio
+async def test_vector_search_failure_still_returns_fts_leg_results():
+    fts_chunk = _chunk("fts-only", "relevant via full text search")
+    storage = _FakeRetrieveStorage(
+        vector_results=[], fts_results=[fts_chunk], fail_vector=True
+    )
+    rerank = _FakeRerankClient(scores_by_content={fts_chunk["content"]: 0.9})
+
+    embed_module.set_embed_client(_FakeEmbedClient())
+    retrieve_module.set_rerank_client(rerank)
+    retrieve_module.set_retrieve_storage(storage)
+
+    results = await retrieve(user_jwt="t", query="anything")
+
+    assert [r.chunk_id for r in results] == ["fts-only"]
+
+
+@pytest.mark.asyncio
+async def test_fts_failure_still_returns_vector_leg_results():
+    vector_chunk = _chunk("vector-only", "relevant via vector search")
+    storage = _FakeRetrieveStorage(
+        vector_results=[vector_chunk], fts_results=[], fail_fts=True
+    )
+    rerank = _FakeRerankClient(scores_by_content={vector_chunk["content"]: 0.9})
+
+    embed_module.set_embed_client(_FakeEmbedClient())
+    retrieve_module.set_rerank_client(rerank)
+    retrieve_module.set_retrieve_storage(storage)
+
+    results = await retrieve(user_jwt="t", query="anything")
+
+    assert [r.chunk_id for r in results] == ["vector-only"]
+
+
+@pytest.mark.asyncio
+async def test_both_search_legs_failing_returns_empty_not_a_crash():
+    storage = _FakeRetrieveStorage(
+        vector_results=[], fts_results=[], fail_vector=True, fail_fts=True
+    )
+    rerank = _FakeRerankClient(scores_by_content={})
+
+    embed_module.set_embed_client(_FakeEmbedClient())
+    retrieve_module.set_rerank_client(rerank)
+    retrieve_module.set_retrieve_storage(storage)
+
+    results = await retrieve(user_jwt="t", query="anything")
+
+    assert results == []
+    assert rerank.last_call is None  # nothing to rerank once both legs are empty
