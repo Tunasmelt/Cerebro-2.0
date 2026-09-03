@@ -4,10 +4,21 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
+import { sealBytes } from "@/lib/crypto/seal";
 import type { DocumentRow } from "@/lib/graph/types";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./documents.module.css";
+
+// Stage 3.2/3.3's client-side sealing was built and adversarially
+// tested end to end, but no page ever actually exposed a way to
+// trigger it — Stage 4.7's own notes flagged this as a real, separate
+// gap ("Documents still doesn't have one either"), never closed.
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
 
 // Mirrors services/api/app/core/documents_storage.py's ALLOWED_MIME_TYPES —
 // fast client-side feedback only, Supabase Storage's bucket policy is the
@@ -68,6 +79,11 @@ export default function DocumentsPage() {
   const [actionItems, setActionItems] = useState<Record<string, ActionItemCandidate[]>>({});
   const [addedChunkIds, setAddedChunkIds] = useState<Set<string>>(new Set());
   const defaultBoardId = useRef<string | null>(null);
+
+  const [sealPromptFor, setSealPromptFor] = useState<string | null>(null);
+  const [sealPassphrase, setSealPassphrase] = useState("");
+  const [sealing, setSealing] = useState(false);
+  const [sealError, setSealError] = useState<string | null>(null);
 
   const fetchDocuments = useCallback(async () => {
     const res = await authedFetch("/api/documents");
@@ -225,6 +241,62 @@ export default function DocumentsPage() {
     setAddedChunkIds((prev) => new Set(prev).add(item.source_chunk_id));
   }
 
+  function openSealPrompt(documentId: string) {
+    setSealPromptFor(documentId);
+    setSealPassphrase("");
+    setSealError(null);
+  }
+
+  async function handleConfirmSeal(documentId: string) {
+    const passphrase = sealPassphrase;
+    if (!passphrase) return;
+    setSealing(true);
+    setSealError(null);
+    try {
+      const chunksRes = await authedFetch(`/api/graph/nodes/${documentId}/chunks`);
+      if (!chunksRes.ok) throw new Error("Could not read this document's content");
+      const chunksBody = await chunksRes.json();
+      const chunks: { ordinal: number; content: string }[] = chunksBody.chunks ?? [];
+
+      // Each chunk is sealed independently with its own fresh salt/nonce
+      // (sealBytes generates both per call) — the passphrase itself
+      // never leaves this function, only the resulting ciphertext does.
+      const sealedChunks = await Promise.all(
+        chunks.map(async (chunk) => {
+          const payload = await sealBytes(new TextEncoder().encode(chunk.content), passphrase);
+          return {
+            ordinal: chunk.ordinal,
+            content_ciphertext: bytesToBase64(payload.ciphertext),
+            salt: bytesToBase64(payload.salt),
+            nonce: bytesToBase64(payload.nonce),
+          };
+        })
+      );
+
+      const sealRes = await authedFetch(`/api/documents/${documentId}/seal`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chunks: sealedChunks }),
+      });
+      if (!sealRes.ok) {
+        const body = await sealRes.json().catch(() => ({}));
+        throw new Error(
+          body?.error?.code === "not_ready"
+            ? "This document is still processing — try again once it's ready."
+            : body?.error?.message || "Could not seal this document"
+        );
+      }
+
+      setSealPromptFor(null);
+      setSealPassphrase("");
+      await fetchDocuments();
+    } catch (err) {
+      setSealError(err instanceof Error ? err.message : "Could not seal this document");
+    } finally {
+      setSealing(false);
+    }
+  }
+
   function handleDeclineActionItem(documentId: string, item: ActionItemCandidate) {
     setActionItems((prev) => ({
       ...prev,
@@ -349,16 +421,60 @@ export default function DocumentsPage() {
                       </button>
                     )}
                     {doc.status === "ready" && (
-                      <button
-                        className={styles.retryBtn}
-                        disabled={extractingId === doc.id}
-                        onClick={() => handleExtractActionItems(doc.id)}
-                      >
-                        {extractingId === doc.id ? "Scanning…" : "Extract action items"}
-                      </button>
+                      <>
+                        <button
+                          className={styles.retryBtn}
+                          disabled={extractingId === doc.id}
+                          onClick={() => handleExtractActionItems(doc.id)}
+                        >
+                          {extractingId === doc.id ? "Scanning…" : "Extract action items"}
+                        </button>{" "}
+                        <button className={styles.retryBtn} onClick={() => openSealPrompt(doc.id)}>
+                          Seal
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
+                {sealPromptFor === doc.id && (
+                  <tr>
+                    <td colSpan={5} className={styles.actionItemsCell}>
+                      <div className={styles.sealPrompt}>
+                        <span className={styles.sealPromptLabel}>
+                          Choose a passphrase — there is no recovery if you forget it.
+                        </span>
+                        <input
+                          type="password"
+                          autoFocus
+                          className={styles.sealPromptInput}
+                          placeholder="Passphrase"
+                          value={sealPassphrase}
+                          onChange={(e) => setSealPassphrase(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleConfirmSeal(doc.id);
+                            if (e.key === "Escape") setSealPromptFor(null);
+                          }}
+                          disabled={sealing}
+                        />
+                        <button
+                          className={styles.retryBtn}
+                          disabled={!sealPassphrase || sealing}
+                          onClick={() => handleConfirmSeal(doc.id)}
+                        >
+                          {sealing ? "Sealing…" : "Confirm seal"}
+                        </button>
+                        <button
+                          className={styles.retryBtn}
+                          disabled={sealing}
+                          onClick={() => setSealPromptFor(null)}
+                        >
+                          Cancel
+                        </button>
+                        {sealError && <span className={styles.sealPromptError}>{sealError}</span>}
+                      </div>
+                    </td>
+                  </tr>
+                )}
                 {actionItems[doc.id] && (
                   <tr>
                     <td colSpan={5} className={styles.actionItemsCell}>

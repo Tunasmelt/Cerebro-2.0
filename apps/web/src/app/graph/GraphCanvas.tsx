@@ -671,9 +671,20 @@ export default function GraphCanvas({
         renderer.setSize(w, h);
       }
       window.addEventListener("resize", handleResize);
+      // AppShell wraps this page in a flex layout — the container can
+      // change size from sidebar collapse/expand or content reflow
+      // without the window itself ever firing a resize event, which
+      // would leave the camera aspect ratio and click raycasting math
+      // stale (computed against whatever size existed at mount) until
+      // the next real window resize. ResizeObserver catches that case
+      // too; the standalone perf-test harness (100vw/100vh, no flex
+      // ancestor) never exercised this gap.
+      const resizeObserver = new ResizeObserver(handleResize);
+      resizeObserver.observe(container);
 
       innerCleanup = () => {
         window.removeEventListener("resize", handleResize);
+        resizeObserver.disconnect();
         renderer.domElement.removeEventListener("pointermove", handlePointerMove);
         renderer.domElement.removeEventListener("click", handleClick);
         cancelAnimationFrame(raf);

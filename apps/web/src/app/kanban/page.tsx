@@ -197,8 +197,24 @@ export default function KanbanPage() {
     }
   }
 
-  if (checking || loading) return null;
-  if (!board) return null;
+  // Returning null here (instead of AppShell wrapping a loading state)
+  // used to leave the bare body background on screen — near-black
+  // (var(--bg-base)) with no sidebar/topbar chrome at all — while auth
+  // was checking and the board was loading, reading as "the page goes
+  // black, then loads." AppShell now mounts immediately either way, so
+  // the real chrome (and its lighter gradient background) is what shows
+  // during the loading window, not empty body background.
+  if (checking || loading || !board) {
+    return (
+      <AppShell userEmail={email}>
+        <div className={styles.page}>
+          <div className={styles.pageHeader}>
+            <h1>&nbsp;</h1>
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell userEmail={email}>
