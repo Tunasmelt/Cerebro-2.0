@@ -39,6 +39,9 @@ class ChatStorage(Protocol):
     async def get_messages(
         self, *, user_jwt: str, session_id: str
     ) -> list[dict[str, Any]] | None: ...
+    async def get_recent_messages(
+        self, *, user_jwt: str, session_id: str, limit: int
+    ) -> list[dict[str, Any]]: ...
 
 
 class SupabaseChatStorage:
@@ -164,6 +167,30 @@ class SupabaseChatStorage:
                 {chunk_to_document[cid] for cid in chunk_ids if cid in chunk_to_document}
             )
         return messages
+
+    async def get_recent_messages(
+        self, *, user_jwt: str, session_id: str, limit: int
+    ) -> list[dict[str, Any]]:
+        """Stage 5.1 — a lighter read than get_messages: role/content
+        only, no retrieved_document_ids resolution (that join exists for
+        Stage 2.4's replay UI, not for feeding a cheap rewrite call).
+        Fetched newest-first (cheapest way to get "the last N") then
+        reversed to chronological order, matching the shape
+        rewrite.rewrite_query expects."""
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/chat_messages",
+                headers=self._headers(user_jwt),
+                params={
+                    "session_id": f"eq.{session_id}",
+                    "select": "role,content",
+                    "order": "created_at.desc",
+                    "limit": str(limit),
+                },
+            )
+        if response.status_code >= 400:
+            raise ChatStorageError("fetch_recent_messages_failed", response.text)
+        return list(reversed(response.json()))
 
 
 _storage: ChatStorage = SupabaseChatStorage()

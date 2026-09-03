@@ -41,6 +41,7 @@ from app.chat.storage import get_chat_storage
 from app.core.tracing import get_tracer
 from app.graph.edges import get_chunk_edges_storage
 from app.retrieve.retrieve import retrieve
+from app.retrieve.rewrite import HISTORY_MESSAGE_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,23 @@ async def stream_chat(
         ) as root_span:
             trace_id = tracer.get_current_trace_id()
 
+            # Stage 5.1 — fetched before save_message below, so this
+            # turn's own query never shows up twice (once as "history",
+            # once as the query itself). Best-effort: a failure here
+            # degrades to no history (retrieve() just skips rewriting),
+            # never a failed turn — same posture as the co-retrieval
+            # reinforcement below.
+            try:
+                recent_messages = await storage.get_recent_messages(
+                    user_jwt=user_jwt, session_id=session_id, limit=HISTORY_MESSAGE_LIMIT
+                )
+            except Exception:
+                logger.exception(
+                    "fetching recent messages for query rewrite failed for session %s",
+                    session_id,
+                )
+                recent_messages = []
+
             await storage.save_message(
                 user_jwt=user_jwt,
                 session_id=session_id,
@@ -71,7 +89,9 @@ async def stream_chat(
                 retrieved_chunk_ids=[],
             )
 
-            chunks = await retrieve(user_jwt=user_jwt, query=query)
+            chunks = await retrieve(
+                user_jwt=user_jwt, query=query, recent_messages=recent_messages
+            )
 
             # Stage 5.3 — the associative memory graph's primary, free
             # edge source: every pair of chunks that landed in this

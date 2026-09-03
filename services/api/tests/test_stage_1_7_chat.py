@@ -73,12 +73,16 @@ class _FakeGenerateClient:
 class _FakeChatStorage:
     def __init__(self):
         self.messages: list[dict] = []
+        self.recent_messages_to_return: list[dict] = []
 
     async def create_session(self, *, user_jwt, user_id):
         return "session-1"
 
     async def get_session(self, *, user_jwt, session_id):
         return {"id": session_id}
+
+    async def get_recent_messages(self, *, user_jwt, session_id, limit):
+        return self.recent_messages_to_return
 
     async def save_message(
         self,
@@ -400,3 +404,61 @@ def test_extract_citations_filters_unknown_ids():
     text = "See [[chunk:c1111111-1111-1111-1111-111111111111]] and [[chunk:00000000-0000-0000-0000-000000000000]]."
     citations = extract_citations(text, chunks)
     assert [c.chunk_id for c in citations] == ["c1111111-1111-1111-1111-111111111111"]
+
+
+# --- Stage 5.1: query rewriting wired end-to-end through stream_chat -----------
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_rewrites_query_using_real_recent_history(monkeypatch):
+    """Full plumbing: chat_storage.get_recent_messages -> stream_chat ->
+    retrieve() -> rewrite_query -> the real embed client actually
+    receives the rewritten text, not the raw follow-up. Proves the
+    wiring, not just each piece in isolation."""
+    from app.retrieve import rewrite as rewrite_module
+
+    class _CapturingEmbedClient:
+        provider = "jina"
+
+        def __init__(self):
+            self.last_query_text = None
+
+        async def embed_text(self, text, task="retrieval.passage"):
+            if task == "retrieval.query":
+                self.last_query_text = text
+            return [0.1] * 1024
+
+        async def embed_image(self, image_bytes, task="retrieval.passage"):
+            raise NotImplementedError
+
+    async def fake_run_interaction(*, system_instruction, input_data):
+        assert "raft" in system_instruction.lower()
+        return {
+            "steps": [
+                {"type": "model_output", "content": [{"type": "text", "text": "What about Paxos?"}]}
+            ]
+        }
+
+    monkeypatch.setattr(rewrite_module.generate_module, "run_interaction", fake_run_interaction)
+
+    embed_client = _CapturingEmbedClient()
+    embed_module.set_embed_client(embed_client)
+    retrieve_module.set_rerank_client(_FakeRerankClient())
+    retrieve_module.set_retrieve_storage(_FakeRetrieveStorage(vector_results=[], fts_results=[]))
+    set_generate_client(_FakeGenerateClient(["hi"]))
+    chat_storage = _FakeChatStorage()
+    chat_storage.recent_messages_to_return = [
+        {"role": "user", "content": "tell me about raft"}
+    ]
+    chat_storage_module.set_chat_storage(chat_storage)
+
+    await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t",
+            user_id="u1",
+            session_id="session-1",
+            query="what about the other one?",
+        )
+    )
+
+    assert embed_client.last_query_text == "What about Paxos?"

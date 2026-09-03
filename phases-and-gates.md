@@ -1270,7 +1270,7 @@ considered stable; deliberately not layered onto the current build,
 per the reasoning that started this phase: real RAG-quality work
 belongs after the thing it's improving is proven, not mid-build)*
 
-### Stage 5.1 — Query rewriting
+### Stage 5.1 — Query rewriting ✅
 **Exit criteria:** `retrieve()` gains an optional pre-embedding rewrite
 step — a fast, cheap generation call reformulates the raw query using
 recent chat history (pronoun resolution, e.g. "what about the other
@@ -1283,6 +1283,37 @@ follow-up query rewrites to include the referenced entity before
 embedding. A rewrite-client failure (timeout, bad response) still
 returns real results from the raw, un-rewritten query — retrieval never
 errors because rewriting did.
+**Done:** `services/api/app/retrieve/rewrite.py` (new) — `rewrite_query`
+reuses Stage 4.5/4.6's non-streaming `chat/generate.py.run_interaction`
+(no new generation entry point needed) with a handful of trailing
+messages as context; catches any exception broadly (not just
+`GenerateError`) and falls back to the raw query on empty output too,
+since this function's entire contract is "never a new way for retrieval
+to fail." `retrieve()` gained an optional `recent_messages` param — when
+given, the rewritten text (or the original, unchanged, on any failure)
+is what actually gets embedded, FTS-searched, and reranked;
+`_sealed_exact_matches` deliberately keeps matching against the
+caller's real, literal `query`, not the rewrite, since an exact-phrase
+check against sealed content shouldn't run against a paraphrase.
+`chat/storage.py` gained a lighter `get_recent_messages` (role/content
+only, no `retrieved_document_ids` resolution — that join exists for
+Stage 2.4's replay UI, not this) fetched in `chat/stream.py` *before*
+the current turn's own message is saved, so it never shows up twice in
+its own "history." Both the history fetch and the rewrite call are
+wrapped in their own best-effort boundaries — a failure in either
+degrades to "no rewrite" and the chat turn proceeds normally, same
+posture Stage 5.3's co-retrieval reinforcement already established
+right next to this code. Deliberately not given its own Langfuse span:
+Stage 1.8's six-span shape is a regression-tested fixed contract
+(`test_stage_1_8_tracing.py` asserts the exact span list), and this
+stage's own exit criteria doesn't call for tracing the rewrite step.
+9 new backend tests (5 `rewrite_query` unit tests including the
+broad-exception and empty-output fallback cases, 3 `retrieve()` wiring
+tests proving the rewritten text reaches embed/FTS/rerank, 1 real
+end-to-end test through `stream_chat` proving the full plumbing —
+`chat_storage.get_recent_messages` → `stream_chat` → `retrieve()` →
+`rewrite_query` → the real embed client) — 357/357 backend tests
+passing, `ruff` clean on every file this stage touched.
 
 ### Stage 5.2 — HyDE (Hypothetical Document Embeddings)
 **Exit criteria:** `retrieve()` gains an optional path that generates a
