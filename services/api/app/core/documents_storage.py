@@ -39,6 +39,7 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 52,428,800 bytes — Supabase Free
 
 ALLOWED_MIME_TYPES = {
     "text/plain": "txt",
+    "text/markdown": "md",
     "application/pdf": "pdf",
     "image/jpeg": "jpg",
     "image/png": "png",

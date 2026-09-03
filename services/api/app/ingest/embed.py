@@ -453,7 +453,7 @@ def set_embed_storage(storage: EmbedStorage) -> None:
 
 
 def _is_image_document(mime: str) -> bool:
-    return mime not in ("application/pdf", "text/plain")
+    return mime not in ("application/pdf", "text/plain", "text/markdown")
 
 
 async def _embed_one(client: EmbedClient, *, is_image: bool, chunk: dict, original_bytes: bytes | None) -> list[float]:

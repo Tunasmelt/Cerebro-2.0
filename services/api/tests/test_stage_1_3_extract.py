@@ -229,6 +229,23 @@ async def test_run_extract_job_text_happy_path():
 
 
 @pytest.mark.asyncio
+async def test_run_extract_job_markdown_uses_the_same_text_chunker():
+    """text/markdown takes the exact same branch as text/plain — no
+    markdown-aware parsing exists or is needed, the `#`/`*`/etc. syntax
+    just chunks as ordinary text."""
+    storage = _FakeExtractStorage(mime="text/markdown", indexed_content=b"# Heading\n\nword " * 200)
+    extract_module.set_extract_storage(storage)
+
+    result = await run_extract_job(user_jwt="t", document_id="doc-md")
+
+    assert result is True
+    assert storage.inserted_chunks is not None
+    assert len(storage.inserted_chunks) > 0
+    assert storage.marked_extracted == "doc-md"
+    assert storage.marked_failed is None
+
+
+@pytest.mark.asyncio
 async def test_run_extract_job_pdf_happy_path():
     pdf_bytes = _make_pdf_with_page_text(["Alpha", "Beta"])
     storage = _FakeExtractStorage(mime="application/pdf", indexed_content=pdf_bytes)

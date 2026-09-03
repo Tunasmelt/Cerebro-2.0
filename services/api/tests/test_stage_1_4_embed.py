@@ -158,6 +158,25 @@ async def test_run_embed_job_text_embeds_every_chunk():
 
 
 @pytest.mark.asyncio
+async def test_run_embed_job_markdown_embeds_as_text_not_image():
+    """_is_image_document only excludes application/pdf and text/plain —
+    text/markdown had to be added there too, or a .md upload would
+    silently misroute into the image-tile embedding path and crash on
+    the missing original_bytes/bbox it never has."""
+    storage = _FakeEmbedStorage(mime="text/markdown", chunks=_text_chunks(2))
+    client = _FakeEmbedClient()
+    embed_module.set_embed_storage(storage)
+    embed_module.set_embed_client(client)
+
+    result = await run_embed_job(user_jwt="t", document_id="doc-md")
+
+    assert result is True
+    assert client.text_calls == ["chunk text 0", "chunk text 1"]
+    assert client.image_calls == []
+    assert storage.marked_ready is True
+
+
+@pytest.mark.asyncio
 async def test_run_embed_job_image_crops_tiles_and_embeds_images():
     original = _make_image_bytes((500, 400))
     chunks = [

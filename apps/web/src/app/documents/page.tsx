@@ -25,6 +25,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 // real enforcement boundary (see that module's docstring).
 const ALLOWED_MIME_TYPES: Record<string, string> = {
   "text/plain": "TXT",
+  "text/markdown": "MD",
   "application/pdf": "PDF",
   "image/jpeg": "JPG",
   "image/png": "PNG",
@@ -461,12 +462,12 @@ export default function DocumentsPage() {
           }}
         >
           <p>Drag files here, or click to browse</p>
-          <span className={styles.hint}>PDF, images, plain text — up to 50MB</span>
+          <span className={styles.hint}>PDF, images, plain text, markdown — up to 50MB</span>
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            accept={Object.keys(ALLOWED_MIME_TYPES).join(",")}
+            accept={`${Object.keys(ALLOWED_MIME_TYPES).join(",")},.md`}
             style={{ display: "none" }}
             onChange={(e) => {
               handleFiles(e.target.files);
