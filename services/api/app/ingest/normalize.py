@@ -21,7 +21,9 @@ Text: no normalize step is described anywhere in the docs for text/plain
 (the pipeline section only covers PDFs and images) — passed through
 unchanged into `indexed` so retrieval's "only ever reads indexed"
 invariant still holds for every mime type, not just the two with a real
-optimization step.
+optimization step. text/markdown (added later) follows the exact same
+pass-through path — it's still just text, no markdown-aware normalize
+step exists or is needed.
 """
 import io
 import os
@@ -88,7 +90,12 @@ def normalize_image(content: bytes, mime: str) -> tuple[bytes, str]:
     return out.getvalue(), "image/webp"
 
 
-_EXT_BY_MIME = {"application/pdf": "pdf", "image/webp": "webp", "text/plain": "txt"}
+_EXT_BY_MIME = {
+    "application/pdf": "pdf",
+    "image/webp": "webp",
+    "text/plain": "txt",
+    "text/markdown": "md",
+}
 
 
 class NormalizeStorage(Protocol):
@@ -213,13 +220,16 @@ async def run_normalize_job(*, user_jwt: str, document_id: str) -> bool:
             if mime == "application/pdf":
                 normalized = normalize_pdf(content)
                 out_mime = "application/pdf"
-            elif mime == "text/plain":
+            elif mime in ("text/plain", "text/markdown"):
                 # No normalize pipeline step exists for plain text (the
                 # architecture doc's normalize section only covers PDFs
                 # and images) — pass the bytes through unchanged so
                 # `indexed` still has a copy, keeping the "retrieval only
                 # ever reads from indexed" invariant true for every mime.
-                normalized, out_mime = content, "text/plain"
+                # Markdown gets the same treatment — it's text, just with
+                # `#`/`*`/etc. left in place; extract.py's plain-text
+                # chunker already handles that content fine.
+                normalized, out_mime = content, mime
             else:
                 normalized, out_mime = normalize_image(content, mime)
         except NormalizeError as exc:

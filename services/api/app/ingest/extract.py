@@ -259,7 +259,7 @@ async def run_extract_job(*, user_jwt: str, document_id: str) -> bool:
                     user_jwt=user_jwt, path=document["storage_path"]
                 )
                 chunks = extract_pdf_chunks(content)
-            elif mime == "text/plain":
+            elif mime in ("text/plain", "text/markdown"):
                 content = await storage.download_indexed(
                     user_jwt=user_jwt, path=document["storage_path"]
                 )

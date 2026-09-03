@@ -1762,6 +1762,34 @@ clean. No authenticated Playwright pass was run this time — every
 touched page requires a real Supabase session, which wasn't stood up for
 this change; noted here rather than claimed.
 
+### Markdown upload support ✅
+Found live: a `.md` upload failed client-side with "Unsupported file
+type: text/markdown" — `text/markdown` was never in `ALLOWED_MIME_TYPES`
+anywhere in the pipeline, only `text/plain`.
+**Done (backend):** `documents_storage.py`'s `ALLOWED_MIME_TYPES` gained
+`text/markdown`; `normalize.py`'s pass-through-unchanged branch (no
+normalize step exists for text, markdown gets the identical treatment)
+and `_EXT_BY_MIME` now cover it; `extract.py` chunks it through the
+exact same plain-text chunker `text/plain` uses (no markdown-aware
+parsing exists or is needed for RAG chunking); `embed.py`'s
+`_is_image_document` explicitly excludes it too — without that fix a
+`.md` upload would have silently misrouted into the image-tile
+embedding path (no `original_bytes`/`bbox`, a real crash). The
+enforcement boundary is Supabase Storage's own bucket config (the
+signed-URL flow means the PUT goes browser → Supabase directly,
+`services/api` never sees the bytes) — new migration
+`0019_originals_bucket_allow_markdown.sql` adds it to the `originals`
+bucket's `allowed_mime_types`, applied to the live project.
+**Done (frontend):** `/documents`' `ALLOWED_MIME_TYPES` map, dropzone
+hint text, and file-input `accept` list (plus an explicit `.md`
+extension, since mime-sniffing for markdown is inconsistent across
+browsers/OSes) all updated.
+**Tests:** `test_run_extract_job_markdown_uses_the_same_text_chunker`,
+`test_run_embed_job_markdown_embeds_as_text_not_image` (asserts
+`image_calls == []` — the exact failure mode the `_is_image_document`
+fix prevents). 409/409 backend tests passing, `ruff` clean. Frontend
+`eslint` clean.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks
