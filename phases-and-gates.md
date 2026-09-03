@@ -2456,7 +2456,7 @@ cap still normalizes; a JPEG at the same oversized dimensions is
 *not* rejected by this cap at all (draft() handles it instead). Full
 suite: 466/466 passing, ruff clean.
 
-### Stage 7.7 — Retrieval resilience: soft-fail rerank/vector/FTS
+### Stage 7.7 — Retrieval resilience: soft-fail rerank/vector/FTS ✅
 **Exit criteria:** Query rewrite and HyDE both already degrade
 gracefully on failure (broad `except Exception`, fall back to the
 plain query / no HyDE) — vector search, FTS, and rerank do not; any of
@@ -2466,10 +2466,28 @@ don't crash" posture: a Cohere rerank outage degrades to un-reranked
 RRF order instead of failing the question outright; one search leg
 failing (vector or FTS) degrades to whichever leg actually succeeded
 instead of failing both.
-**Tests:** A simulated rerank-API failure still returns a real,
-usable (if unreranked) result set rather than propagating an
-exception. A simulated single-leg search failure (vector-only or
-FTS-only) still returns results from the surviving leg.
+**Done:** `vector_search` and `fts_search` each catch their own
+`RetrieveError` now and degrade to `[]` for that leg, logging the
+failure — the other leg's results carry the fusion alone. If *both*
+legs fail, no new branch was needed at all: `fused_ids` ends up empty
+exactly as it already does for a genuinely empty vault, and the
+existing "no fused ids" path (sealed matches, or an empty result)
+already handles that. `rerank` also catches its own `RetrieveError`;
+on failure it returns the top `FINAL_TOP_K` candidates in their
+existing RRF-fused order with `relevance_score=1.0` (mirroring
+`_sealed_exact_matches`' own "no real score to give" precedent),
+deliberately skipping `RELEVANCE_FLOOR` — that threshold is
+Cohere-relevance-scale-specific and has no meaning without a real
+Cohere score, and "some real results, unranked" beats no answer at
+all. Stage 1.8's fixed six-span-shape contract is untouched — the
+try/except sits inside each span's `with` block, so span names/order
+never change, only what's logged in the failure case.
+**Tests:** Four new tests in `test_stage_1_5_retrieve.py` — a rerank
+failure returns all fused candidates (capped at `FINAL_TOP_K`,
+`relevance_score=1.0`) instead of raising; a vector-search failure
+still returns the FTS leg's results; an FTS failure still returns the
+vector leg's results; both legs failing together returns `[]` without
+ever calling rerank. Full suite: 470/470 passing, ruff clean.
 
 ### Stage 7.8 — Per-document diversity in top-K results *(priority)*
 **Exit criteria:** Rerank is purely relevance-ranked today — one very
