@@ -2489,7 +2489,7 @@ still returns the FTS leg's results; an FTS failure still returns the
 vector leg's results; both legs failing together returns `[]` without
 ever calling rerank. Full suite: 470/470 passing, ruff clean.
 
-### Stage 7.8 — Per-document diversity in top-K results *(priority)*
+### Stage 7.8 — Per-document diversity in top-K results *(priority)* ✅
 **Exit criteria:** Rerank is purely relevance-ranked today — one very
 relevant document can fill all `FINAL_TOP_K=5` slots, starving a
 genuinely cross-document question of material from other real sources.
@@ -2498,10 +2498,39 @@ review and pass" entry) as a known, deferred gap. Add a diversity
 mechanism (e.g. MMR-style re-ranking, or a soft per-document cap within
 the top-K) that measurably helps true cross-document questions without
 regressing the common single-document case.
-**Tests:** A fixture with one dominant highly-relevant document and
-several tangential ones — a cross-document question's results include
-material from more than one document where they didn't before, and a
-genuinely single-document question's result set is unchanged.
+**Done:** Chose the soft per-document cap over MMR — cheaper (no
+embedding-similarity math between candidates, just a count per
+document) and easier to reason about/tune than MMR's relevance/
+diversity tradeoff parameter. New pure function
+`_select_with_diversity` runs after rerank's relevance-floor-filtered,
+score-sorted output: a first pass takes candidates best-score-first,
+skipping (deferring, not dropping) any that would push its document
+over `MAX_PER_DOCUMENT_IN_TOP_K` (3 of `FINAL_TOP_K`'s 5 slots); a
+second pass backfills any still-empty slots from whatever was
+deferred, still score-order, ignoring the cap — so a genuinely
+single-document result set is exactly the size and order it was
+before this stage, only a real multi-document one gets diversified.
+Also fixed a prerequisite gap the diversity pass would otherwise have
+been powerless against: `rerank` was being asked for only
+`top_n=FINAL_TOP_K` results, so Cohere itself already truncated to the
+single most relevant document before diversity ever ran. Now asks for
+`top_n=len(candidates)` (still ≤`RERANK_TOP_N` candidates sent, same
+request size) so diversity has every floor-passing candidate to choose
+from. Applies uniformly to the Stage 7.7 degraded (un-reranked)
+rerank-failure path too — same function, same cap, `relevance_score`
+placeholder of `1.0` standing in for a missing real score exactly as
+that stage already established.
+**Tests:** Three unit tests directly on `_select_with_diversity`
+(caps one document while filling remaining slots from another; the
+single-document case backfills to the full `top_k` instead of coming
+back short; score order is preserved within the cap) plus two
+integration tests through `retrieve()` — a fixture with one dominant
+5-chunk document and two 1-chunk tangential documents now surfaces
+both tangential documents (dominant capped at exactly
+`MAX_PER_DOCUMENT_IN_TOP_K`, not excluded); a fixture where every real
+candidate belongs to one document returns the identical `FINAL_TOP_K`
+result set, in the identical order, as before this stage. Full suite:
+475/475 passing, ruff clean.
 
 ### Stage 7.9 — HyDE latency reconsideration
 **Exit criteria:** HyDE runs unconditionally on every chat turn

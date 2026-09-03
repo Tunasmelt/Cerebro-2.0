@@ -49,6 +49,21 @@ in un-reranked RRF-fused order instead of failing outright, skipping
 RELEVANCE_FLOOR (a Cohere-relevance-scale threshold that has no
 meaning without a Cohere score) since "some real results, unranked"
 beats no answer at all.
+
+Stage 7.8 — per-document diversity: rerank is pure relevance, so one
+very-relevant document could fill every one of FINAL_TOP_K's slots,
+starving a genuinely cross-document question of material from other
+real sources. `_select_with_diversity` (a pure function — see its own
+docstring) now sits between rerank's floor-filtered, score-sorted
+output and the final result list, soft-capping how many slots one
+document can take on the first pass and backfilling any still-empty
+slots from whatever's left over on a second pass — so a genuinely
+single-document question's result set is untouched (nothing to
+diversify with), while a real cross-document one gets material from
+more than one source. rerank itself is now asked for scores on every
+candidate (`top_n=len(candidates)`, not `FINAL_TOP_K`) so diversity has
+a real pool to choose from instead of a pool Cohere already truncated
+to the dominant document.
 """
 import asyncio
 import logging
@@ -78,6 +93,20 @@ RELEVANCE_FLOOR = 0.2  # Cohere relevance_score is [0,1]; below this a
 # result is treated as "not actually relevant" rather than forced into
 # the output. Not specified anywhere in the docs — a reasonable default,
 # easy to retune, not an architectural decision.
+
+MAX_PER_DOCUMENT_IN_TOP_K = 3  # Stage 7.8. Rerank is pure relevance —
+# one very-relevant document can otherwise fill all FINAL_TOP_K=5
+# slots, starving a genuinely cross-document question of material from
+# other real sources. A *soft* cap, not a hard one: at most this many
+# of the final slots can come from one document on the first pass,
+# leaving at least 2 slots open for other documents when a real
+# cross-document question has other relevant material to offer — but
+# _select_with_diversity's second pass backfills any still-empty slots
+# from whatever's left over (same document included), so a genuinely
+# single-document question never returns fewer results than it did
+# before this stage. 3 (not e.g. 1 or 2) leaves a dominant document
+# still clearly dominant in a mixed result set, just not the *entire*
+# set.
 
 COHERE_RERANK_URL = "https://api.cohere.com/v2/rerank"
 COHERE_RERANK_MODEL = "rerank-v4.0-pro"
@@ -119,6 +148,50 @@ def rrf_fuse(*ranked_lists: list[str], k: int = RRF_K) -> list[str]:
         for rank, item_id in enumerate(ranked_list, start=1):
             scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank)
     return sorted(scores.keys(), key=lambda item_id: scores[item_id], reverse=True)
+
+
+def _select_with_diversity(
+    scored: list[tuple[int, float]],
+    *,
+    top_k: int,
+    max_per_document: int,
+    document_ids: list[str],
+) -> list[tuple[int, float]]:
+    """Stage 7.8. Pure function, no I/O. `scored` is (candidate_index,
+    score) pairs already sorted best-first (rerank's own contract, or
+    the fused order when rerank was skipped/degraded) and already
+    relevance-floor-filtered by the caller — `document_ids[index]`
+    looks up which document a candidate belongs to.
+
+    First pass: take candidates in score order, skipping (deferring,
+    not dropping) any candidate that would push its document over
+    `max_per_document`, until `top_k` is filled or `scored` runs out.
+    Second pass: backfill any still-empty slots from whatever was
+    deferred, still in score order, ignoring the cap. That second pass
+    is what keeps a genuinely single-document result set exactly the
+    size it was before this function existed — the cap only ever
+    changes *which* documents fill the slots when more than one real
+    document is available to fill them with."""
+    selected: list[tuple[int, float]] = []
+    per_document_count: dict[str, int] = {}
+    deferred: list[tuple[int, float]] = []
+
+    for index, score in scored:
+        if len(selected) >= top_k:
+            break
+        document_id = document_ids[index]
+        if per_document_count.get(document_id, 0) < max_per_document:
+            selected.append((index, score))
+            per_document_count[document_id] = per_document_count.get(document_id, 0) + 1
+        else:
+            deferred.append((index, score))
+
+    for index, score in deferred:
+        if len(selected) >= top_k:
+            break
+        selected.append((index, score))
+
+    return selected
 
 
 class RerankClient(Protocol):
@@ -474,10 +547,18 @@ async def retrieve(
         input={"query": effective_query, "candidate_count": len(candidates)},
     ) as span:
         try:
+            # top_n=len(candidates), not FINAL_TOP_K — Stage 7.8's
+            # diversity selection needs a real relevance-scored pool to
+            # choose from. Asking Cohere to truncate to FINAL_TOP_K
+            # itself would hand back only the single most relevant
+            # document's chunks whenever one dominates, before
+            # diversity ever gets a chance to run. Same request size
+            # either way (still ≤RERANK_TOP_N candidates in), just
+            # fewer of them thrown away on the way back.
             rerank_results = await rerank_client.rerank(
                 query=effective_query,
                 documents=[c["content"] for c in candidates],
-                top_n=FINAL_TOP_K,
+                top_n=len(candidates),
             )
             span.update(output={"result_count": len(rerank_results)})
         except RetrieveError:
@@ -491,34 +572,37 @@ async def retrieve(
             span.update(output={"result_count": None, "degraded": True})
             rerank_results = None
 
-    results: list[RetrievedChunk] = []
     if rerank_results is None:
-        for candidate in candidates[:FINAL_TOP_K]:
-            results.append(
-                RetrievedChunk(
-                    chunk_id=candidate["id"],
-                    document_id=candidate["document_id"],
-                    ordinal=candidate["ordinal"],
-                    content=candidate["content"],
-                    meta=candidate["meta"],
-                    relevance_score=1.0,
-                )
-            )
+        scored = [(i, 1.0) for i in range(len(candidates))]
     else:
-        for index, score in rerank_results:
-            if score < RELEVANCE_FLOOR:
-                continue
-            candidate = candidates[index]
-            results.append(
-                RetrievedChunk(
-                    chunk_id=candidate["id"],
-                    document_id=candidate["document_id"],
-                    ordinal=candidate["ordinal"],
-                    content=candidate["content"],
-                    meta=candidate["meta"],
-                    relevance_score=score,
-                )
+        scored = [(index, score) for index, score in rerank_results if score >= RELEVANCE_FLOOR]
+
+    # Stage 7.8 — per-document diversity: without this, one very
+    # relevant document can fill every one of FINAL_TOP_K's slots,
+    # starving a genuinely cross-document question of material from
+    # other real sources. See MAX_PER_DOCUMENT_IN_TOP_K and
+    # _select_with_diversity for why a single-document result set is
+    # never made shorter by this.
+    selected = _select_with_diversity(
+        scored,
+        top_k=FINAL_TOP_K,
+        max_per_document=MAX_PER_DOCUMENT_IN_TOP_K,
+        document_ids=[c["document_id"] for c in candidates],
+    )
+
+    results: list[RetrievedChunk] = []
+    for index, score in selected:
+        candidate = candidates[index]
+        results.append(
+            RetrievedChunk(
+                chunk_id=candidate["id"],
+                document_id=candidate["document_id"],
+                ordinal=candidate["ordinal"],
+                content=candidate["content"],
+                meta=candidate["meta"],
+                relevance_score=score,
             )
+        )
 
     if unlocked:
         results.extend(
