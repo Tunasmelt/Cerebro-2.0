@@ -2320,7 +2320,7 @@ empty rather than raising or failing the job; a chunk that already has
 content is never overwritten by a new caption. All 447 backend tests
 pass, ruff clean.
 
-### Stage 7.3 — Real streaming I/O for ingest downloads
+### Stage 7.3 — Real streaming I/O for ingest downloads ✅
 **Exit criteria:** architecture-and-security.md §3 documents "Streaming
 I/O — chunked read/write to Supabase storage" as an active memory
 guardrail; in the real code, `normalize.py`, `extract.py`, and
@@ -2328,10 +2328,24 @@ guardrail; in the real code, `normalize.py`, `extract.py`, and
 `response.content` read. Either implement real chunked/streamed reads,
 or correct the documentation to stop claiming this exists — doc and
 code must agree either way.
-**Tests:** Peak RSS during a large-file ingest measurably drops
-relative to file size once streamed (or the doc's claim is retracted
-with an honest note on why full-buffer reads are acceptable at the
-current 50MB upload cap).
+**Done:** Documentation retracted, not implemented — the claim was
+audited and found to be aspirational, never actually built. Real
+streaming here wouldn't lower peak RSS anyway: the 50MB upload cap
+already bounds the one-shot `response.content` read to a small, fixed
+fraction of the 512MB ceiling, and every downstream consumer
+(pdfplumber, Pillow, the embedding call) needs the complete file in
+memory regardless of how it arrived — chunking the network read alone
+just delays when the same bytes get fully materialized, it doesn't
+avoid it. Streaming would only pay for itself if the upload cap rose
+well past what one buffered read can safely absorb. The "Streaming
+I/O" guardrail row in architecture-and-security.md §3's table was
+removed and replaced with a paragraph explaining this reasoning, so
+the doc no longer claims something the code doesn't do.
+**Tests:** No code change, so no new tests — this stage's exit
+criterion was satisfied by the documentation correction (the "or"
+branch), not the streaming implementation. Existing ingest test suite
+(`test_stage_1_2_normalize.py`, `test_stage_1_3_extract.py`,
+`test_stage_1_4_embed.py`) unaffected, all still passing.
 
 ### Stage 7.4 — `mem_watchdog` RSS instrumentation
 **Exit criteria:** architecture-and-security.md §3 also documents "Log
