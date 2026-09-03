@@ -22,6 +22,7 @@ from PIL import Image
 
 from app.ingest.normalize import (
     MAX_IMAGE_DIMENSION,
+    MAX_NON_JPEG_DECODE_PIXELS,
     NormalizeError,
     _decode_image,
     normalize_image,
@@ -241,6 +242,55 @@ def test_png_has_no_draft_equivalent_but_still_gets_resized():
     assert out_mime == "image/webp"
     result_img = Image.open(io.BytesIO(normalized))
     assert max(result_img.size) <= MAX_IMAGE_DIMENSION
+
+
+# --- Stage 7.6: PNG/WebP pixel cap (no draft-mode decode to protect them) ----
+
+
+def test_oversized_png_is_rejected_before_load_with_a_specific_error():
+    width, height = 6500, 4000  # 26,000,000 px > MAX_NON_JPEG_DECODE_PIXELS
+    assert width * height > MAX_NON_JPEG_DECODE_PIXELS
+    img = Image.new("RGB", (width, height), color=(1, 2, 3))  # solid
+    # color so PNG encoding stays cheap despite the pixel count
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+
+    with pytest.raises(NormalizeError) as exc_info:
+        normalize_image(buf.getvalue(), "image/png")
+    assert exc_info.value.code == "image_too_large"
+
+
+def test_oversized_webp_is_also_rejected_by_the_same_cap():
+    width, height = 6500, 4000
+    img = Image.new("RGB", (width, height), color=(4, 5, 6))
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP")
+
+    with pytest.raises(NormalizeError) as exc_info:
+        normalize_image(buf.getvalue(), "image/webp")
+    assert exc_info.value.code == "image_too_large"
+
+
+def test_png_under_the_pixel_cap_is_still_accepted():
+    img = Image.new("RGB", (1000, 1000), color=(7, 8, 9))  # well under cap
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+
+    normalized, out_mime = normalize_image(buf.getvalue(), "image/png")
+    assert out_mime == "image/webp"
+
+
+def test_jpeg_is_never_subject_to_the_non_jpeg_pixel_cap():
+    # Same pixel count that rejects a PNG/WebP above — JPEG has draft()
+    # to protect it instead, so this cap must not apply to it at all.
+    width, height = 6500, 4000
+    assert width * height > MAX_NON_JPEG_DECODE_PIXELS
+    img = Image.new("RGB", (width, height), color=(10, 11, 12))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+
+    normalized, out_mime = normalize_image(buf.getvalue(), "image/jpeg")
+    assert out_mime == "image/webp"
 
 
 # --- orchestration (run_normalize_job) --------------------------------------

@@ -543,9 +543,27 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
                 continue  # already embedded before a prior crash
 
             if locked_provider is not None:
+                # Stage 7.6: locked_provider comes from documents.
+                # embedding_provider — a prior run's own committed
+                # state, or an operator-edited row — so it isn't
+                # guaranteed to still have a matching entry in
+                # provider_clients (e.g. a fallback provider's API key
+                # removed from config after a document already locked
+                # to it). A dict lookup here used to be a raw KeyError,
+                # uncaught by `except EmbedError` below and propagating
+                # all the way out of run_embed_job. Checked explicitly
+                # so it fails the job gracefully instead.
+                client = provider_clients.get(locked_provider)
+                if client is None:
+                    await storage.mark_failed(
+                        user_jwt=user_jwt,
+                        document_id=document_id,
+                        error_code="provider_not_configured",
+                    )
+                    return False
                 try:
                     embedding = await _embed_one(
-                        provider_clients[locked_provider],
+                        client,
                         is_image=is_image,
                         chunk=chunk,
                         original_bytes=original_bytes,

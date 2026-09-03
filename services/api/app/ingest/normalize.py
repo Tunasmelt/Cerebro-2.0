@@ -42,6 +42,20 @@ MAX_IMAGE_DIMENSION = 2048  # px — not a number the docs specify; chosen
 
 WEBP_QUALITY = 87  # within the doc's stated "visually lossless, q85-90"
 
+MAX_NON_JPEG_DECODE_PIXELS = 25_000_000  # Stage 7.6. Pillow's draft()
+# scaled decode is JPEG/MPO-only (Pillow's own docs) — a PNG or WebP
+# upload always decodes at full native resolution into memory before
+# normalize_image ever gets to downscale it, regardless of the final
+# ≤MAX_IMAGE_DIMENSION output size. 25MP as RGBA (worst case, 4 bytes/
+# px) is ~100MB — a meaningful chunk of the ~300MB peak-RSS target
+# architecture-and-security.md §3 states for normalize/extract, but
+# with headroom left for everything else running in the same process
+# (concurrency=1 means never more than one decode at a time, but the
+# FastAPI process itself and any concurrent chat request still need
+# room). A PNG/WebP over this cap is rejected before `img.load()` is
+# ever called — `Image.open()` reads only the header (img.size), so
+# checking it costs nothing and happens before the expensive part.
+
 
 class NormalizeError(Exception):
     def __init__(self, code: str, message: str):
@@ -74,6 +88,20 @@ def _decode_image(content: bytes, mime: str) -> Image.Image:
             # 1/4, 1/8) that still covers the requested target — the
             # source is never decoded past that scale.
             img.draft("RGB", (MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
+        else:
+            # No draft-mode equivalent for PNG/WebP — see
+            # MAX_NON_JPEG_DECODE_PIXELS' comment. img.size is free
+            # (header-only, no pixel data read yet), so this check
+            # happens before the img.load() call below ever risks it.
+            width, height = img.size
+            if width * height > MAX_NON_JPEG_DECODE_PIXELS:
+                raise NormalizeError(
+                    "image_too_large",
+                    f"{mime} image is {width}x{height} "
+                    f"({width * height:,} px), over the "
+                    f"{MAX_NON_JPEG_DECODE_PIXELS:,}px cap for formats "
+                    "with no scaled-decode path",
+                )
         img.load()
     except (Image.UnidentifiedImageError, OSError, SyntaxError) as exc:
         raise NormalizeError("corrupt_image", str(exc)) from exc
