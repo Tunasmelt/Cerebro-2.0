@@ -599,9 +599,23 @@ Render RAM ceiling, and none of them is optional:
 | Guardrail | Mechanism | Failure mode it prevents |
 |---|---|---|
 | Upload size cap | Rejected by Supabase Storage's bucket config, 50MB (52,428,800 bytes — Supabase Free plan's hard ceiling, not our choice, no headroom) | Oversized file never reaches Render at all — it never even reaches Vercel |
-| Streaming I/O | Chunked read/write to Supabase storage | Full-file-in-memory reads |
 | Ingest concurrency = 1 | Single-file queue, no parallel processing | Two large decodes stacking in RAM simultaneously |
 | Dependency hygiene | Pinned `pikepdf`/`Pillow`; never install `unstructured` or similar with full extras | Silent transitive torch/onnx pulling in hundreds of MB |
+
+Ingest downloads (`normalize.py`, `extract.py`, `embed.py`) read each
+file into memory in one shot (`response.content`) rather than as
+chunked streams — an earlier draft of this table claimed real
+streaming I/O existed here, which was never actually built (caught
+during Phase 7's pipeline review). Retracted rather than implemented,
+deliberately: the upload size cap above already bounds the worst case
+to 50MB, a single buffered read is a small, fixed fraction of the
+512MB ceiling, and every downstream consumer (pdfplumber, Pillow, the
+embedding call) needs the complete file in memory to do its job
+anyway — chunking the *download* wouldn't lower peak RSS, since the
+same bytes still end up fully materialized one step later. Real
+streaming would only pay for itself if a future upload cap rose well
+past what a single buffered read can safely absorb; until then it's
+complexity with no measurable memory benefit, not a guardrail.
 
 Additionally: Pillow's `.draft()` mode decodes JPEGs at reduced
 resolution via DCT scaling, so a large photo is never fully decoded
