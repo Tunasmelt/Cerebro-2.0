@@ -18,10 +18,16 @@ extracted-task list (chat/action_items.py's job, not this one). Reused
 across every chunk of the same document within one retrieve() call —
 retrieve.py caches by document_id — since captioning the whole image
 once is simpler and fast enough than per-tile captioning, and a wrong
-caption only costs relevance ranking, never correctness (nothing here
-is persisted; a bad or missing caption just makes that one candidate
-rank low, the same "degrade, don't crash" posture the rest of this
-package already uses for HyDE/rewrite failures).
+caption only costs relevance ranking, never correctness here (nothing
+in this module persists anything; a bad or missing caption just makes
+that one candidate rank low, the same "degrade, don't crash" posture
+the rest of this package already uses for HyDE/rewrite failures).
+
+`caption_image_bytes` is the actual Gemini call, factored out so
+ingest/embed.py (Stage 7.2) can reuse it to persist a real caption into
+`chunks.content` at ingest time — the query-time-only version below is
+just this plus a signed-url download, kept as a fallback for chunks
+ingested before Stage 7.2 (or whose ingest-time caption failed).
 """
 import base64
 import logging
@@ -56,6 +62,32 @@ def _extract_text(interaction: dict) -> str:
     return "".join(parts).strip()
 
 
+async def caption_image_bytes(image_bytes: bytes, *, mime_type: str = "image/webp") -> str | None:
+    """Sends raw image bytes to Gemini for a short factual description.
+    Returns None on any failure — never raises. Shared by both the
+    query-time path below and ingest/embed.py's Stage 7.2 persisted
+    captioning."""
+    try:
+        image_b64 = base64.b64encode(image_bytes).decode()
+        interaction = await generate_module.run_interaction(
+            system_instruction=IMAGE_CAPTION_SYSTEM_HEADER,
+            input_data=[
+                {"type": "text", "text": "Describe this image now."},
+                {"type": "image", "data": image_b64, "mime_type": mime_type},
+            ],
+        )
+        text = _extract_text(interaction)
+    except Exception:
+        # Broad by design, same contract as retrieve/hyde.py and
+        # retrieve/rewrite.py — a captioning failure degrades whatever
+        # this caption would have improved, it never raises into the
+        # caller's own pipeline.
+        logger.exception("Image captioning failed")
+        return None
+
+    return text or None
+
+
 async def caption_image(
     *,
     user_jwt: str,
@@ -78,22 +110,8 @@ async def caption_image(
             image_resp = await client.get(signed_url)
         if image_resp.status_code >= 400:
             return None
-
-        image_b64 = base64.b64encode(image_resp.content).decode()
-        interaction = await generate_module.run_interaction(
-            system_instruction=IMAGE_CAPTION_SYSTEM_HEADER,
-            input_data=[
-                {"type": "text", "text": "Describe this image now."},
-                {"type": "image", "data": image_b64, "mime_type": "image/webp"},
-            ],
-        )
-        text = _extract_text(interaction)
     except Exception:
-        # Broad by design, same contract as retrieve/hyde.py and
-        # retrieve/rewrite.py — a captioning failure degrades this one
-        # candidate's rerank text, it never fails the whole retrieve()
-        # call.
-        logger.exception("Query-time image captioning failed for document %s", document_id)
+        logger.exception("Query-time image download failed for document %s", document_id)
         return None
 
-    return text or None
+    return await caption_image_bytes(image_resp.content, mime_type="image/webp")
