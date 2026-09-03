@@ -627,6 +627,49 @@ export default function GraphCanvas({
           : null;
       }
 
+      // Click-only: exact raycast first (correct depth ordering, so a
+      // dense/overlapping graph still picks the front-most real node),
+      // then falls back to the nearest node in *screen* space within a
+      // generous pixel radius. A real human click on a small dot is
+      // never pixel-perfect against its exact 3D geometry the way an
+      // automated test's mathematically-exact projected-center click
+      // is — reported live as "clicking a node shows nothing," and
+      // reproduced by confirming the raycast/selection plumbing itself
+      // is correct (an exact-center click always selects correctly) and
+      // concluding the miss is precision, not logic. Screen-space
+      // nearest — not an enlarged 3D hit sphere — deliberately avoids
+      // the ambiguity an enlarged sphere causes in dense graphs, where
+      // two nearby nodes' hit volumes can overlap and the *wrong* one
+      // wins on raw ray depth order (confirmed live: an earlier
+      // enlarged-sphere attempt picked a different nearby node instead
+      // of the intended one under the 300-node stress harness).
+      const MAX_CLICK_PIXEL_DISTANCE = 24;
+      function pickNodeIdForClick(
+        ndcX: number,
+        ndcY: number,
+        pixelX: number,
+        pixelY: number
+      ): string | null {
+        const exact = pickNodeIdAt(ndcX, ndcY);
+        if (exact) return exact;
+
+        const rect = renderer.domElement.getBoundingClientRect();
+        let nearestId: string | null = null;
+        let nearestDist = MAX_CLICK_PIXEL_DISTANCE;
+        for (const sn of simNodesRef.current) {
+          worldVec.set(sn.x, sn.y, sn.z).project(camera);
+          if (worldVec.z > 1) continue; // behind the camera
+          const screenX = ((worldVec.x + 1) / 2) * rect.width;
+          const screenY = ((1 - worldVec.y) / 2) * rect.height;
+          const dist = Math.hypot(screenX - pixelX, screenY - pixelY);
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearestId = sn.id;
+          }
+        }
+        return nearestId;
+      }
+
       function draw() {
         tick3D();
         updateNodeInstances();
@@ -678,7 +721,15 @@ export default function GraphCanvas({
       }
       function handleClick(e: PointerEvent) {
         pointerToNdc(e);
-        onNodeClickRef.current(pickNodeIdAt(pointerNdcRef.current.x, pointerNdcRef.current.y));
+        const rect = renderer.domElement.getBoundingClientRect();
+        onNodeClickRef.current(
+          pickNodeIdForClick(
+            pointerNdcRef.current.x,
+            pointerNdcRef.current.y,
+            e.clientX - rect.left,
+            e.clientY - rect.top
+          )
+        );
       }
       renderer.domElement.addEventListener("pointermove", handlePointerMove);
       renderer.domElement.addEventListener("click", handleClick);

@@ -9,9 +9,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   deriveKey,
+  deriveKeyBytes,
   generateNonce,
   generateSalt,
   sealBytes,
+  sealChunkWithKey,
   unsealBytes,
 } from "./seal";
 
@@ -86,6 +88,79 @@ describe("deriveKey", () => {
     expect(hex).toBe(
       "9857113140ae53f7cf8fed6a2878ba560f05a3f5cec53ab38be578a2eb17f2a1841f273fbff0"
     );
+  });
+});
+
+describe("deriveKeyBytes", () => {
+  it("is deterministic for the same passphrase + salt", async () => {
+    const salt = generateSalt();
+    const a = await deriveKeyBytes("correct horse battery staple", salt);
+    const b = await deriveKeyBytes("correct horse battery staple", salt);
+    expect(a).toEqual(b);
+  });
+
+  it("matches deriveKey's underlying key bytes exactly", async () => {
+    // The unlock flow (deriveKeyBytes -> base64 -> sent to the server)
+    // and the sealing flow (deriveKey -> a CryptoKey used locally) must
+    // derive the exact same bytes from the same inputs, or a document
+    // sealed under one path could never be unlocked under the other.
+    const salt = generateSalt();
+    const passphrase = "same underlying key either way";
+    const rawBytes = await deriveKeyBytes(passphrase, salt);
+    const cryptoKey = await deriveKey(passphrase, salt);
+
+    const nonce = generateNonce();
+    const plaintext = encoder.encode("known-answer probe");
+    const importedKey = await crypto.subtle.importKey(
+      "raw",
+      rawBytes,
+      { name: "AES-GCM" },
+      false,
+      ["encrypt"]
+    );
+    const ctFromRawBytes = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: nonce },
+      importedKey,
+      plaintext
+    );
+    const ctFromDeriveKey = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: nonce },
+      cryptoKey,
+      plaintext
+    );
+    expect(new Uint8Array(ctFromRawBytes)).toEqual(new Uint8Array(ctFromDeriveKey));
+  });
+});
+
+describe("sealChunkWithKey — the multi-chunk document fix", () => {
+  it("lets one shared key decrypt every chunk of a document", async () => {
+    // The real bug this replaces: sealBytes() called once per chunk
+    // gave every chunk its own fresh salt and therefore its own
+    // different derived key, even though they share one passphrase —
+    // only a document's first chunk could ever be correctly unsealed
+    // again. One key, derived once, reused with a fresh nonce per
+    // chunk (the standard AES-GCM pattern) is what actually lets every
+    // chunk round-trip.
+    const salt = generateSalt();
+    const key = await deriveKey("one passphrase for the whole document", salt);
+    const chunkTexts = ["first chunk", "second chunk, different content", "third"];
+
+    const sealedChunks = await Promise.all(
+      chunkTexts.map((text) => sealChunkWithKey(encoder.encode(text), key))
+    );
+
+    // Every chunk got its own nonce (never reused for the same key).
+    const nonceHexes = sealedChunks.map((c) => Buffer.from(c.nonce).toString("hex"));
+    expect(new Set(nonceHexes).size).toBe(chunkTexts.length);
+
+    for (let i = 0; i < chunkTexts.length; i++) {
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: sealedChunks[i].nonce },
+        key,
+        sealedChunks[i].ciphertext
+      );
+      expect(new TextDecoder().decode(decrypted)).toBe(chunkTexts[i]);
+    }
   });
 });
 

@@ -84,6 +84,8 @@ class SealedStorage(Protocol):
         chunks: list[ChunkCiphertext],
     ) -> None: ...
 
+    async def get_salt(self, *, user_jwt: str, document_id: str) -> str | None: ...
+
     async def create_unlock_claim(
         self, *, user_jwt: str, user_id: str, document_id: str, key_b64: str
     ) -> UnlockClaim: ...
@@ -225,6 +227,25 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
             raise HTTPException(status_code=502, detail="sealed_chunk_lookup_failed")
         rows = response.json()
         return rows[0] if rows else None
+
+    async def get_salt(self, *, user_jwt: str, document_id: str) -> str | None:
+        """A salt is not secret by design — Argon2id's whole defense
+        against precomputed/rainbow-table attacks depends on it being
+        unique per document, never on it being hidden — so handing it
+        back to the client (the only way the client can re-derive the
+        exact key it originally sealed with) doesn't weaken anything.
+        None means "not sealed / no rows", same not-found signal every
+        other sealed_chunks lookup here already uses.
+
+        Every chunk row of a document now carries the same salt value
+        (client-side sealing derives one key per *document*, reused
+        with a fresh nonce per chunk — the standard AES-GCM pattern,
+        and the only one compatible with unseal_document below actually
+        decrypting more than a document's first chunk); any one row's
+        salt is as good as any other's, so this just reads the first."""
+        client = self._client()
+        row = await self._first_sealed_chunk(client, user_jwt, document_id)
+        return row["salt"] if row else None
 
     async def create_unlock_claim(
         self, *, user_jwt: str, user_id: str, document_id: str, key_b64: str

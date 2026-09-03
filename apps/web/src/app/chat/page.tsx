@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 import AppShell from "@/components/AppShell";
+import ConfirmModal from "@/components/ConfirmModal";
 import { authedFetch } from "@/lib/api";
 import { parseAnswerSegments } from "@/lib/graph/citations";
 import type { ChatMessage, ChatSession } from "@/lib/graph/types";
@@ -88,6 +89,7 @@ function ChatPageInner() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletePromptFor, setDeletePromptFor] = useState<ChatSession | null>(null);
 
   const fetchSessions = useCallback(async () => {
     const res = await authedFetch("/api/chat/sessions");
@@ -119,9 +121,14 @@ function ChatPageInner() {
       .finally(() => setLoadingMessages(false));
   }, [selectedId]);
 
-  async function handleDelete(session: ChatSession, e: React.MouseEvent) {
+  function handleDelete(session: ChatSession, e: React.MouseEvent) {
     e.stopPropagation();
-    if (!window.confirm("Delete this conversation? This can't be undone.")) return;
+    setDeletePromptFor(session);
+  }
+
+  async function confirmDelete() {
+    const session = deletePromptFor;
+    if (!session) return;
     setDeletingId(session.id);
     try {
       await authedFetch(`/api/chat/sessions/${session.id}`, { method: "DELETE" });
@@ -129,6 +136,7 @@ function ChatPageInner() {
       if (selectedId === session.id) setSelectedId(null);
     } finally {
       setDeletingId(null);
+      setDeletePromptFor(null);
     }
   }
 
@@ -282,6 +290,24 @@ function ChatPageInner() {
           )}
         </div>
       </div>
+
+      {deletePromptFor && (
+        <ConfirmModal
+          title="Delete conversation"
+          body={
+            <>
+              Delete <strong>&ldquo;{deletePromptFor.preview || "New conversation"}&rdquo;</strong>?
+              This can&apos;t be undone.
+            </>
+          }
+          confirmLabel={deletingId ? "Deleting…" : "Delete"}
+          cancelLabel="Cancel"
+          danger
+          loading={!!deletingId}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeletePromptFor(null)}
+        />
+      )}
     </AppShell>
   );
 }
