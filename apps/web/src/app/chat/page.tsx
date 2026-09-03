@@ -5,11 +5,12 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 
 import Link from "next/link";
 
+import AnswerMarkdown from "@/components/AnswerMarkdown";
 import AppShell from "@/components/AppShell";
 import ConfirmModal from "@/components/ConfirmModal";
 import { authedFetch } from "@/lib/api";
 import { parseAnswerSegments } from "@/lib/graph/citations";
-import type { ChatMessage, ChatSession } from "@/lib/graph/types";
+import type { ChatMessage, ChatSession, Citation } from "@/lib/graph/types";
 import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./chat.module.css";
 
@@ -177,29 +178,21 @@ function ChatPageInner() {
   }
 
   function renderMessageText(m: ChatMessage) {
-    const citations = m.citations ?? [];
-    const segments = parseAnswerSegments(m.content);
-    return segments.map((seg, i) => {
-      if (seg.type === "text") return <span key={i}>{seg.text}</span>;
-      // A marker naming a chunk id outside the message's own resolved
-      // citations (hallucinated, or dropped server-side) never becomes
-      // a chip — same distrust-by-default posture /graph's live chat
-      // already applies.
-      const citeIndex = citations.findIndex((c) => c.chunk_id === seg.chunkId);
-      if (citeIndex === -1) return null;
-      const citation = citations[citeIndex];
-      return (
-        <button
-          key={i}
-          type="button"
-          className={styles.citeChip}
-          title={citation.document_title}
-          onClick={() => router.push(`/graph?focus=${citation.document_id}`)}
-        >
-          {citeIndex + 1}
-        </button>
-      );
-    });
+    // Stage 7.10 — real markdown rendering via AnswerMarkdown, not a
+    // plain-text <span> with only citation-marker parsing. A marker
+    // naming a chunk id outside the message's own resolved citations
+    // (hallucinated, or dropped server-side) never becomes a chip —
+    // same distrust-by-default posture /graph's live chat already
+    // applies (see AnswerMarkdown's `a` override).
+    return (
+      <AnswerMarkdown
+        text={m.content}
+        citations={m.citations ?? []}
+        citeChipClassName={styles.citeChip}
+        citeChipTitle={(citation: Citation) => citation.document_title}
+        onCiteClick={(citation: Citation) => router.push(`/graph?focus=${citation.document_id}`)}
+      />
+    );
   }
 
   if (checking) return null;

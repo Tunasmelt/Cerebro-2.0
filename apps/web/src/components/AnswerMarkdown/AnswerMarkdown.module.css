@@ -1,0 +1,83 @@
+/* Stage 7.10 — resets so real markdown block elements (p, ul/ol, code,
+   pre, blockquote, table) sit naturally inside whatever padded chat-
+   bubble container the caller already has, instead of importing
+   browser default margins that were never designed for a chat UI. */
+
+.markdownBody {
+  overflow-wrap: anywhere;
+}
+
+.markdownBody :global(p) {
+  margin: 0 0 0.5em;
+}
+.markdownBody :global(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdownBody :global(ul),
+.markdownBody :global(ol) {
+  margin: 0 0 0.5em;
+  padding-left: 1.25em;
+}
+
+.markdownBody :global(li) {
+  margin: 0.15em 0;
+}
+
+.markdownBody :global(strong) {
+  font-weight: 600;
+}
+
+.markdownBody :global(code) {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+  background: rgba(127, 127, 127, 0.16);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.markdownBody :global(pre) {
+  overflow-x: auto;
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 8px;
+  padding: 0.6em 0.8em;
+  margin: 0 0 0.5em;
+}
+.markdownBody :global(pre code) {
+  background: none;
+  padding: 0;
+}
+
+.markdownBody :global(blockquote) {
+  margin: 0 0 0.5em;
+  padding-left: 0.75em;
+  border-left: 2px solid rgba(127, 127, 127, 0.4);
+  opacity: 0.85;
+}
+
+.markdownBody :global(table) {
+  border-collapse: collapse;
+  margin: 0 0 0.5em;
+  max-width: 100%;
+  overflow-x: auto;
+  display: block;
+}
+.markdownBody :global(th),
+.markdownBody :global(td) {
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+
+.markdownBody :global(a) {
+  color: var(--accent-primary-hover, inherit);
+}
+
+.markdownBody :global(h1),
+.markdownBody :global(h2),
+.markdownBody :global(h3),
+.markdownBody :global(h4) {
+  margin: 0.4em 0 0.3em;
+  font-size: 1em;
+  font-weight: 600;
+}

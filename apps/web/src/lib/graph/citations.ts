@@ -42,3 +42,26 @@ export function parseAnswerSegments(text: string): AnswerSegment[] {
 export function stripCitationMarkers(text: string): string {
   return text.replace(CITATION_MARKER_RE, "");
 }
+
+/** Stage 7.10 — rewrites [[chunk:<id>]] markers into a real-markdown-
+ * renderable form ahead of handing text to a markdown renderer:
+ * markers that resolve against `citations` become a special `cite:`
+ * link (AnswerMarkdown's `a` override turns that into a real citation
+ * chip button, never a plain link); anything else — a hallucinated or
+ * server-dropped marker, or every marker at all if `citations` is
+ * empty (the streaming-in-progress case, same "can't resolve yet"
+ * reasoning as stripCitationMarkers) — disappears entirely, same as
+ * parseAnswerSegments' existing "unresolved marker renders nothing"
+ * behavior. The chunk id is URI-encoded since it can itself contain a
+ * `:` (see retrieve.py's sealed-match chunk_id format,
+ * `<document_id>:<ordinal>`), which would otherwise break the link
+ * syntax markdown parsers expect. */
+export function prepareCitationMarkersForMarkdown(
+  text: string,
+  citations: { chunk_id: string }[],
+): string {
+  return text.replace(CITATION_MARKER_RE, (_match, chunkId: string) => {
+    const resolved = citations.some((c) => c.chunk_id === chunkId);
+    return resolved ? `[cite](cite:${encodeURIComponent(chunkId)})` : "";
+  });
+}
