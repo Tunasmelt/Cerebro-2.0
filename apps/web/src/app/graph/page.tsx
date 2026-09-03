@@ -48,6 +48,13 @@ function GraphPageInner() {
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<Citation[]>([]);
   const [streaming, setStreaming] = useState(false);
+  // Stage 7.11 — bumped on each `heartbeat` SSE event (services/api's
+  // chat/stream.py, fired while retrieval/HyDE is still running and no
+  // token has arrived yet), so a slow turn visibly shows it's still
+  // working instead of looking frozen. Purely a render trigger/counter
+  // — the actual "still thinking" copy is derived from it in
+  // renderAnswer() below.
+  const [heartbeatCount, setHeartbeatCount] = useState(0);
   const [chatError, setChatError] = useState<string | null>(null);
   const [pulse, setPulse] = useState<GraphPulse | null>(null);
   const pulseKeyRef = useRef(0);
@@ -207,6 +214,7 @@ function GraphPageInner() {
     setAnswer("");
     setCitations([]);
     setStreaming(true);
+    setHeartbeatCount(0);
     setQuery("");
 
     try {
@@ -222,7 +230,9 @@ function GraphPageInner() {
       if (!res.body) throw new Error("no response body");
 
       for await (const evt of parseSSEStream(res.body)) {
-        if (evt.event === "retrieval") {
+        if (evt.event === "heartbeat") {
+          setHeartbeatCount((prev) => prev + 1);
+        } else if (evt.event === "retrieval") {
           const data = evt.data as { chunk_ids: string[]; document_ids: string[] };
           // The real retrieval event's document_ids, verbatim — this is
           // the exit criteria's "pulses exactly the returned document
@@ -302,7 +312,16 @@ function GraphPageInner() {
   // citations collected during the stream; clicking one selects that
   // node on the graph, same as clicking it directly.
   function renderAnswer() {
-    if (!answer) return streaming ? "…" : null;
+    if (!answer) {
+      if (!streaming) return null;
+      // Stage 7.11 — a plain "…" never changed, so a slow turn looked
+      // exactly like a frozen one. Once at least one heartbeat has
+      // arrived, switch to explicit "Thinking" copy with a dot count
+      // tied to heartbeatCount, so the UI visibly reflects each
+      // heartbeat instead of just sitting there.
+      if (heartbeatCount === 0) return "…";
+      return `Thinking${".".repeat((heartbeatCount % 3) + 1)}`;
+    }
     return (
       <AnswerMarkdown
         text={answer}

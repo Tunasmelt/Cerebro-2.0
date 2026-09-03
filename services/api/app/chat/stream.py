@@ -30,7 +30,24 @@ event, no `done`, no way to tell "the server failed" from "still
 working." The whole body is now wrapped in try/except so any failure —
 retrieval, generation, storage — surfaces as a real `error` SSE event
 before the connection closes, instead of dying silently.
+
+Stage 7.11 — heartbeat. Retrieval (embed/vector/FTS/rerank, plus a
+conditional HyDE round-trip — Stage 7.9) was previously fully awaited
+before this generator yielded anything at all: a silent gap between
+the user's question and the first `token` event, with zero client-
+visible signal that anything was happening. `retrieve()` now runs as
+an `asyncio.Task` instead of a plain awaited coroutine, polled with a
+timeout in a loop — every `HEARTBEAT_INTERVAL_SECONDS` the task hasn't
+finished yet, a `heartbeat` event is yielded so the UI can show a real
+"thinking…" state instead of looking frozen. `asyncio.create_task`
+snapshots the current `contextvars.Context` at creation time, so
+Langfuse's OpenTelemetry span propagation into retrieve()'s own spans
+(embed_query, vector_search, ...) is unaffected — they still nest
+under `chat_turn` exactly as before. `heartbeat` is purely additive to
+the SSE contract: zero or more `heartbeat` events, only ever before
+`retrieval`, never elsewhere.
 """
+import asyncio
 import json
 import logging
 from typing import AsyncIterator
@@ -46,6 +63,12 @@ from app.retrieve.retrieve import retrieve
 from app.retrieve.rewrite import HISTORY_MESSAGE_LIMIT
 
 logger = logging.getLogger(__name__)
+
+HEARTBEAT_INTERVAL_SECONDS = 1.5  # Stage 7.11. Frequent enough that a
+# genuinely slow turn (HyDE's extra Gemini round-trip, a slow vector/
+# FTS leg) doesn't leave the UI looking frozen for long, infrequent
+# enough not to spam the connection for the common fast case — most
+# turns finish retrieval well under this and never emit one at all.
 
 
 def _sse(event: str, data: dict) -> str:
@@ -106,12 +129,28 @@ async def stream_chat(
             # again, on the query's own shape. Same "degrade, don't
             # crash" contract either way — a failed or empty hypothetical
             # falls back to embedding the real query.
-            chunks = await retrieve(
-                user_jwt=user_jwt,
-                query=query,
-                recent_messages=recent_messages,
-                use_hyde=should_use_hyde(query),
+            # Stage 7.11 — run as a Task and poll it instead of a plain
+            # `await`, so a slow retrieval (HyDE's extra round-trip, a
+            # slow search leg) can emit heartbeat events in the gap
+            # instead of leaving the connection silent until the first
+            # token. See this module's own docstring for why context
+            # propagation into retrieve()'s Langfuse spans is unaffected.
+            retrieve_task = asyncio.ensure_future(
+                retrieve(
+                    user_jwt=user_jwt,
+                    query=query,
+                    recent_messages=recent_messages,
+                    use_hyde=should_use_hyde(query),
+                )
             )
+            while True:
+                done, _pending = await asyncio.wait(
+                    {retrieve_task}, timeout=HEARTBEAT_INTERVAL_SECONDS
+                )
+                if retrieve_task in done:
+                    break
+                yield _sse("heartbeat", {})
+            chunks = retrieve_task.result()
 
             # Retrieval quality pass — chunks alone never told the model
             # which document each one came from, so a question spanning
