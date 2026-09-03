@@ -1613,6 +1613,67 @@ unrelated files untouched). Frontend `lint`/`build` clean; the one
 pre-existing `tsc` failure (`seal.test.ts`'s `Uint8Array`/`BufferSource`
 mismatch, Stage 3.2) is unrelated to this stage's files.
 
+### Chat management, citation replay, and profile pass ✅
+Not a numbered stage — a cross-cutting pass across six bundled requests
+(view/delete/export chats on their own page, "proper citation fixing,"
+SEO, profile picture + display name, general polish), done the same way
+"3D graph rendering upgrade" and "UI design pass" were: no new gate,
+built on top of stages already ✅. SEO was explicitly descoped for this
+pass (no production domain to point `metadataBase`/OpenGraph/sitemap at
+yet); profile picture was scoped down to a pasted image URL stored in
+`user_metadata.avatar_url`, not a new Supabase storage bucket or upload
+flow.
+
+**The citation-replay gap:** research surfaced a real, previously
+invisible bug behind "proper citation fixing" — a **live** chat turn
+resolves and numbers citations correctly (`chat/prompt.py`'s
+`extract_citations`, fed by real-time SSE `citation` events), but
+`/graph`'s "reopen a past conversation" flow (`replaySession()`) only
+ever re-fired the graph pulse from `retrieved_document_ids`; it never
+set `answer`/`citations` state at all, so a reopened conversation showed
+no text and no working citation chips, live or otherwise. That
+pulse-replay path is itself real and already gate-verified (Phase 2
+Gate's third checklist item, live-confirmed against production) and was
+left untouched — the fix is additive, not a rewrite of it.
+
+**Done (backend):** `chat/storage.py`'s `list_sessions` now returns a
+`preview` per session (earliest user message, truncated); `get_messages`
+now resolves each assistant message's real `citations`
+(`chunk_id`/`document_id`/`document_title`, first-appearance order) by
+reusing `extract_citations` verbatim against lightweight `RetrievedChunk`
+stand-ins built from the chunk_id→document_id map the method already
+computes — not a second, drifting citation parser — plus a new
+`delete_session` (`DELETE /api/v1/chat/sessions/{id}`, RLS-scoped
+404-not-403, relying on `chat_messages.session_id`'s pre-existing
+`on delete cascade` from Stage 0.2's original schema; no new migration).
+**Done (frontend):** a new `/chat` page — session list (preview + date,
+per-row delete/export) and a full transcript pane that renders assistant
+text through the existing `parseAnswerSegments` (`lib/graph/citations.ts`,
+already used by `/graph`'s live chat, reused as-is) against each
+message's real `citations` array; a citation chip navigates to
+`/graph?focus=<document_id>`. Export is pure client-side Markdown
+(`Blob` + temporary `<a download>`), no backend involved. `/graph` grew
+two additive, deliberately minimal changes: an "Open full conversation →"
+link per session in the existing sessions panel, and `?focus=` query-param
+handling on mount that calls the existing `handleNodeClick`. `AppShell`
+gained a "Chat" nav item and renders a real `<img>` avatar from
+`avatarUrl` (falling back to initials, sourced from `displayName` first,
+email second) with `onError` fallback for a broken pasted URL.
+`useAuthedUser` now also exposes `displayName`/`avatarUrl` from
+`user_metadata`, kept live via a new `onAuthStateChange` subscription so
+a profile edit propagates without a page reload. `/settings`'s Account
+pane gained "Display name" and "Avatar URL" fields, saved with
+`supabase.auth.updateUser({ data: {...} })` — same direct-Supabase-client
+pattern already used next to it for email, no backend route needed.
+**Tests:** backend — `test_chat_management.py` (preview derivation,
+delete-session found/not-found), `test_stage_2_4_replay.py` extended for
+citation+title resolution (including a marker naming a chunk that was
+never retrieved, which must still drop, matching `extract_citations`'s
+existing contract) and `get_messages`'s new fields, `test_chat_routes.py`
+extended for the new delete route (happy path, another-user's-session
+404-not-403, nonexistent-session 404, unauthenticated). Frontend
+`lint`/`test`/`build` clean.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks

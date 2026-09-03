@@ -30,13 +30,33 @@ async def list_sessions(request: Request):
     return JSONResponse({"sessions": sessions})
 
 
+@router.delete("/api/v1/chat/sessions/{session_id}")
+async def delete_session(request: Request, session_id: str):
+    """Chat management pass — deleting a session cascades its messages
+    (chat_messages.session_id already has on delete cascade, Stage
+    0.2's original schema). RLS-scoped: a session that isn't the
+    caller's own deletes zero rows, same 404-not-403 pattern every
+    other delete route in this app uses."""
+    storage = get_chat_storage()
+    deleted = await storage.delete_session(
+        user_jwt=request.state.user_jwt, session_id=session_id
+    )
+    if not deleted:
+        return _error("not_found", "Chat session not found", 404)
+    return JSONResponse({"id": session_id, "deleted": True})
+
+
 @router.get("/api/v1/chat/sessions/{session_id}/messages")
 async def get_messages(request: Request, session_id: str):
     """Stage 2.4 — history for reopening a past conversation, with each
     message's retrieved_chunk_ids resolved to retrieved_document_ids so
     the frontend can replay the same graph pulse that happened live,
     without re-deriving anything from the (possibly different by now)
-    live retrieval pipeline."""
+    live retrieval pipeline. Each assistant message also carries a real
+    `citations` array (chunk_id/document_id/document_title, in
+    first-appearance order) — the chat-management pass's fix for a real
+    gap: reopening a conversation used to only ever pulse the graph,
+    never render the actual text with working citation chips."""
     storage = get_chat_storage()
     messages = await storage.get_messages(
         user_jwt=request.state.user_jwt, session_id=session_id

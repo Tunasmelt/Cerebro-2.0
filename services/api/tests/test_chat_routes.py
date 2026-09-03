@@ -69,6 +69,14 @@ class _FakeChatStorage:
             return None
         return self.messages.get(session_id, [])
 
+    async def delete_session(self, *, user_jwt, session_id):
+        owner_jwt = self.sessions.get(session_id)
+        if owner_jwt is None or owner_jwt != user_jwt:
+            return False
+        del self.sessions[session_id]
+        self.messages.pop(session_id, None)
+        return True
+
 
 class _FakeEmbedClient:
     provider = "jina"
@@ -227,6 +235,47 @@ def test_get_messages_for_nonexistent_session_returns_404(client, keypair):
         "/api/v1/chat/sessions/does-not-exist/messages", headers=auth_headers(private_key)
     )
     assert response.status_code == 404
+
+
+# --- Chat management pass: DELETE /chat/sessions/{id} ---------------------------
+
+
+def test_delete_session_happy_path(client, keypair, chat_storage):
+    private_key, _ = keypair
+    headers = auth_headers(private_key)
+    session_id = client.post("/api/v1/chat/sessions", headers=headers).json()["id"]
+
+    response = client.delete(f"/api/v1/chat/sessions/{session_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"id": session_id, "deleted": True}
+    # Really gone, not just reported as deleted.
+    assert client.get("/api/v1/chat/sessions", headers=headers).json()["sessions"] == []
+
+
+def test_delete_session_on_another_users_session_returns_404_not_403(client, keypair, chat_storage):
+    private_key, _ = keypair
+    owner_headers = auth_headers(private_key, sub=TEST_SUB)
+    other_headers = auth_headers(private_key, sub=OTHER_SUB)
+    session_id = client.post("/api/v1/chat/sessions", headers=owner_headers).json()["id"]
+
+    response = client.delete(f"/api/v1/chat/sessions/{session_id}", headers=other_headers)
+
+    assert response.status_code == 404
+    # Untouched — the other user's delete attempt did nothing.
+    assert len(client.get("/api/v1/chat/sessions", headers=owner_headers).json()["sessions"]) == 1
+
+
+def test_delete_session_for_nonexistent_session_returns_404(client, keypair):
+    private_key, _ = keypair
+    response = client.delete(
+        "/api/v1/chat/sessions/does-not-exist", headers=auth_headers(private_key)
+    )
+    assert response.status_code == 404
+
+
+def test_delete_session_requires_auth(client):
+    assert client.delete("/api/v1/chat/sessions/session-1").status_code == 401
 
 
 def test_get_messages_on_another_users_session_returns_404_not_403(

@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
@@ -33,8 +33,9 @@ const GRAPH_POLL_INTERVAL_MS = 5000;
 
 type Citation = { chunk_id: string; document_id: string };
 
-export default function GraphPage() {
+function GraphPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { checking, email } = useAuthedUser();
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [edges, setEdges] = useState<GraphEdge[]>([]);
@@ -116,6 +117,17 @@ export default function GraphPage() {
     },
     [selectedNodeId]
   );
+
+  // A cross-page link (e.g. /chat's citation chips) lands here with
+  // ?focus=<document_id> — select that node once, on mount.
+  const focusHandledRef = useRef(false);
+  useEffect(() => {
+    if (focusHandledRef.current || nodes.length === 0) return;
+    const focusId = searchParams.get("focus");
+    if (!focusId) return;
+    focusHandledRef.current = true;
+    if (nodes.some((n) => n.id === focusId)) handleNodeClick(focusId);
+  }, [searchParams, nodes, handleNodeClick]);
 
   function triggerPulse(documentIds: string[]) {
     pulseKeyRef.current += 1;
@@ -347,18 +359,33 @@ export default function GraphPage() {
               <p className={styles.chunkItem}>No past conversations yet.</p>
             )}
             {sessions.map((s) => (
-              <button
-                key={s.id}
-                className={styles.sessionItem}
-                onClick={() => replaySession(s.id)}
-              >
-                {new Date(s.created_at).toLocaleString()}
-              </button>
+              <div key={s.id} className={styles.sessionItem}>
+                <button
+                  className={styles.sessionItemMain}
+                  onClick={() => replaySession(s.id)}
+                >
+                  {new Date(s.created_at).toLocaleString()}
+                </button>
+                <span
+                  className={styles.sessionItemLink}
+                  onClick={() => router.push(`/chat?session=${s.id}`)}
+                >
+                  Open full conversation →
+                </span>
+              </div>
             ))}
           </div>
         )}
       </div>
     </div>
     </AppShell>
+  );
+}
+
+export default function GraphPage() {
+  return (
+    <Suspense fallback={null}>
+      <GraphPageInner />
+    </Suspense>
   );
 }

@@ -35,7 +35,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function SettingsPage() {
-  const { checking, email } = useAuthedUser();
+  const { checking, email, displayName, avatarUrl } = useAuthedUser();
   const router = useRouter();
   const [pane, setPane] = useState<Pane>("account");
 
@@ -43,6 +43,10 @@ export default function SettingsPage() {
   const [newPassword, setNewPassword] = useState("");
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
+
+  const [newDisplayName, setNewDisplayName] = useState("");
+  const [newAvatarUrl, setNewAvatarUrl] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
 
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -59,6 +63,33 @@ export default function SettingsPage() {
   useEffect(() => {
     if (email) setNewEmail(email);
   }, [email]);
+
+  useEffect(() => {
+    setNewDisplayName(displayName ?? "");
+    setNewAvatarUrl(avatarUrl ?? "");
+  }, [displayName, avatarUrl]);
+
+  async function handleProfileSave() {
+    setAccountMessage(null);
+    setAccountError(null);
+    setProfileSaving(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          display_name: newDisplayName.trim() || null,
+          avatar_url: newAvatarUrl.trim() || null,
+        },
+      });
+      if (error) {
+        setAccountError(error.message);
+        return;
+      }
+      setAccountMessage("Profile updated.");
+    } finally {
+      setProfileSaving(false);
+    }
+  }
 
   async function handleEmailSave() {
     setAccountMessage(null);
@@ -134,6 +165,39 @@ export default function SettingsPage() {
 
               {accountMessage && <p className={styles.statusMessage}>{accountMessage}</p>}
               {accountError && <p className={styles.errorMessage}>{accountError}</p>}
+
+              <div className={styles.card}>
+                <h2>Profile</h2>
+                {newAvatarUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element -- pasted external URL, not a local/optimizable asset.
+                  <img src={newAvatarUrl} alt="" className={styles.avatarPreview} />
+                )}
+                <div className={styles.field}>
+                  <label>Display name</label>
+                  <input
+                    type="text"
+                    placeholder={email ?? ""}
+                    value={newDisplayName}
+                    onChange={(e) => setNewDisplayName(e.target.value)}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label>Avatar URL</label>
+                  <input
+                    type="url"
+                    placeholder="https://…"
+                    value={newAvatarUrl}
+                    onChange={(e) => setNewAvatarUrl(e.target.value)}
+                  />
+                </div>
+                <button
+                  className={`${styles.btn} ${styles.btnGhost}`}
+                  disabled={profileSaving}
+                  onClick={handleProfileSave}
+                >
+                  {profileSaving ? "Saving…" : "Save changes"}
+                </button>
+              </div>
 
               <div className={styles.card}>
                 <h2>Email</h2>

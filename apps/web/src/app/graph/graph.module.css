@@ -240,19 +240,42 @@
 }
 
 .sessionItem {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.sessionItem:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sessionItemMain {
+  flex: 1;
   text-align: left;
   background: none;
   border: none;
   color: #a1a1aa;
   font-size: 13px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 0;
   cursor: pointer;
 }
 
-.sessionItem:hover {
-  background: rgba(255, 255, 255, 0.05);
+.sessionItem:hover .sessionItemMain {
   color: #f4f4f5;
+}
+
+.sessionItemLink {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #8b5cf6;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sessionItemLink:hover {
+  text-decoration: underline;
 }

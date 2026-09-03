@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import Logo from "@/components/Logo";
 import QuickCapture from "@/components/QuickCapture";
 import { createClient } from "@/lib/supabase/client";
+import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./AppShell.module.css";
 
 // Stage 4.7 — wraps every authenticated page (Brain, Documents, Kanban,
@@ -42,6 +43,16 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
     <svg width="17" height="17" viewBox="0 0 17 17" fill="none">
       <rect x="3.5" y="2.5" width="10" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
       <path d="M6 6.5H11M6 9H11M6 11.5H9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  ),
+  Chat: (
+    <svg width="17" height="17" viewBox="0 0 17 17" fill="none">
+      <path
+        d="M3 3.5H14V11H8.5L5 13.5V11H3V3.5Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
     </svg>
   ),
   Kanban: (
@@ -82,14 +93,15 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
 const NAV_ITEMS = [
   { href: "/graph", label: "Brain" },
   { href: "/documents", label: "Documents" },
+  { href: "/chat", label: "Chat" },
   { href: "/kanban", label: "Kanban" },
   { href: "/tasks", label: "Tasks" },
   { href: "/playground", label: "Playground" },
 ];
 
-function initials(email: string | null): string {
-  if (!email) return "?";
-  return email.slice(0, 2).toUpperCase();
+function initials(name: string | null): string {
+  if (!name) return "?";
+  return name.slice(0, 2).toUpperCase();
 }
 
 export default function AppShell({
@@ -103,6 +115,15 @@ export default function AppShell({
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Profile pass — AppShell reads its own displayName/avatarUrl rather
+  // than threading two more props through every page that mounts it
+  // (every page already independently calls useAuthedUser for its own
+  // `checking`/`userEmail`); this is the same session, just read twice,
+  // not a second source of truth.
+  const { displayName, avatarUrl } = useAuthedUser();
+  const avatarLabel = displayName || userEmail;
+  const [avatarImgFailed, setAvatarImgFailed] = useState(false);
+  useEffect(() => setAvatarImgFailed(false), [avatarUrl]);
 
   async function handleSignOut() {
     const supabase = createClient();
@@ -157,7 +178,17 @@ export default function AppShell({
           <div className={styles.topbarRight}>
             <QuickCapture />
             <div className={styles.avatar} onClick={() => setMenuOpen((o) => !o)}>
-              <span className={styles.avatarInner}>{initials(userEmail)}</span>
+              {avatarUrl && !avatarImgFailed ? (
+                // eslint-disable-next-line @next/next/no-img-element -- user-pasted external URL, not a local/optimizable asset.
+                <img
+                  src={avatarUrl}
+                  alt=""
+                  className={styles.avatarImg}
+                  onError={() => setAvatarImgFailed(true)}
+                />
+              ) : (
+                <span className={styles.avatarInner}>{initials(avatarLabel)}</span>
+              )}
               {menuOpen && (
                 <div className={styles.avatarMenu}>
                   <button
