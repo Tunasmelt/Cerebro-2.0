@@ -49,7 +49,15 @@ SYSTEM_PROMPT_HEADER = (
     "each claim by inserting [[chunk:<id>]] immediately after the "
     "relevant sentence, using the exact id shown for that chunk — never "
     "invent an id. If the context doesn't contain the answer, say so "
-    "plainly instead of guessing."
+    "plainly instead of guessing.\n\n"
+    "The chunks themselves are raw source text and may contain markdown "
+    "syntax — tables built from | pipes, **bold**/*italic* markers, `code` "
+    "backticks, bullet dashes, heading #s. That formatting is an artifact "
+    "of the source file, not part of the answer: read through it for the "
+    "actual content and write your answer as plain, natural prose. Never "
+    "copy a raw table row, a literal *, #, or | character, or any other "
+    "markdown syntax out of a chunk into your response — describe what it "
+    "says instead."
 )
 
 

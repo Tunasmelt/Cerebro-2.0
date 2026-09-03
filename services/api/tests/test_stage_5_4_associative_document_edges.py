@@ -208,6 +208,35 @@ async def test_get_associative_document_edges_end_to_end(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_associative_document_edges_filters_a_single_reinforcement(monkeypatch):
+    # A single shared retrieval (weight=1.0, REINFORCEMENT_INCREMENT) is
+    # exactly the "asked one question, five chunks came back, every pair
+    # among them got an edge" case reported live as "all nodes connected"
+    # after one question on a small vault — it must not render.
+    transport = _FakeTransport(
+        edges=[
+            {
+                "id": "e1",
+                "source_chunk_id": "c1",
+                "target_chunk_id": "c2",
+                "weight": 1.0,
+                "co_retrieval_count": 1,
+                "is_explicit": False,
+                "last_reinforced_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+        chunks=[{"id": "c1", "document_id": "doc-a"}, {"id": "c2", "document_id": "doc-b"}],
+    )
+    _patch_client(monkeypatch, transport)
+    edges_module.set_chunk_edges_storage(SupabaseChunkEdgesStorage())
+
+    result = await get_associative_document_edges(user_jwt="t")
+
+    assert result == []
+    edges_module.set_chunk_edges_storage(SupabaseChunkEdgesStorage())
+
+
+@pytest.mark.asyncio
 async def test_get_associative_document_edges_with_no_edges_returns_empty(monkeypatch):
     transport = _FakeTransport(edges=[], chunks=[])
     _patch_client(monkeypatch, transport)
