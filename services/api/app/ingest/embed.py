@@ -46,6 +46,21 @@ document that fell back to Voyage/Cohere is invisible to vector search
 entirely, fallback-provider correctness only matters if that scoping
 ever changes.
 
+Stage 7.2 — image chunk captioning: extract.py leaves image chunk
+`content` empty (see that module's docstring), which meant FTS could
+never match an image chunk at all — only vector search could ever
+surface one, and retrieve.py had to paper over it with a query-time-only
+caption (retrieve/image_caption.py) that isn't persisted and costs a
+Gemini call on every retrieval touching an uncaptioned image. Now the
+whole document image is captioned once here, at ingest time, via the
+same Gemini call (`caption_image_bytes`, factored out of
+retrieve/image_caption.py so both share one implementation), and the
+result is written into every one of that document's image chunks'
+`content` — real, persisted, FTS-matchable text. Best-effort: a caption
+failure (already returns None, never raises) just leaves `content`
+empty exactly as before, and retrieve.py's query-time fallback still
+covers that case and every chunk ingested before this stage existed.
+
 Concurrency=1 via the pipeline-wide lock in app/ingest/concurrency.py.
 
 Provider fallback (added after Stage 1.4, as new scope): Jina -> Voyage
@@ -78,6 +93,7 @@ from PIL import Image
 
 from app.core.http_client import CachedHttpClientMixin
 from app.ingest.concurrency import INGEST_LOCK
+from app.retrieve.image_caption import caption_image_bytes
 
 TEXT_MODEL = "jina-embeddings-v5-text-small"
 IMAGE_MODEL = "jina-embeddings-v5-omni-small"
@@ -288,6 +304,9 @@ class EmbedStorage(Protocol):
     async def update_chunk_embedding(
         self, *, user_jwt: str, chunk_id: str, embedding: list[float]
     ) -> None: ...
+    async def update_chunk_content(
+        self, *, user_jwt: str, chunk_id: str, content: str
+    ) -> None: ...
     async def mark_ready(self, *, user_jwt: str, document_id: str) -> None: ...
     async def mark_failed(self, *, user_jwt: str, document_id: str, error_code: str) -> None: ...
     async def set_document_embedding_provider(
@@ -374,6 +393,19 @@ class SupabaseEmbedStorage(CachedHttpClientMixin):
             headers={**self._headers(user_jwt), "Content-Type": "application/json"},
             params={"id": f"eq.{chunk_id}"},
             json={"embedding": embedding},
+        )
+        if response.status_code >= 400:
+            raise EmbedError("chunk_update_failed", chunk_id)
+
+    async def update_chunk_content(
+        self, *, user_jwt: str, chunk_id: str, content: str
+    ) -> None:
+        client = self._client()
+        response = await client.patch(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{chunk_id}"},
+            json={"content": content},
         )
         if response.status_code >= 400:
             raise EmbedError("chunk_update_failed", chunk_id)
@@ -490,10 +522,16 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
     last_done_ordinal = checkpoint.get("last_embedded_ordinal", -1)
 
     original_bytes: bytes | None = None
+    image_caption: str | None = None
     if is_image:
         original_bytes = await storage.download_original(
             user_jwt=user_jwt, path=document["original_storage_path"]
         )
+        # One caption for the whole document, reused for every tile chunk
+        # below — same "caption the whole image once" reasoning as
+        # retrieve/image_caption.py, and best-effort: None just leaves
+        # content empty, exactly as before Stage 7.2.
+        image_caption = await caption_image_bytes(original_bytes, mime_type=document["mime"])
 
     provider_clients = {get_embed_client().provider: get_embed_client()}
     for fallback_client in get_fallback_embed_clients():
@@ -547,6 +585,10 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
             await storage.update_chunk_embedding(
                 user_jwt=user_jwt, chunk_id=chunk["id"], embedding=embedding
             )
+            if image_caption and not chunk["content"]:
+                await storage.update_chunk_content(
+                    user_jwt=user_jwt, chunk_id=chunk["id"], content=image_caption
+                )
             await storage.save_checkpoint(
                 user_jwt=user_jwt,
                 document_id=document_id,

@@ -70,6 +70,7 @@ class _FakeEmbedStorage:
         self.original_content = original_content
         self.checkpoint: dict = {}
         self.embeddings: dict[str, list[float]] = {}
+        self.contents: dict[str, str] = {}
         self.marked_ready = False
         self.marked_failed = None
         self.embedding_provider = None
@@ -96,6 +97,12 @@ class _FakeEmbedStorage:
 
     async def update_chunk_embedding(self, *, user_jwt, chunk_id, embedding):
         self.embeddings[chunk_id] = embedding
+
+    async def update_chunk_content(self, *, user_jwt, chunk_id, content):
+        self.contents[chunk_id] = content
+        for chunk in self.chunks:
+            if chunk["id"] == chunk_id:
+                chunk["content"] = content
 
     async def mark_ready(self, *, user_jwt, document_id):
         self.marked_ready = True
@@ -196,6 +203,84 @@ async def test_run_embed_job_image_crops_tiles_and_embeds_images():
     for tile_bytes in client.image_calls:
         tile_img = Image.open(io.BytesIO(tile_bytes))
         assert tile_img.size == (250, 400)
+
+
+# --- Stage 7.2: image chunk captioning persisted into content ----------------
+
+
+@pytest.mark.asyncio
+async def test_run_embed_job_persists_one_caption_into_every_image_chunk(monkeypatch):
+    original = _make_image_bytes((500, 400))
+    chunks = [
+        {"id": "c0", "ordinal": 0, "content": "", "meta": {"bbox": [0, 0, 250, 400]}},
+        {"id": "c1", "ordinal": 1, "content": "", "meta": {"bbox": [250, 0, 500, 400]}},
+    ]
+    storage = _FakeEmbedStorage(mime=IMAGE_DOC_MIME, chunks=chunks, original_content=original)
+    client = _FakeEmbedClient()
+    embed_module.set_embed_storage(storage)
+    embed_module.set_embed_client(client)
+
+    caption_calls: list[bytes] = []
+
+    async def fake_caption(image_bytes: bytes, *, mime_type: str = "image/webp"):
+        caption_calls.append(image_bytes)
+        return "a photo of a blue rectangle"
+
+    monkeypatch.setattr(embed_module, "caption_image_bytes", fake_caption)
+
+    result = await run_embed_job(user_jwt="t", document_id="doc-caption")
+
+    assert result is True
+    # One caption call for the whole document, not one per tile.
+    assert caption_calls == [original]
+    assert storage.contents == {
+        "c0": "a photo of a blue rectangle",
+        "c1": "a photo of a blue rectangle",
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_embed_job_leaves_content_empty_when_captioning_fails(monkeypatch):
+    original = _make_image_bytes((500, 400))
+    chunks = [
+        {"id": "c0", "ordinal": 0, "content": "", "meta": {"bbox": [0, 0, 250, 400]}},
+    ]
+    storage = _FakeEmbedStorage(mime=IMAGE_DOC_MIME, chunks=chunks, original_content=original)
+    client = _FakeEmbedClient()
+    embed_module.set_embed_storage(storage)
+    embed_module.set_embed_client(client)
+
+    async def failing_caption(image_bytes: bytes, *, mime_type: str = "image/webp"):
+        return None
+
+    monkeypatch.setattr(embed_module, "caption_image_bytes", failing_caption)
+
+    result = await run_embed_job(user_jwt="t", document_id="doc-caption-fail")
+
+    assert result is True
+    assert storage.contents == {}
+
+
+@pytest.mark.asyncio
+async def test_run_embed_job_does_not_overwrite_content_that_already_exists(monkeypatch):
+    original = _make_image_bytes((500, 400))
+    chunks = [
+        {"id": "c0", "ordinal": 0, "content": "an existing caption", "meta": {"bbox": [0, 0, 250, 400]}},
+    ]
+    storage = _FakeEmbedStorage(mime=IMAGE_DOC_MIME, chunks=chunks, original_content=original)
+    client = _FakeEmbedClient()
+    embed_module.set_embed_storage(storage)
+    embed_module.set_embed_client(client)
+
+    async def fake_caption(image_bytes: bytes, *, mime_type: str = "image/webp"):
+        return "a new caption that should not be written"
+
+    monkeypatch.setattr(embed_module, "caption_image_bytes", fake_caption)
+
+    result = await run_embed_job(user_jwt="t", document_id="doc-caption-existing")
+
+    assert result is True
+    assert storage.contents == {}
 
 
 # --- checkpoint / resume (the exit criteria's actual point) ------------------

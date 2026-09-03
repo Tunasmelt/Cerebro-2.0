@@ -2284,7 +2284,7 @@ old chunking put a mid-word edge on 8/8 chunks, new chunking on 0/8,
 with the same 8-chunk count either way (no size bloat from the
 boundary search). 444/444 backend tests passing, `ruff` clean.
 
-### Stage 7.2 — Image content matchability for full-text search
+### Stage 7.2 — Image content matchability for full-text search ✅
 **Exit criteria:** Image chunks always have `content=""`
 (`extract.py`'s `extract_image_chunks`) — only vector search can ever
 surface an image; full-text search has nothing to match against. A
@@ -2293,9 +2293,32 @@ content (not just used transiently as query-time rerank input, which
 is all `image_caption.py` does today), so an image chunk becomes
 reachable by literal keyword search too, within the 512MB memory
 ceiling.
-**Tests:** A seeded image document with a known caption/OCR text is
-returned by a literal keyword FTS query that has no vector-similarity
-signal to rely on.
+**Done:** `retrieve/image_caption.py`'s Gemini call was factored into a
+new `caption_image_bytes(image_bytes, *, mime_type)` — a pure
+bytes-in/caption-out function, no storage or signed-url dependency —
+reused by both the existing query-time path (`caption_image`, now just
+a signed-url download in front of it) and a new ingest-time call in
+`ingest/embed.py`'s `run_embed_job`. For an image document, the whole
+original image is captioned once (not per-tile — same "one caption
+covers every chunk of the document" reasoning `image_caption.py`
+already used, and it avoids N Gemini calls for N tiles), then written
+via a new `EmbedStorage.update_chunk_content` into every image chunk
+whose `content` is still empty — real, persisted, FTS-matchable text,
+not just a value computed transiently for rerank. Best-effort by
+design: `caption_image_bytes` already never raises (broad except,
+logs, returns `None`), so a captioning failure just leaves `content`
+empty exactly as before this stage — no job failure, no partial state,
+and retrieve.py's query-time fallback still covers both that case and
+every chunk ingested before this stage existed. A chunk that already
+has content (e.g. a resumed job) is never overwritten. Stays within
+the 512MB ceiling: no new dependency, one extra Gemini call per image
+document at ingest time (not per tile, not per query).
+**Tests:** 3 new tests in `test_stage_1_4_embed.py` — one caption call
+covers the whole document and gets written into every image chunk's
+content; a captioning failure (`None`) leaves every chunk's content
+empty rather than raising or failing the job; a chunk that already has
+content is never overwritten by a new caption. All 447 backend tests
+pass, ruff clean.
 
 ### Stage 7.3 — Real streaming I/O for ingest downloads
 **Exit criteria:** architecture-and-security.md §3 documents "Streaming
