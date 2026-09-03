@@ -180,6 +180,13 @@
   font-weight: var(--weight-semibold);
   color: var(--text-primary);
 }
+.avatarImg {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
 .avatar:hover {
   box-shadow: 0 0 0 3px var(--accent-primary-subtle);
 }

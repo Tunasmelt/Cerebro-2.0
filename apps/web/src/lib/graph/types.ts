@@ -33,6 +33,20 @@ export type ChunkSatellite = {
 export type ChatSession = {
   id: string;
   created_at: string;
+  // Chat management pass — earliest user message, truncated, or null
+  // for a session with no user message yet.
+  preview?: string | null;
+};
+
+// Chat management pass — real per-message citation resolution
+// (chunk_id/document_id/document_title, first-appearance order),
+// reusing the exact same extract_citations a live turn uses. Fixes a
+// real gap: reopening a past conversation used to only ever pulse the
+// graph, never render the answer text with working citation chips.
+export type Citation = {
+  chunk_id: string;
+  document_id: string;
+  document_title: string;
 };
 
 export type ChatMessage = {
@@ -41,6 +55,7 @@ export type ChatMessage = {
   content: string;
   retrieved_chunk_ids: string[];
   retrieved_document_ids: string[];
+  citations?: Citation[];
   created_at: string;
 };
 

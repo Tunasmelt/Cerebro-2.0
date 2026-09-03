@@ -79,6 +79,14 @@
   margin: -8px 0 0;
 }
 
+.avatarPreview {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-default);
+}
+
 .field {
   display: flex;
   flex-direction: column;

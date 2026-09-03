@@ -5,11 +5,24 @@ stores chunk ids, not document ids, so get_messages resolves them via
 one extra query against chunks rather than requiring N+1 lookups or a
 denormalized document_ids column that could drift from the real chunk
 ids if a document were ever deleted.
+
+Chat management pass (delete/export/dedicated page): a real gap was
+found here, not just a missing feature — Stage 2.4's own replay UI only
+ever re-fires the graph pulse from `retrieved_document_ids`; it never
+reconstructed the actual citation numbering/document titles for a past
+message, so a reopened conversation could show *which* documents lit up
+but never the assistant's real text with working citation chips, live
+or otherwise. `get_messages` now resolves real per-message citations
+using the exact same `extract_citations` a live turn uses (see below) —
+not a second, drifting reimplementation.
 """
 import os
 from typing import Any, Protocol
 
 import httpx
+
+from app.chat.prompt import extract_citations
+from app.retrieve.retrieve import RetrievedChunk
 
 
 class ChatStorageError(Exception):
@@ -42,6 +55,7 @@ class ChatStorage(Protocol):
     async def get_recent_messages(
         self, *, user_jwt: str, session_id: str, limit: int
     ) -> list[dict[str, Any]]: ...
+    async def delete_session(self, *, user_jwt: str, session_id: str) -> bool: ...
 
 
 class SupabaseChatStorage:
@@ -108,16 +122,52 @@ class SupabaseChatStorage:
         if response.status_code >= 400:
             raise ChatStorageError("message_save_failed", response.text)
 
+    PREVIEW_MAX_CHARS = 80
+
     async def list_sessions(self, *, user_jwt: str) -> list[dict[str, Any]]:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
+            sessions_resp = await client.get(
                 f"{self._supabase_url}/rest/v1/chat_sessions",
                 headers=self._headers(user_jwt),
                 params={"select": "id,created_at", "order": "created_at.desc"},
             )
-        if response.status_code >= 400:
-            raise ChatStorageError("list_sessions_failed", response.text)
-        return response.json()
+            if sessions_resp.status_code >= 400:
+                raise ChatStorageError("list_sessions_failed", sessions_resp.text)
+            sessions = sessions_resp.json()
+            if not sessions:
+                return []
+
+            # One extra query for every session's earliest user message,
+            # not N+1 — grouped in Python below to keep just the first
+            # per session_id (order.asc means the first row seen per
+            # session_id is the earliest).
+            session_ids = ",".join(s["id"] for s in sessions)
+            preview_resp = await client.get(
+                f"{self._supabase_url}/rest/v1/chat_messages",
+                headers=self._headers(user_jwt),
+                params={
+                    "session_id": f"in.({session_ids})",
+                    "role": "eq.user",
+                    "select": "session_id,content,created_at",
+                    "order": "created_at.asc",
+                },
+            )
+            if preview_resp.status_code >= 400:
+                raise ChatStorageError("list_sessions_preview_failed", preview_resp.text)
+
+        earliest_by_session: dict[str, str] = {}
+        for row in preview_resp.json():
+            if row["session_id"] not in earliest_by_session:
+                earliest_by_session[row["session_id"]] = row["content"]
+
+        for s in sessions:
+            content = earliest_by_session.get(s["id"])
+            s["preview"] = (
+                (content[: self.PREVIEW_MAX_CHARS] + "…")
+                if content and len(content) > self.PREVIEW_MAX_CHARS
+                else content
+            )
+        return sessions
 
     async def get_messages(
         self, *, user_jwt: str, session_id: str
@@ -161,11 +211,56 @@ class SupabaseChatStorage:
                     raise ChatStorageError("resolve_chunk_documents_failed", chunks_resp.text)
                 chunk_to_document = {c["id"]: c["document_id"] for c in chunks_resp.json()}
 
+            # Titles are new here — the original Stage 2.4 read only ever
+            # needed document *ids* (to pulse graph nodes), never titles.
+            # A real chat-transcript view needs a human-readable label
+            # for each citation chip.
+            document_titles: dict[str, str] = {}
+            document_ids = sorted(set(chunk_to_document.values()))
+            if document_ids:
+                docs_in_list = ",".join(document_ids)
+                docs_resp = await client.get(
+                    f"{self._supabase_url}/rest/v1/documents",
+                    headers=self._headers(user_jwt),
+                    params={"id": f"in.({docs_in_list})", "select": "id,title"},
+                )
+                if docs_resp.status_code >= 400:
+                    raise ChatStorageError("resolve_document_titles_failed", docs_resp.text)
+                document_titles = {d["id"]: d["title"] for d in docs_resp.json()}
+
         for m in messages:
             chunk_ids = m.get("retrieved_chunk_ids") or []
             m["retrieved_document_ids"] = sorted(
                 {chunk_to_document[cid] for cid in chunk_ids if cid in chunk_to_document}
             )
+            if m["role"] != "assistant":
+                m["citations"] = []
+                continue
+            # The exact same extract_citations a live turn uses
+            # (chat/prompt.py) — not a second, drifting reimplementation.
+            # It only reads .chunk_id/.document_id off each item, so
+            # lightweight stand-ins are enough; there's no need to
+            # refetch chunk content just to re-derive citation order.
+            retrieved_stand_ins = [
+                RetrievedChunk(
+                    chunk_id=cid,
+                    document_id=chunk_to_document[cid],
+                    ordinal=0,
+                    content="",
+                    meta={},
+                    relevance_score=0.0,
+                )
+                for cid in chunk_ids
+                if cid in chunk_to_document
+            ]
+            m["citations"] = [
+                {
+                    "chunk_id": c.chunk_id,
+                    "document_id": c.document_id,
+                    "document_title": document_titles.get(c.document_id, "Untitled document"),
+                }
+                for c in extract_citations(m["content"], retrieved_stand_ins)
+            ]
         return messages
 
     async def get_recent_messages(
@@ -191,6 +286,23 @@ class SupabaseChatStorage:
         if response.status_code >= 400:
             raise ChatStorageError("fetch_recent_messages_failed", response.text)
         return list(reversed(response.json()))
+
+    async def delete_session(self, *, user_jwt: str, session_id: str) -> bool:
+        """chat_messages.session_id already cascades on delete (Stage
+        0.2's original schema) — deleting the session row is the whole
+        operation. RLS scopes the DELETE itself, so a session that isn't
+        the caller's own just deletes zero rows rather than erroring —
+        `Prefer: return=representation` is what lets this method tell
+        "deleted" from "not found/not owned" apart."""
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{self._supabase_url}/rest/v1/chat_sessions",
+                headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+                params={"id": f"eq.{session_id}"},
+            )
+        if response.status_code >= 400:
+            raise ChatStorageError("delete_session_failed", response.text)
+        return bool(response.json())
 
 
 _storage: ChatStorage = SupabaseChatStorage()
