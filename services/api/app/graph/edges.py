@@ -51,6 +51,15 @@ EXPLICIT_LINK_WEIGHT = 5.0  # a user's deliberate link starts well above
 DECAY_HALF_LIFE_HOURS = 24 * 7  # one week — an edge untouched for a
 # week reads at half its reinforced weight; never applied to is_explicit
 # edges.
+MIN_RENDERED_WEIGHT = REINFORCEMENT_INCREMENT * 1.5  # a document edge
+# only renders once it's been reinforced more than once (or is explicit,
+# which always clears this). Without a floor here, retrieve.py's
+# FINAL_TOP_K=5 means a *single* question against a small vault already
+# touches half its documents, and every pairwise combination among those
+# five chunks becomes a permanent, fully-opaque edge from that one
+# query — reported live as "all nodes connected" after asking one
+# question. Reinforcement across at least two separate retrievals is a
+# real usage signal; one lucky co-occurrence in a single answer isn't.
 
 
 def _canonical_pair(chunk_id_a: str, chunk_id_b: str) -> tuple[str, str]:
@@ -363,7 +372,9 @@ async def get_associative_document_edges(*, user_jwt: str) -> list[dict[str, Any
         user_jwt=user_jwt, chunk_ids=list(chunk_ids)
     )
     return [
-        e.to_dict() for e in aggregate_to_document_edges(edges, chunk_to_document)
+        e.to_dict()
+        for e in aggregate_to_document_edges(edges, chunk_to_document)
+        if e.weight >= MIN_RENDERED_WEIGHT
     ]
 
 
