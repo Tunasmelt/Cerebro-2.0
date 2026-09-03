@@ -2561,7 +2561,7 @@ directions), plus two new tests in `test_stage_1_7_chat.py` asserting
 `retrieve()` for a short vs. a long query. Full suite: 481/481
 passing, ruff clean.
 
-### Stage 7.10 — Real markdown rendering on chat answers
+### Stage 7.10 — Real markdown rendering on chat answers ✅
 **Exit criteria:** The current mitigation (`SYSTEM_PROMPT_HEADER`
 instructing the model not to echo raw markdown from source chunks) is
 prompt-only — the frontend still renders every answer as a plain-text
@@ -2572,9 +2572,46 @@ the citation-segment-aware text (both `/graph` and `/chat` render
 sites, and the streaming-in-progress path), so intentional formatting
 (lists, emphasis, code) actually renders and anything unintentional at
 least degrades gracefully instead of showing as literal clutter.
-**Tests:** A fixture answer containing markdown renders it correctly on
-both render sites; citation chips still resolve and remain clickable
-inside rendered markdown, not just plain text.
+**Done:** Added `react-markdown` + `remark-gfm` (apps/web only — no
+Render/backend memory-governance implications, that constraint is
+Python-service-specific per CLAUDE.md). New shared
+`components/AnswerMarkdown`, used by both `/chat` (replayed history)
+and `/graph` (live turn, including the streaming-in-progress path —
+previously plain-text-only via `stripCitationMarkers`, now gets real
+formatting too as tokens arrive). Citation handling stays fully
+distrust-by-default: a new `prepareCitationMarkersForMarkdown`
+(citations.ts) rewrites a `[[chunk:<id>]]` marker into a `cite:` link
+*only* if it resolves against the caller's real citations array —
+anything unresolved (hallucinated, server-dropped, or every marker at
+all while streaming, since citations aren't known yet) disappears
+entirely, same as the old `parseAnswerSegments`/`stripCitationMarkers`
+behavior. `AnswerMarkdown`'s `a` override then turns *only* that
+`cite:` scheme into a real citation-chip button (an ordinary link the
+model actually wrote renders as an ordinary link); the chip's index,
+click handler, and tooltip are all still caller-supplied per-page, so
+`/chat` navigates to `/graph?focus=` and `/graph` selects the node
+directly, unchanged from before. A small CSS module resets markdown's
+block-element defaults (`p`/`ul`/`code`/`pre`/`table`) to sit naturally
+inside the existing padded chat-bubble containers on both pages.
+**Tests:** Six new tests on `prepareCitationMarkersForMarkdown`
+(new `citations.test.ts`, this repo's first frontend unit-test file
+alongside `seal.test.ts`) — a resolved marker becomes a `cite:` link;
+an unresolved one disappears with no trace; every marker disappears
+when `citations` is empty (the streaming case); a chunk id containing
+a colon (the sealed-match `<document_id>:<ordinal>` format) is
+URI-encoded correctly; mixed resolved/unresolved markers in one
+string; markdown text with no markers at all passes through
+unchanged. `npx tsc --noEmit`, `eslint`, and `npm run build` all clean
+on every touched file; no regressions in the existing 19-test frontend
+suite. This repo has no React-component-level test infra (no jsdom/
+React Testing Library anywhere, `vitest.config.mts` is
+`environment: "node"`, `.test.ts` only) — adding one wasn't in scope
+for this stage, so `AnswerMarkdown`'s actual rendered output (markdown
+formatting, citation-chip click/tooltip behavior) was verified via
+`npm run build` succeeding plus manual code review of the `a`-override
+logic, not an automated component test or a live browser session
+(no running Supabase-backed session was available in this pass) —
+flagged honestly rather than claimed as browser-verified.
 
 ### Stage 7.11 — SSE heartbeat during retrieval/HyDE
 **Exit criteria:** There's a silent gap today between the user's

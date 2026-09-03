@@ -3,9 +3,9 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
+import AnswerMarkdown from "@/components/AnswerMarkdown";
 import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
-import { parseAnswerSegments, stripCitationMarkers } from "@/lib/graph/citations";
 import { parseSSEStream } from "@/lib/graph/sse";
 import type {
   AssociativeEdge,
@@ -292,31 +292,26 @@ function GraphPageInner() {
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
 
-  // While streaming, citation events (the only source of truth for
-  // which markers are real) haven't all arrived yet — show clean prose
-  // rather than raw [[chunk:...]] syntax. Once done, resolve each
-  // marker against the real citations collected during the stream;
-  // clicking one selects that node on the graph, same as clicking it
-  // directly.
+  // Stage 7.10 — real markdown via AnswerMarkdown, not a plain-text
+  // <span>. While streaming, citation events (the only source of truth
+  // for which markers are real) haven't all arrived yet, so `citations`
+  // is passed empty — every marker disappears rather than resolving,
+  // same "can't resolve yet" reasoning the old stripCitationMarkers
+  // path used, but markdown formatting (lists, emphasis) still renders
+  // live either way. Once done, markers resolve against the real
+  // citations collected during the stream; clicking one selects that
+  // node on the graph, same as clicking it directly.
   function renderAnswer() {
-    if (streaming) return stripCitationMarkers(answer) || "…";
-    return parseAnswerSegments(answer).map((seg, i) => {
-      if (seg.type === "text") return <span key={i}>{seg.text}</span>;
-      const index = citations.findIndex((c) => c.chunk_id === seg.chunkId);
-      if (index === -1) return null; // dropped marker, not a real citation
-      const citation = citations[index];
-      return (
-        <button
-          key={i}
-          type="button"
-          className={styles.citeChip}
-          onClick={() => handleNodeClick(citation.document_id)}
-          title={`Jump to source ${index + 1}`}
-        >
-          {index + 1}
-        </button>
-      );
-    });
+    if (!answer) return streaming ? "…" : null;
+    return (
+      <AnswerMarkdown
+        text={answer}
+        citations={streaming ? [] : citations}
+        citeChipClassName={styles.citeChip}
+        citeChipTitle={(_citation, index) => `Jump to source ${index + 1}`}
+        onCiteClick={(citation) => handleNodeClick(citation.document_id)}
+      />
+    );
   }
 
   return (
