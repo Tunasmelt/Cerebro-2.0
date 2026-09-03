@@ -19,7 +19,6 @@ something a unit test should assert.
 import pytest
 
 from app.ingest import embed as embed_module
-from app.retrieve import image_caption as image_caption_module
 from app.retrieve import retrieve as retrieve_module
 from app.retrieve.retrieve import (
     FINAL_TOP_K,
