@@ -3,6 +3,8 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 
+import Link from "next/link";
+
 import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
 import { parseAnswerSegments } from "@/lib/graph/citations";
@@ -171,11 +173,24 @@ function ChatPageInner() {
   return (
     <AppShell userEmail={email}>
       <div className={styles.shell}>
-        <div className={styles.sessionList}>
+        <div
+          className={`${styles.sessionList} ${selectedSession ? styles.hiddenOnMobile : ""}`}
+        >
           <div className={styles.sessionListHeader}>Chats</div>
           {sessions.length === 0 && (
             <div className={styles.emptyState}>
-              No conversations yet — ask something from the Brain page.
+              <svg width="32" height="32" viewBox="0 0 17 17" fill="none" className={styles.emptyStateIcon}>
+                <path
+                  d="M3 3.5H14V11H8.5L5 13.5V11H3V3.5Z"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>No conversations yet — ask something from the Brain page.</span>
+              <Link href="/graph" className={styles.emptyStateCta}>
+                Start a chat
+              </Link>
             </div>
           )}
           {sessions.map((s) => (
@@ -209,9 +224,26 @@ function ChatPageInner() {
           ))}
         </div>
 
-        <div className={styles.transcript}>
+        <div
+          className={`${styles.transcript} ${!selectedSession ? styles.hiddenOnMobile : ""}`}
+        >
           {!selectedSession && (
-            <div className={styles.emptyState}>Select a conversation to view it.</div>
+            <div className={styles.emptyState}>
+              <svg width="32" height="32" viewBox="0 0 17 17" fill="none" className={styles.emptyStateIcon}>
+                <circle cx="8.5" cy="8.5" r="2.2" fill="currentColor" />
+                <circle cx="3.5" cy="4.5" r="1.3" fill="currentColor" opacity="0.6" />
+                <circle cx="13.5" cy="5" r="1.3" fill="currentColor" opacity="0.6" />
+                <circle cx="4" cy="13" r="1.3" fill="currentColor" opacity="0.6" />
+                <circle cx="13" cy="12.5" r="1.3" fill="currentColor" opacity="0.6" />
+                <path
+                  d="M8.5 8.5L3.5 4.5M8.5 8.5L13.5 5M8.5 8.5L4 13M8.5 8.5L13 12.5"
+                  stroke="currentColor"
+                  strokeWidth="0.8"
+                  opacity="0.4"
+                />
+              </svg>
+              <span>Select a conversation to view it.</span>
+            </div>
           )}
           {selectedSession && loadingMessages && (
             <div className={styles.emptyState}>Loading…</div>
@@ -219,7 +251,16 @@ function ChatPageInner() {
           {selectedSession && !loadingMessages && (
             <>
               <div className={styles.transcriptHeader}>
-                <span>{formatDate(selectedSession.created_at)}</span>
+                <span style={{ display: "flex", alignItems: "center" }}>
+                  <button
+                    className={styles.backBtn}
+                    onClick={() => setSelectedId(null)}
+                    aria-label="Back to chats"
+                  >
+                    ‹
+                  </button>
+                  {formatDate(selectedSession.created_at)}
+                </span>
                 <button
                   className={styles.exportBtn}
                   onClick={(e) => handleExport(selectedSession, e)}

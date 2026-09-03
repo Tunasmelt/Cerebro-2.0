@@ -322,3 +322,37 @@
 .sessionItemLink:hover {
   text-decoration: underline;
 }
+
+/* Nothing in this page had a mobile breakpoint before: the side panel
+   is a fixed 320px pinned 24px from the right edge, which overflows
+   off-screen entirely below ~370px viewport width, and the legend +
+   docs link + chat dock all fight for the same bottom/top strip once
+   the panel is full-width. */
+@media (max-width: 640px) {
+  .sidePanel {
+    top: auto;
+    bottom: 96px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-height: 45vh;
+  }
+  .legend {
+    display: none;
+  }
+  .docsLink {
+    top: 12px;
+    left: 12px;
+    font-size: 12px;
+  }
+  .chatDock {
+    bottom: 12px;
+    width: calc(100% - 24px);
+  }
+  .chatAnswer {
+    max-height: 120px;
+  }
+  .sessionsPanel {
+    max-height: 180px;
+  }
+}
