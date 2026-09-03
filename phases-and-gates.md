@@ -2738,24 +2738,57 @@ a regression guard asserting `GENERATION_CONFIG` never silently grows
 `temperature`/`top_p`/`top_k` keys the live API doesn't accept. Full
 suite: 494/494 passing, ruff clean.
 
-### Stage 7.14 — Clear partial-answer state on mid-stream error
+### Stage 7.14 — Clear partial-answer state on mid-stream error ✅
 **Exit criteria:** If generation fails partway through today, whatever
 tokens already streamed remain visible in the UI sitting right next to
 the error message — ambiguous to a user whether the partial answer is
 trustworthy or not. The frontend should visibly mark a partial answer
 as incomplete/failed rather than leaving it looking like a normal,
 finished response.
-**Tests:** A simulated mid-stream failure after some tokens have
-already rendered leaves the UI in a state that's unambiguous — visibly
-different from both "still streaming" and "completed successfully."
+**Done:** `/graph` (the only live-streaming render site) gets a new
+`answerFailed` state, set whenever an `error` SSE event arrives or the
+stream connection itself fails, reset on every new query. When
+`answerFailed` is true and there's real answer text to be ambiguous
+about, `chatAnswer`'s container gets a `chatAnswerIncomplete` class
+(a red-tinted border, reduced opacity) plus an explicit `⚠ Response
+interrupted — this answer may be incomplete.` notice below the text —
+distinct from both the plain "still streaming" look and a normal
+completed answer's unmodified border/opacity. Deliberately gated on
+`answer` being non-empty too: a failure with zero tokens ever streamed
+has nothing ambiguous to mark — the existing `chatError` message alone
+already reads unambiguously in that case, so no incomplete-notice
+clutter is shown for it. This is the direct companion to Stage 7.12's
+retry boundary: a pre-first-token failure now auto-recovers there;
+this stage is what makes the failures that boundary deliberately
+*doesn't* retry (a real mid-stream failure, after output already
+shipped) visibly honest instead of silently misleading.
+**Tests:** No frontend component-test infra exists in this repo (same
+caveat as Stages 7.10/7.11 — no jsdom/React Testing Library,
+`vitest.config.mts` is `.test.ts`-only). Verified via `tsc --noEmit`,
+`eslint`, and `npm run build` all clean, plus code review of the three
+resulting visual states (streaming / completed / incomplete-after-
+error) against the exit criteria's "unambiguous, distinct from both"
+requirement — not a live browser session or an automated component
+test, flagged honestly rather than claimed as browser-verified.
+Existing 19-test frontend suite unaffected (no logic outside
+`/graph/page.tsx` touched).
 
-### Phase 7 Gate *(future)*
-Each stage above closed individually, with its own tests passing and
-its own live verification where the stage warrants it (matching this
-doc's cross-phase rule below — a gate is never marked passed from a
-chat description of behavior). No single "big bang" PR — same
-incremental, one-stage-at-a-time posture as every other phase in this
-document.
+### Phase 7 Gate *(open — all 14 stages closed, gate itself not yet passed)*
+All 14 stages (7.1–7.14) are individually closed, each with its own
+merged PR, its own passing tests, and CI green throughout. No single
+"big bang" PR — same incremental, one-stage-at-a-time posture as every
+other phase in this document. The gate itself stays open rather than
+marked passed, per this doc's own cross-phase rule below ("a phase
+gate is never marked passed from a chat description of behavior — it
+requires you to have actually driven the live system"): several
+frontend stages in this phase (7.10's markdown rendering, 7.11's
+heartbeat UI, 7.14's incomplete-answer marker) were verified via
+`tsc`/`eslint`/`npm run build`/code review only, not a live browser
+session against a real backend — this repo also has no frontend
+component-test infrastructure to substitute for one. Closing the gate
+needs an actual live pass through `/chat` and `/graph` (a real
+document ingested, a real cross-document question, a deliberately
+slow/failing turn) before this line changes.
 
 ---
 

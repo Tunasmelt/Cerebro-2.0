@@ -272,6 +272,23 @@
   padding: 8px 14px;
 }
 
+/* Stage 7.14 — visibly marks a partial answer as incomplete/failed
+   rather than letting it sit there looking like a normal, finished
+   response right next to the error message above. */
+.chatAnswerIncomplete {
+  border-color: rgba(239, 68, 68, 0.4);
+  opacity: 0.85;
+}
+
+.incompleteNotice {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(239, 68, 68, 0.35);
+  color: #ef4444;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+}
+
 .sessionsPanel {
   width: 100%;
   max-height: 240px;
