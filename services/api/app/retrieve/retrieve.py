@@ -35,6 +35,7 @@ import httpx
 from app.core.sealed_storage import SealedStorageError, get_sealed_storage
 from app.core.tracing import get_tracer
 from app.ingest.embed import get_embed_client
+from app.retrieve.rewrite import rewrite_query
 
 RRF_K = 60  # standard constant from the original RRF paper, not tunable
 # in the way the other defaults below are.
@@ -268,6 +269,7 @@ async def retrieve(
     query: str,
     user_id: str | None = None,
     unlocked: list[UnlockedDocument] | None = None,
+    recent_messages: list[dict[str, str]] | None = None,
 ) -> list[RetrievedChunk]:
     """Five of Stage 1.8's six expected spans live here — embed_query,
     vector_search, fts_search, rrf_fuse, rerank — one per real step in
@@ -280,14 +282,33 @@ async def retrieve(
     Langfuse env vars): get_tracer() returns a client whose span context
     managers are no-ops in that case, confirmed live (Stage 1.8
     conversation record) — never raises, never changes retrieve()'s
-    actual return value."""
+    actual return value.
+
+    Stage 5.1 — `recent_messages`, when given, runs one cheap rewrite
+    call before anything below to resolve pronouns/vague references
+    against that history (see retrieve/rewrite.py). Deliberately not
+    given its own Langfuse span — Stage 1.8's six-span shape is a fixed,
+    regression-tested contract (test_stage_1_8_tracing.py asserts the
+    exact span list), and this stage's own exit criteria doesn't call
+    for tracing the rewrite step. The rewritten text (or the original
+    `query`, unchanged, if rewriting was skipped or failed) is what
+    actually gets embedded/searched/reranked below; `_sealed_exact_matches`
+    still matches against the caller's real, literal `query` — an
+    exact-phrase check against sealed content shouldn't be run against a
+    paraphrase."""
     storage = get_retrieve_storage()
     embed_client = get_embed_client()
     rerank_client = get_rerank_client()
     tracer = get_tracer()
 
+    effective_query = (
+        await rewrite_query(query=query, recent_messages=recent_messages)
+        if recent_messages
+        else query
+    )
+
     with tracer.start_as_current_observation(
-        as_type="span", name="embed_query", input={"query": query}
+        as_type="span", name="embed_query", input={"query": effective_query}
     ) as span:
         # Jina v5's retrieval is an asymmetric bi-encoder — the query side
         # and the indexed-passage side use different task-specific LoRA
@@ -296,7 +317,7 @@ async def retrieve(
         # a generic "explain the image" query embedded without this task
         # ranked a real, correctly-embedded image chunk 16th out of 27
         # total chunks in production — confirmed live, not assumed.
-        query_embedding = await embed_client.embed_text(query, task="retrieval.query")
+        query_embedding = await embed_client.embed_text(effective_query, task="retrieval.query")
         span.update(output={"dimensions": len(query_embedding)})
 
     # Vector search is scoped to documents embedded by the same provider
@@ -319,7 +340,7 @@ async def retrieve(
         as_type="span", name="fts_search", input={"match_count": FTS_CANDIDATES}
     ) as span:
         fts_results = await storage.fts_search(
-            user_jwt=user_jwt, query_text=query, match_count=FTS_CANDIDATES
+            user_jwt=user_jwt, query_text=effective_query, match_count=FTS_CANDIDATES
         )
         span.update(output={"result_count": len(fts_results)})
 
@@ -340,10 +361,12 @@ async def retrieve(
 
     candidates = [by_id[chunk_id] for chunk_id in fused_ids]
     with tracer.start_as_current_observation(
-        as_type="span", name="rerank", input={"query": query, "candidate_count": len(candidates)}
+        as_type="span",
+        name="rerank",
+        input={"query": effective_query, "candidate_count": len(candidates)},
     ) as span:
         rerank_results = await rerank_client.rerank(
-            query=query,
+            query=effective_query,
             documents=[c["content"] for c in candidates],
             top_n=FINAL_TOP_K,
         )
