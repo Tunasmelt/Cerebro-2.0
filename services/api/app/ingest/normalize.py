@@ -239,13 +239,22 @@ async def run_normalize_job(*, user_jwt: str, document_id: str) -> bool:
             return False
 
         ext = _EXT_BY_MIME[out_mime]
+        # Storage's own Content-Type header (not just documents.mime) is
+        # what the browser actually reads when a signed URL is opened
+        # directly — see /documents' "View" button. Without an explicit
+        # charset, a bare "text/plain"/"text/markdown" Content-Type left
+        # the browser guessing (windows-1252 in practice), turning every
+        # UTF-8 multi-byte character (em dashes, curly quotes, …) into
+        # mojibake on screen. The stored bytes were always correct UTF-8
+        # — only the header describing them was wrong.
+        content_type = f"{out_mime}; charset=utf-8" if out_mime in ("text/plain", "text/markdown") else out_mime
         indexed_path = await storage.upload_indexed(
             user_jwt=user_jwt,
             user_id=user_id,
             document_id=document_id,
             ext=ext,
             content=normalized,
-            mime=out_mime,
+            mime=content_type,
         )
         await storage.mark_normalized(
             user_jwt=user_jwt, document_id=document_id, storage_path=indexed_path

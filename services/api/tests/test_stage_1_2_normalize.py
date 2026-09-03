@@ -253,6 +253,37 @@ async def test_run_normalize_job_image_happy_path():
 
 
 @pytest.mark.asyncio
+async def test_run_normalize_job_text_uploads_with_explicit_utf8_charset():
+    """A bare "text/plain"/"text/markdown" Content-Type left the browser
+    guessing an encoding (windows-1252 in practice) when a signed URL was
+    opened directly — every UTF-8 multi-byte character rendered as
+    mojibake. The uploaded bytes were always correct UTF-8; only the
+    header describing them was missing the charset."""
+    original = "Cerebro — architecture notes".encode()
+    storage = _FakeNormalizeStorage(mime="text/plain", original_content=original)
+    normalize_module.set_normalize_storage(storage)
+
+    await run_normalize_job(user_jwt="t", document_id="doc-txt")
+
+    _path, mime, _size = storage.uploaded
+    assert mime == "text/plain; charset=utf-8"
+
+
+@pytest.mark.asyncio
+async def test_run_normalize_job_markdown_uploads_with_explicit_utf8_charset():
+    original = "# Heading—with an em dash".encode()
+    storage = _FakeNormalizeStorage(mime="text/markdown", original_content=original)
+    normalize_module.set_normalize_storage(storage)
+
+    await run_normalize_job(user_jwt="t", document_id="doc-md")
+
+    path, mime, _size = storage.uploaded
+    assert path.endswith("/indexed.md")
+    assert mime == "text/markdown; charset=utf-8"
+    assert storage.marked_normalized == ("doc-md", path)
+
+
+@pytest.mark.asyncio
 async def test_run_normalize_job_corrupt_pdf_marks_failed_not_hangs_or_crashes():
     corrupt = b"%PDF-1.7\n" + b"garbage" * 50
     storage = _FakeNormalizeStorage(mime="application/pdf", original_content=corrupt)
