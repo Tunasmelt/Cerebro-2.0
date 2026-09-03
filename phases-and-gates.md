@@ -2215,6 +2215,225 @@ behavior, per this doc's own cross-phase rule below.
 
 ---
 
+## Phase 7 — RAG pipeline hardening *(planned — stages below are not
+started; this phase exists to capture a requested end-to-end review's
+findings before any of it is implemented, not from pre-planned scope
+like every other phase)*
+
+A full review of ingestion → chunking → embedding → retrieval →
+generation → streaming, done by reading the real code directly (three
+parallel deep-read passes, not from memory or the docs alone) against
+what CLAUDE.md and this file already claimed. Real drift and real gaps
+turned up — some already self-documented in code comments as deferred,
+several not documented anywhere at all. Rather than grab-bag-fixing
+whatever surfaced, the review's own output is this phase: 14 concrete,
+gated stages, grouped by pipeline area, to be worked through one at a
+time. Two are called out as priorities for whenever execution starts:
+**Stage 7.8** (per-document diversity in retrieval results) and
+**Stage 7.12** (a real fallback for Gemini timeouts/request failures —
+today there is zero retry logic anywhere in generation; a single
+timeout kills the whole turn).
+
+RAGAS/faithfulness checking remains blocked on the upstream `ragas`
+import bug (Stage 1.8) — still no automated quality-regression gate for
+any of the retrieval/generation stages below once implemented; each
+stage's own hand-written tests carry that weight until RAGAS is
+unblocked.
+
+### Stage 7.1 — Sentence/paragraph-aware chunk boundaries
+**Exit criteria:** `extract.py`'s `chunk_text()` currently slices on
+raw character offsets (`TEXT_CHUNK_SIZE=1000`, `TEXT_CHUNK_OVERLAP=100`,
+both explicitly flagged in their own comments as untuned first-pass
+defaults) with no word/sentence boundary snapping at all — a chunk can
+start or end mid-word, mid-sentence. Boundaries should snap to the
+nearest sentence/paragraph break within a small tolerance of the
+target size, on both the plain-text and per-page PDF paths, preserving
+the existing overlap behavior.
+**Tests:** A chunk boundary never falls inside a word for realistic
+prose input; existing char-count-based fixture tests updated to assert
+boundary quality, not just count/length.
+
+### Stage 7.2 — Image content matchability for full-text search
+**Exit criteria:** Image chunks always have `content=""`
+(`extract.py`'s `extract_image_chunks`) — only vector search can ever
+surface an image; full-text search has nothing to match against. A
+caption or OCR text should get written into the chunk's real stored
+content (not just used transiently as query-time rerank input, which
+is all `image_caption.py` does today), so an image chunk becomes
+reachable by literal keyword search too, within the 512MB memory
+ceiling.
+**Tests:** A seeded image document with a known caption/OCR text is
+returned by a literal keyword FTS query that has no vector-similarity
+signal to rely on.
+
+### Stage 7.3 — Real streaming I/O for ingest downloads
+**Exit criteria:** architecture-and-security.md §3 documents "Streaming
+I/O — chunked read/write to Supabase storage" as an active memory
+guardrail; in the real code, `normalize.py`, `extract.py`, and
+`embed.py` all buffer the entire file into memory via a single
+`response.content` read. Either implement real chunked/streamed reads,
+or correct the documentation to stop claiming this exists — doc and
+code must agree either way.
+**Tests:** Peak RSS during a large-file ingest measurably drops
+relative to file size once streamed (or the doc's claim is retracted
+with an honest note on why full-buffer reads are acceptable at the
+current 50MB upload cap).
+
+### Stage 7.4 — `mem_watchdog` RSS instrumentation
+**Exit criteria:** architecture-and-security.md §3 also documents "Log
+RSS before/after each ingest stage (`mem_watchdog`)" as existing —
+grepping the codebase finds no such logging anywhere. Add real RSS
+logging around each ingest stage, so a future OOM restart is traceable
+to a specific document and stage instead of a guess.
+**Tests:** A seeded ingest run produces RSS log lines bracketing each
+stage; a deliberately oversized/slow document's peak is visible in
+those logs.
+
+### Stage 7.5 — Stalled-upload expiry sweep + normalize/extract retry path
+**Exit criteria:** Two gaps the architecture doc and `embed.py`'s own
+`check_retry_eligible` docstring already flag as missing: (1) a job
+stuck at `ingest_jobs.state='uploading'` forever (signed URL issued,
+upload never confirmed) has no automated cleanup; (2) a normalize- or
+extract-stage failure currently has no supported retry at all — only
+embed-stage failures are retryable, because blindly re-running
+normalize→extract→embed on retry risks duplicate `chunks` rows (no
+skip-if-already-done check exists in either stage). Close both: an
+expiry sweep for stalled uploads, and a real, safe retry path for
+normalize/extract failures.
+**Tests:** A stalled `uploading` row past its expiry window gets swept
+to `failed` (or deleted) automatically. Retrying a normalize/extract
+failure does not produce duplicate `chunks` rows for the same document.
+
+### Stage 7.6 — Embed failure-mode hardening
+**Exit criteria:** `embed.py`'s `provider_clients[locked_provider]`
+lookup raises a raw `KeyError` — not caught by the surrounding `except
+EmbedError` — if a document's locked provider ever has no matching
+client configured. Should be a graceful `mark_failed`, never an
+unhandled exception reaching the caller. Bundled in this stage: Pillow
+draft-mode decode (the mechanism that keeps a large photo from fully
+decoding before downscaling) only works for JPEG — PNG/WebP uploads
+always decode at full native resolution regardless of size. Needs
+either a real mitigation for those formats or an explicit, documented
+size cap specific to them.
+**Tests:** An embed job with a `locked_provider` value absent from the
+configured client map fails gracefully (`mark_failed`, real error code)
+instead of raising. A large PNG/WebP upload either downscales safely or
+is rejected with a clear error before it can threaten the RAM ceiling.
+
+### Stage 7.7 — Retrieval resilience: soft-fail rerank/vector/FTS
+**Exit criteria:** Query rewrite and HyDE both already degrade
+gracefully on failure (broad `except Exception`, fall back to the
+plain query / no HyDE) — vector search, FTS, and rerank do not; any of
+the three raises an unhandled `RetrieveError` that kills the entire
+turn. Bring these in line with the rest of the pipeline's "degrade,
+don't crash" posture: a Cohere rerank outage degrades to un-reranked
+RRF order instead of failing the question outright; one search leg
+failing (vector or FTS) degrades to whichever leg actually succeeded
+instead of failing both.
+**Tests:** A simulated rerank-API failure still returns a real,
+usable (if unreranked) result set rather than propagating an
+exception. A simulated single-leg search failure (vector-only or
+FTS-only) still returns results from the surviving leg.
+
+### Stage 7.8 — Per-document diversity in top-K results *(priority)*
+**Exit criteria:** Rerank is purely relevance-ranked today — one very
+relevant document can fill all `FINAL_TOP_K=5` slots, starving a
+genuinely cross-document question of material from other real sources.
+Already flagged internally (this file's "Retrieval/generation quality
+review and pass" entry) as a known, deferred gap. Add a diversity
+mechanism (e.g. MMR-style re-ranking, or a soft per-document cap within
+the top-K) that measurably helps true cross-document questions without
+regressing the common single-document case.
+**Tests:** A fixture with one dominant highly-relevant document and
+several tangential ones — a cross-document question's results include
+material from more than one document where they didn't before, and a
+genuinely single-document question's result set is unchanged.
+
+### Stage 7.9 — HyDE latency reconsideration
+**Exit criteria:** HyDE runs unconditionally on every chat turn
+(`stream.py`'s `use_hyde=True`), adding a full extra Gemini round-trip
+before the first token can appear — this overrides Stage 5.2's own
+original design intent (an A/B-able flag, not a silent default).
+Either measure the real cost via Langfuse against production traffic
+and make a deliberate keep/drop call, or make it conditional (e.g. only
+for short/ambiguous queries where the vocabulary-gap problem it solves
+actually applies).
+**Tests:** Langfuse trace data (or a benchmark) quantifies the actual
+added latency; if made conditional, a fixture set confirms it still
+fires for the query shapes it's meant to help and skips for ones it
+isn't.
+
+### Stage 7.10 — Real markdown rendering on chat answers
+**Exit criteria:** The current mitigation (`SYSTEM_PROMPT_HEADER`
+instructing the model not to echo raw markdown from source chunks) is
+prompt-only — the frontend still renders every answer as a plain-text
+`<span>` with only citation-marker parsing (`parseAnswerSegments`).
+Any slip-through, or a future model that's less compliant, shows raw
+`**`/`|`/`#` characters to the user. Apply a real markdown renderer to
+the citation-segment-aware text (both `/graph` and `/chat` render
+sites, and the streaming-in-progress path), so intentional formatting
+(lists, emphasis, code) actually renders and anything unintentional at
+least degrades gracefully instead of showing as literal clutter.
+**Tests:** A fixture answer containing markdown renders it correctly on
+both render sites; citation chips still resolve and remain clickable
+inside rendered markdown, not just plain text.
+
+### Stage 7.11 — SSE heartbeat during retrieval/HyDE
+**Exit criteria:** There's a silent gap today between the user's
+question and the first `token` event — HyDE alone adds a full extra
+Gemini call inside that gap with zero client-visible signal, and there
+is no heartbeat/keepalive event of any kind in the current SSE
+contract. Add a lightweight heartbeat/progress event so the UI can show
+a real "thinking…" state instead of looking frozen during a slow turn.
+**Tests:** A simulated slow retrieval/HyDE path produces at least one
+heartbeat event before the first token; the frontend visibly reflects
+it.
+
+### Stage 7.12 — Generation retry/fallback on Gemini timeout or failure *(priority)*
+**Exit criteria:** Zero retry logic exists anywhere in generation
+today — a single `httpx.ReadTimeout` or any non-2xx response from
+Gemini kills the whole turn immediately, surfaced as one `error` SSE
+event with no automatic recovery attempt. Add one bounded automatic
+retry (with a real backoff, not an immediate retry) before giving up
+and surfacing the error event, so a transient blip doesn't require the
+user to manually re-ask their question.
+**Tests:** A simulated single transient failure/timeout is recovered
+from automatically (the turn completes normally); a simulated
+persistent failure still surfaces the `error` event after the bounded
+retry budget is exhausted, not an infinite retry loop.
+
+### Stage 7.13 — Explicit generation config
+**Exit criteria:** No `temperature`, `max_output_tokens`, `top_p`/
+`top_k`, or safety-settings are set anywhere in the Gemini call
+(`generate.py`) — everything relies on platform defaults, which can
+change or vary without this codebase's knowledge. Set these explicitly
+and deliberately based on what this product actually wants (grounded,
+citation-heavy answers, not creative-writing variance).
+**Tests:** Generation config values are asserted directly in the
+request payload sent to Gemini (fake-transport test, this repo's
+established pattern), not just implied by behavior.
+
+### Stage 7.14 — Clear partial-answer state on mid-stream error
+**Exit criteria:** If generation fails partway through today, whatever
+tokens already streamed remain visible in the UI sitting right next to
+the error message — ambiguous to a user whether the partial answer is
+trustworthy or not. The frontend should visibly mark a partial answer
+as incomplete/failed rather than leaving it looking like a normal,
+finished response.
+**Tests:** A simulated mid-stream failure after some tokens have
+already rendered leaves the UI in a state that's unambiguous — visibly
+different from both "still streaming" and "completed successfully."
+
+### Phase 7 Gate *(future)*
+Each stage above closed individually, with its own tests passing and
+its own live verification where the stage warrants it (matching this
+doc's cross-phase rule below — a gate is never marked passed from a
+chat description of behavior). No single "big bang" PR — same
+incremental, one-stage-at-a-time posture as every other phase in this
+document.
+
+---
+
 ## Cross-phase rules
 
 - A stage exit is not re-litigated once passed — if later work breaks it,
