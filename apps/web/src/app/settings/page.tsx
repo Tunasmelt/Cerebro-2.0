@@ -28,6 +28,10 @@ type Pane = "account" | "security" | "storage";
 const INDEXED_QUOTA_BYTES = 500 * 1024 * 1024;
 const ORIGINALS_QUOTA_BYTES = 1024 * 1024 * 1024;
 
+// Well above any real image-hosting URL, well below anything that
+// could meaningfully bloat the session cookie (see handleProfileSave).
+const MAX_AVATAR_URL_LENGTH = 2000;
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}b`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}kb`;
@@ -47,9 +51,12 @@ export default function SettingsPage() {
   const [newDisplayName, setNewDisplayName] = useState("");
   const [newAvatarUrl, setNewAvatarUrl] = useState("");
   const [profileSaving, setProfileSaving] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [passwordSaving, setPasswordSaving] = useState(false);
 
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
 
@@ -72,13 +79,31 @@ export default function SettingsPage() {
   async function handleProfileSave() {
     setAccountMessage(null);
     setAccountError(null);
+
+    const trimmedAvatarUrl = newAvatarUrl.trim();
+    // Supabase stores user_metadata inside the session JWT, which rides
+    // along as a cookie on every single request (every route, not just
+    // this page) — a data: URI or any very long string pasted in here
+    // bloats that cookie past the platform's request-header size limit
+    // and 494s the entire site for that user, including /signin, with
+    // no way back in except clearing cookies by hand. Reject anything
+    // that could cause that before it ever reaches Supabase.
+    if (trimmedAvatarUrl && !/^https?:\/\//i.test(trimmedAvatarUrl)) {
+      setAccountError("Avatar URL must be a real http(s) link, not a pasted image.");
+      return;
+    }
+    if (trimmedAvatarUrl.length > MAX_AVATAR_URL_LENGTH) {
+      setAccountError(`Avatar URL is too long (max ${MAX_AVATAR_URL_LENGTH} characters).`);
+      return;
+    }
+
     setProfileSaving(true);
     try {
       const supabase = createClient();
       const { error } = await supabase.auth.updateUser({
         data: {
           display_name: newDisplayName.trim() || null,
-          avatar_url: newAvatarUrl.trim() || null,
+          avatar_url: trimmedAvatarUrl || null,
         },
       });
       if (error) {
@@ -94,13 +119,18 @@ export default function SettingsPage() {
   async function handleEmailSave() {
     setAccountMessage(null);
     setAccountError(null);
-    const supabase = createClient();
-    const { error } = await supabase.auth.updateUser({ email: newEmail });
-    if (error) {
-      setAccountError(error.message);
-      return;
+    setEmailSaving(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.updateUser({ email: newEmail });
+      if (error) {
+        setAccountError(error.message);
+        return;
+      }
+      setAccountMessage("Confirmation email sent to the new address.");
+    } finally {
+      setEmailSaving(false);
     }
-    setAccountMessage("Confirmation email sent to the new address.");
   }
 
   async function handlePasswordUpdate() {
@@ -110,22 +140,38 @@ export default function SettingsPage() {
       setAccountError("Password must be at least 8 characters.");
       return;
     }
-    const supabase = createClient();
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) {
-      setAccountError(error.message);
-      return;
+    setPasswordSaving(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) {
+        setAccountError(error.message);
+        return;
+      }
+      setNewPassword("");
+      setAccountMessage("Password updated.");
+    } finally {
+      setPasswordSaving(false);
     }
-    setNewPassword("");
-    setAccountMessage("Password updated.");
   }
 
   async function handleDeleteAccount() {
     setDeleting(true);
-    await authedFetch("/api/account", { method: "DELETE" });
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/");
+    setDeleteError(null);
+    try {
+      const res = await authedFetch("/api/account", { method: "DELETE" });
+      if (!res.ok) {
+        setDeleteError("Couldn't delete your account. Try again.");
+        return;
+      }
+      const supabase = createClient();
+      await supabase.auth.signOut();
+      router.push("/");
+    } catch {
+      setDeleteError("Couldn't delete your account. Try again.");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   if (checking) return null;
@@ -187,6 +233,7 @@ export default function SettingsPage() {
                     type="url"
                     placeholder="https://…"
                     value={newAvatarUrl}
+                    maxLength={MAX_AVATAR_URL_LENGTH}
                     onChange={(e) => setNewAvatarUrl(e.target.value)}
                   />
                 </div>
@@ -209,8 +256,12 @@ export default function SettingsPage() {
                     onChange={(e) => setNewEmail(e.target.value)}
                   />
                 </div>
-                <button className={`${styles.btn} ${styles.btnGhost}`} onClick={handleEmailSave}>
-                  Save changes
+                <button
+                  className={`${styles.btn} ${styles.btnGhost}`}
+                  disabled={emailSaving}
+                  onClick={handleEmailSave}
+                >
+                  {emailSaving ? "Saving…" : "Save changes"}
                 </button>
               </div>
 
@@ -227,9 +278,10 @@ export default function SettingsPage() {
                 </div>
                 <button
                   className={`${styles.btn} ${styles.btnPrimary}`}
+                  disabled={passwordSaving}
                   onClick={handlePasswordUpdate}
                 >
-                  Update password
+                  {passwordSaving ? "Updating…" : "Update password"}
                 </button>
               </div>
 
@@ -258,6 +310,7 @@ export default function SettingsPage() {
                     {deleting ? "Deleting…" : "Delete account"}
                   </button>
                 </div>
+                {deleteError && <p className={styles.errorMessage}>{deleteError}</p>}
               </div>
             </div>
           )}

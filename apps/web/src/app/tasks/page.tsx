@@ -20,26 +20,40 @@ export default function TasksPage() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [completedOpen, setCompletedOpen] = useState(false);
+  // Distinguishes "still loading" from "genuinely no tasks yet" — see
+  // the same fix on Documents/Chat/Brain for why this matters.
+  const [loadingTodos, setLoadingTodos] = useState(true);
+  const [addError, setAddError] = useState<string | null>(null);
 
   useEffect(() => {
     if (checking) return;
     authedFetch("/api/todos")
       .then((res) => res.json())
-      .then((body) => setTodos(body.todos ?? []));
+      .then((body) => setTodos(body.todos ?? []))
+      .finally(() => setLoadingTodos(false));
   }, [checking]);
 
   async function handleAdd() {
     const title = newTitle.trim();
     if (!title) return;
     setNewTitle("");
+    setAddError(null);
 
-    const res = await authedFetch("/api/todos", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title }),
-    });
-    const todo: Todo = await res.json();
-    setTodos((prev) => [todo, ...prev]);
+    try {
+      const res = await authedFetch("/api/todos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) {
+        setAddError("Couldn't add that task. Try again.");
+        return;
+      }
+      const todo: Todo = await res.json();
+      setTodos((prev) => [todo, ...prev]);
+    } catch {
+      setAddError("Couldn't add that task. Try again.");
+    }
   }
 
   async function handleToggle(todo: Todo) {
@@ -57,12 +71,21 @@ export default function TasksPage() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ completed: nowCompleted }),
     });
+    if (!res.ok) {
+      // Roll back the optimistic flip — the server never actually
+      // applied it, so leaving the UI toggled would drift from reality.
+      setTodos((prev) =>
+        prev.map((t) => (t.id === todo.id ? { ...t, completed: todo.completed } : t))
+      );
+      return;
+    }
     const updated: Todo = await res.json();
     setTodos((prev) => prev.map((t) => (t.id === todo.id ? updated : t)));
   }
 
   async function handleDelete(id: string) {
-    await authedFetch(`/api/todos/${id}`, { method: "DELETE" });
+    const res = await authedFetch(`/api/todos/${id}`, { method: "DELETE" });
+    if (!res.ok) return;
     setTodos((prev) => prev.filter((t) => t.id !== id));
   }
 
@@ -90,9 +113,11 @@ export default function TasksPage() {
           }}
         />
       </div>
+      {addError && <div className={styles.addError}>{addError}</div>}
 
       <div className={styles.list}>
-        {active.length === 0 && (
+        {loadingTodos && <div className={styles.emptyState}>Loading tasks…</div>}
+        {!loadingTodos && active.length === 0 && (
           <div className={styles.emptyState}>No tasks yet — add one above.</div>
         )}
         {active.map((todo, i) => (

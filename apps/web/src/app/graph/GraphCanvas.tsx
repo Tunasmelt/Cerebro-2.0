@@ -266,6 +266,37 @@ export default function GraphCanvas({
       controls.minDistance = 1.5;
       controls.maxDistance = 40;
 
+      // Starry background — pure decoration, unlike everything else in
+      // this scene (nothing here is derived from retrieval data). A
+      // static point field on a large sphere shell so the graph reads
+      // as suspended in space instead of floating on a flat dark
+      // rectangle. The very slow autorotation below is fine specifically
+      // because this is decoration, not data — the "orbit only moves in
+      // response to the user" rule elsewhere in this file is about the
+      // real graph content, never the sky behind it.
+      const STAR_COUNT = 1800;
+      const starPositions = new Float32Array(STAR_COUNT * 3);
+      for (let i = 0; i < STAR_COUNT; i++) {
+        const radius = 60 + Math.random() * 60;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        starPositions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+        starPositions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+        starPositions[i * 3 + 2] = radius * Math.cos(phi);
+      }
+      const starGeometry = new THREE.BufferGeometry();
+      starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
+      const starMaterial = new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 0.3,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.6,
+        toneMapped: false,
+      });
+      const stars = new THREE.Points(starGeometry, starMaterial);
+      scene.add(stars);
+
       const MAX_NODES = 4000; // generous static capacity for InstancedMesh
       const nodeGeometry = new THREE.SphereGeometry(NODE_RADIUS, 12, 12);
       const nodeMaterial = new THREE.MeshBasicMaterial({ toneMapped: false });
@@ -671,6 +702,7 @@ export default function GraphCanvas({
       }
 
       function draw() {
+        stars.rotation.y += 0.00008;
         tick3D();
         updateNodeInstances();
         updateEdges();
@@ -761,6 +793,8 @@ export default function GraphCanvas({
         renderer.domElement.removeEventListener("click", handleClick);
         cancelAnimationFrame(raf);
         controls.dispose();
+        starGeometry.dispose();
+        starMaterial.dispose();
         nodeGeometry.dispose();
         nodeMaterial.dispose();
         satelliteGeometry.dispose();

@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/components/AppShell";
+import ConfirmModal from "@/components/ConfirmModal";
 import { authedFetch } from "@/lib/api";
 import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./kanban.module.css";
@@ -40,6 +41,8 @@ export default function KanbanPage() {
   const [newCardTitle, setNewCardTitle] = useState("");
   const draggedCardId = useRef<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
+  const [deletePromptFor, setDeletePromptFor] = useState<Card | null>(null);
+  const [deletingCard, setDeletingCard] = useState(false);
 
   // Stage 4.5 (stretch) — a tool-calling agent turn, separate from
   // /playground's plain generation and from the normal chat page. Lazily
@@ -98,15 +101,25 @@ export default function KanbanPage() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ column_name: columnName, title }),
     });
+    if (!res.ok) return;
     const card: Card = await res.json();
     setBoard((prev) => (prev ? { ...prev, cards: [...prev.cards, card] } : prev));
   }
 
-  async function handleDeleteCard(cardId: string) {
-    await authedFetch(`/api/cards/${cardId}`, { method: "DELETE" });
-    setBoard((prev) =>
-      prev ? { ...prev, cards: prev.cards.filter((c) => c.id !== cardId) } : prev
-    );
+  async function confirmDeleteCard() {
+    const card = deletePromptFor;
+    if (!card) return;
+    setDeletingCard(true);
+    try {
+      const res = await authedFetch(`/api/cards/${card.id}`, { method: "DELETE" });
+      if (!res.ok) return;
+      setBoard((prev) =>
+        prev ? { ...prev, cards: prev.cards.filter((c) => c.id !== card.id) } : prev
+      );
+      setDeletePromptFor(null);
+    } finally {
+      setDeletingCard(false);
+    }
   }
 
   function handleDragStart(cardId: string) {
@@ -288,7 +301,7 @@ export default function KanbanPage() {
                   )}
                   <button
                     className={styles.deleteButton}
-                    onClick={() => handleDeleteCard(card.id)}
+                    onClick={() => setDeletePromptFor(card)}
                     aria-label="Delete card"
                   >
                     ×
@@ -345,6 +358,24 @@ export default function KanbanPage() {
         })}
       </div>
     </div>
+
+    {deletePromptFor && (
+      <ConfirmModal
+        title="Delete card"
+        body={
+          <>
+            Delete <strong>&ldquo;{deletePromptFor.title}&rdquo;</strong>? This can&apos;t be
+            undone.
+          </>
+        }
+        confirmLabel={deletingCard ? "Deleting…" : "Delete"}
+        cancelLabel="Cancel"
+        danger
+        loading={deletingCard}
+        onConfirm={confirmDeleteCard}
+        onCancel={() => setDeletePromptFor(null)}
+      />
+    )}
     </AppShell>
   );
 }

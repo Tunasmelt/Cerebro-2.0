@@ -24,6 +24,23 @@
   letter-spacing: 0.04em;
 }
 
+.modalError {
+  font-size: var(--text-xs);
+  color: var(--danger-hover);
+  margin: var(--space-2) var(--space-4) 0;
+}
+
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .sessionRow {
   display: flex;
   align-items: center;
@@ -32,6 +49,7 @@
   padding: var(--space-3) var(--space-4);
   cursor: pointer;
   border-left: 2px solid transparent;
+  animation: rowIn var(--duration-base) var(--ease-soft) backwards;
 }
 .sessionRow:hover {
   background: var(--bg-elevated-hover);

@@ -287,7 +287,7 @@ export default function PlaygroundPage() {
                 {running ? "Running…" : "Run"}
               </button>
 
-              {runError && <div className={styles.emptyState}>{runError}</div>}
+              {runError && <div className={styles.runError}>{runError}</div>}
 
               <div className={styles.responseBlock}>
                 <span className={styles.responseLabel}>

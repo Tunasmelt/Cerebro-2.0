@@ -90,11 +90,22 @@ function ChatPageInner() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletePromptFor, setDeletePromptFor] = useState<ChatSession | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  // Distinguishes "still loading" from "genuinely no conversations yet"
+  // — without this the empty-state CTA flashed before the first fetch
+  // resolved, even for accounts with plenty of chat history.
+  const [loadingSessions, setLoadingSessions] = useState(true);
 
   const fetchSessions = useCallback(async () => {
-    const res = await authedFetch("/api/chat/sessions");
-    const body = await res.json();
-    setSessions(body.sessions ?? []);
+    try {
+      const res = await authedFetch("/api/chat/sessions");
+      const body = await res.json();
+      setSessions(body.sessions ?? []);
+    } finally {
+      setLoadingSessions(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -130,22 +141,39 @@ function ChatPageInner() {
     const session = deletePromptFor;
     if (!session) return;
     setDeletingId(session.id);
+    setDeleteError(null);
     try {
-      await authedFetch(`/api/chat/sessions/${session.id}`, { method: "DELETE" });
+      const res = await authedFetch(`/api/chat/sessions/${session.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        setDeleteError("Couldn't delete this conversation. Try again.");
+        return;
+      }
       setSessions((prev) => prev.filter((s) => s.id !== session.id));
       if (selectedId === session.id) setSelectedId(null);
+      setDeletePromptFor(null);
     } finally {
       setDeletingId(null);
-      setDeletePromptFor(null);
     }
   }
 
   async function handleExport(session: ChatSession, e: React.MouseEvent) {
     e.stopPropagation();
-    const res = await authedFetch(`/api/chat/sessions/${session.id}/messages`);
-    const body = await res.json();
-    const msgs: ChatMessage[] = body.messages ?? [];
-    downloadFile(`cerebro-chat-${session.id.slice(0, 8)}.md`, exportMarkdown(session, msgs));
+    setExportingId(session.id);
+    setExportError(null);
+    try {
+      const res = await authedFetch(`/api/chat/sessions/${session.id}/messages`);
+      if (!res.ok) {
+        setExportError("Couldn't export this conversation. Try again.");
+        return;
+      }
+      const body = await res.json();
+      const msgs: ChatMessage[] = body.messages ?? [];
+      downloadFile(`cerebro-chat-${session.id.slice(0, 8)}.md`, exportMarkdown(session, msgs));
+    } catch {
+      setExportError("Couldn't export this conversation. Try again.");
+    } finally {
+      setExportingId(null);
+    }
   }
 
   function renderMessageText(m: ChatMessage) {
@@ -185,7 +213,13 @@ function ChatPageInner() {
           className={`${styles.sessionList} ${selectedSession ? styles.hiddenOnMobile : ""}`}
         >
           <div className={styles.sessionListHeader}>Chats</div>
-          {sessions.length === 0 && (
+          {exportError && <div className={styles.modalError}>{exportError}</div>}
+          {loadingSessions && (
+            <div className={styles.emptyState}>
+              <span>Loading conversations…</span>
+            </div>
+          )}
+          {!loadingSessions && sessions.length === 0 && (
             <div className={styles.emptyState}>
               <svg width="32" height="32" viewBox="0 0 17 17" fill="none" className={styles.emptyStateIcon}>
                 <path
@@ -201,10 +235,11 @@ function ChatPageInner() {
               </Link>
             </div>
           )}
-          {sessions.map((s) => (
+          {sessions.map((s, i) => (
             <div
               key={s.id}
               className={`${styles.sessionRow} ${s.id === selectedId ? styles.sessionRowActive : ""}`}
+              style={{ animationDelay: `${Math.min(i, 12) * 25}ms` }}
               onClick={() => setSelectedId(s.id)}
             >
               <div className={styles.sessionRowMain}>
@@ -215,9 +250,10 @@ function ChatPageInner() {
                 <button
                   className={styles.iconBtn}
                   title="Export"
+                  disabled={exportingId === s.id}
                   onClick={(e) => handleExport(s, e)}
                 >
-                  ↓
+                  {exportingId === s.id ? "…" : "↓"}
                 </button>
                 <button
                   className={styles.iconBtn}
@@ -271,9 +307,10 @@ function ChatPageInner() {
                 </span>
                 <button
                   className={styles.exportBtn}
+                  disabled={exportingId === selectedSession.id}
                   onClick={(e) => handleExport(selectedSession, e)}
                 >
-                  Export
+                  {exportingId === selectedSession.id ? "Exporting…" : "Export"}
                 </button>
               </div>
               <div className={styles.messages}>
@@ -298,6 +335,7 @@ function ChatPageInner() {
             <>
               Delete <strong>&ldquo;{deletePromptFor.preview || "New conversation"}&rdquo;</strong>?
               This can&apos;t be undone.
+              {deleteError && <div className={styles.modalError}>{deleteError}</div>}
             </>
           }
           confirmLabel={deletingId ? "Deleting…" : "Delete"}
@@ -305,7 +343,10 @@ function ChatPageInner() {
           danger
           loading={!!deletingId}
           onConfirm={confirmDelete}
-          onCancel={() => setDeletePromptFor(null)}
+          onCancel={() => {
+            setDeletePromptFor(null);
+            setDeleteError(null);
+          }}
         />
       )}
     </AppShell>
