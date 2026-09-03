@@ -1790,6 +1790,38 @@ browsers/OSes) all updated.
 fix prevents). 409/409 backend tests passing, `ruff` clean. Frontend
 `eslint` clean.
 
+### View fixes: mojibake and popup misdirection ✅
+Found live, right after markdown upload support shipped: opening a
+`.md`/`.txt` document's signed URL showed garbled text (`â€"` instead of
+`—`), and clicking "View" opened a new blank tab while the actual file
+loaded into the *original* Documents tab, replacing it.
+**Root cause 1 (encoding):** the indexed object's `Content-Type` header
+was uploaded as a bare `text/plain`/`text/markdown`, no charset —
+`normalize.py`'s `upload_indexed` call now sends `; charset=utf-8` for
+both. The stored bytes were always correct UTF-8; only the header
+describing them was wrong, so the browser fell back to guessing
+(windows-1252 in practice) whenever a signed URL was opened directly.
+Only fixes *future* normalizes — an already-uploaded document with the
+old header needs to be deleted and re-uploaded to pick up the fix; no
+migration touches existing Storage objects.
+**Root cause 2 (View button):** `handleView` passed `"noopener,noreferrer"`
+to `window.open` — per spec, either flag makes the call return `null`
+instead of a window reference, even though the browser still opens the
+tab. The code's own null-check then silently took its "popup blocked"
+fallback (`window.location.href = url`), navigating the *current* tab
+away from Documents while the tab the browser actually opened stayed
+blank forever. Fixed by opening with no flags (keeping the reference)
+and nulling `pending.opener` directly afterward — same reverse-
+tabnabbing protection `noopener` was there for, without losing control
+of the tab.
+**Tests:** `test_run_normalize_job_text_uploads_with_explicit_utf8_charset`,
+`test_run_normalize_job_markdown_uploads_with_explicit_utf8_charset`
+(new). The `window.open` fix is DOM-interaction behavior with no
+practical way to assert the "browser returns null for noopener" spec
+behavior in a unit test — verified by reading the MDN spec and the
+screenshots that reproduced it, not a new test. 411/411 backend tests
+passing, `ruff` clean. Frontend `eslint` clean.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks

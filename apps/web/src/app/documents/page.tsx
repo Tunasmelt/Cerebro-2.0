@@ -257,7 +257,16 @@ export default function DocumentsPage() {
     // Opening a blank tab synchronously here, then pointing it at the
     // real URL once it's fetched, keeps the whole thing inside the
     // gesture instead.
-    const pending = window.open("", "_blank", "noopener,noreferrer");
+    //
+    // Passing "noopener" (or "noreferrer", which implies it) to
+    // window.open makes the browser return null instead of a usable
+    // window reference — the new tab still opens, but this code has no
+    // handle to set its location, so it silently fell through to the
+    // same-tab fallback below and left the popup blank forever. Get a
+    // real reference here, then null out its `opener` directly — same
+    // reverse-tabnabbing protection, without losing control of the tab.
+    const pending = window.open("", "_blank");
+    if (pending) pending.opener = null;
     try {
       const res = await authedFetch(`/api/documents/${doc.id}/download`);
       const body = await res.json();
