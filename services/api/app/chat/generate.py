@@ -19,14 +19,46 @@ client — text deltas are yielded as they arrive; every other event type
 (interaction.created, step.start, step.stop, interaction.completed) is
 ignored, since chat/stream.py only needs the raw token stream, not
 Gemini's own step/usage bookkeeping.
+
+Stage 7.12 — bounded retry. Zero retry logic existed anywhere here: a
+single `httpx.ReadTimeout` or non-2xx response killed the whole turn
+immediately (surfaced by chat/stream.py as one `error` SSE event, no
+recovery attempt). Both `stream_text` and `run_interaction` now retry
+once (`GENERATE_MAX_RETRIES`), after a real backoff
+(`GENERATE_RETRY_BACKOFF_SECONDS`), on a `GenerateError` (non-2xx) or
+`httpx.TransportError` (connection/timeout) — never on anything else,
+so a real bug doesn't get silently retried and masked.
+
+`stream_text`'s retry is deliberately narrower than `run_interaction`'s:
+once any real text delta has already been yielded to the caller (and
+therefore already forwarded to the client as a `token` SSE event —
+chat/stream.py streams deltas through as they arrive, it doesn't
+buffer), a retry would either duplicate that text or silently
+overwrite it with a fresh generation the client already saw a
+different draft of. Neither is acceptable, so a mid-stream failure
+after any output has shipped is never retried — it propagates exactly
+as before this stage, which is deliberately still Stage 7.14's problem
+("clear partial-answer state on mid-stream error"), not this one's. A
+failure before the first delta — the actual `httpx.ReadTimeout`/non-2xx
+scenario this stage's exit criteria describes — is the case that's
+actually safe to retry transparently, since the caller has seen
+nothing yet.
 """
+import asyncio
 import json
+import logging
 import os
 from typing import AsyncIterator, Protocol
 
 import httpx
 
 from app.core.http_client import CachedHttpClientMixin
+
+logger = logging.getLogger(__name__)
+
+GENERATE_MAX_RETRIES = 1  # bounded — one retry, never an infinite loop.
+GENERATE_RETRY_BACKOFF_SECONDS = 1.0  # a real backoff, not an immediate
+# re-hit of an API that may already be struggling.
 
 GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 # gemini-3.7-flash was tried first (per CLAUDE.md's Gemini-for-generation
@@ -94,28 +126,48 @@ class GeminiGenerateClient(CachedHttpClientMixin):
         self, *, system_instruction: str, input_text: str
     ) -> AsyncIterator[str]:
         client = self._client()
-        async with client.stream(
-            "POST",
-            GEMINI_INTERACTIONS_URL,
-            headers={
-                "x-goog-api-key": self._api_key,
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": GEMINI_MODEL,
-                "input": input_text,
-                "system_instruction": system_instruction,
-                "stream": True,
-            },
-        ) as response:
-            if response.status_code >= 400:
-                body = await response.aread()
-                raise GenerateError("generate_call_failed", body.decode())
+        attempt = 0
+        while True:
+            yielded_any = False
+            try:
+                async with client.stream(
+                    "POST",
+                    GEMINI_INTERACTIONS_URL,
+                    headers={
+                        "x-goog-api-key": self._api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": GEMINI_MODEL,
+                        "input": input_text,
+                        "system_instruction": system_instruction,
+                        "stream": True,
+                    },
+                ) as response:
+                    if response.status_code >= 400:
+                        body = await response.aread()
+                        raise GenerateError("generate_call_failed", body.decode())
 
-            async for line in response.aiter_lines():
-                text = parse_sse_line(line)
-                if text:
-                    yield text
+                    async for line in response.aiter_lines():
+                        text = parse_sse_line(line)
+                        if text:
+                            yielded_any = True
+                            yield text
+                return
+            except (GenerateError, httpx.TransportError):
+                # Only ever retried before any real output has shipped
+                # to the caller — see this module's docstring for why a
+                # mid-stream failure after real text already streamed
+                # must not be retried.
+                if yielded_any or attempt >= GENERATE_MAX_RETRIES:
+                    raise
+                attempt += 1
+                logger.warning(
+                    "Gemini stream_text failed before any text was produced "
+                    "(attempt %d/%d) — retrying after backoff",
+                    attempt, GENERATE_MAX_RETRIES,
+                )
+                await asyncio.sleep(GENERATE_RETRY_BACKOFF_SECONDS)
 
 
 async def run_interaction(
@@ -150,15 +202,30 @@ async def run_interaction(
     if previous_interaction_id:
         payload["previous_interaction_id"] = previous_interaction_id
 
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        response = await client.post(
-            GEMINI_INTERACTIONS_URL,
-            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-            json=payload,
-        )
-    if response.status_code >= 400:
-        raise GenerateError("generate_call_failed", response.text)
-    return response.json()
+    attempt = 0
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                response = await client.post(
+                    GEMINI_INTERACTIONS_URL,
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    json=payload,
+                )
+            if response.status_code >= 400:
+                raise GenerateError("generate_call_failed", response.text)
+            return response.json()
+        except (GenerateError, httpx.TransportError):
+            # Non-streaming — no partial output to worry about
+            # duplicating, so this is always safe to retry within budget.
+            if attempt >= GENERATE_MAX_RETRIES:
+                raise
+            attempt += 1
+            logger.warning(
+                "Gemini run_interaction failed (attempt %d/%d) — "
+                "retrying after backoff",
+                attempt, GENERATE_MAX_RETRIES,
+            )
+            await asyncio.sleep(GENERATE_RETRY_BACKOFF_SECONDS)
 
 
 _client: GenerateClient = GeminiGenerateClient()

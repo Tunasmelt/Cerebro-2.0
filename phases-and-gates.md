@@ -2649,7 +2649,7 @@ component-test infra, same caveat as Stage 7.10), so the visible
 "Thinking…" behavior was verified by code review, not a live browser
 session.
 
-### Stage 7.12 — Generation retry/fallback on Gemini timeout or failure *(priority)*
+### Stage 7.12 — Generation retry/fallback on Gemini timeout or failure *(priority)* ✅
 **Exit criteria:** Zero retry logic exists anywhere in generation
 today — a single `httpx.ReadTimeout` or any non-2xx response from
 Gemini kills the whole turn immediately, surfaced as one `error` SSE
@@ -2657,10 +2657,40 @@ event with no automatic recovery attempt. Add one bounded automatic
 retry (with a real backoff, not an immediate retry) before giving up
 and surfacing the error event, so a transient blip doesn't require the
 user to manually re-ask their question.
-**Tests:** A simulated single transient failure/timeout is recovered
-from automatically (the turn completes normally); a simulated
-persistent failure still surfaces the `error` event after the bounded
-retry budget is exhausted, not an infinite retry loop.
+**Done:** New `GENERATE_MAX_RETRIES=1` / `GENERATE_RETRY_BACKOFF_
+SECONDS=1.0` in `chat/generate.py`, applied to both `stream_text`
+(the live chat path) and `run_interaction` (HyDE/rewrite/captioning/
+tool calls) — one retry, after a real 1s backoff, on a `GenerateError`
+(non-2xx) or `httpx.TransportError` (connection/timeout), never on
+anything else so a real bug isn't silently retried and masked.
+`run_interaction` is non-streaming, so its retry is unconditional
+within budget — nothing to duplicate. `stream_text`'s retry is
+narrower by design: it only ever fires before any real text delta has
+been yielded to the caller. Once one has (and therefore already been
+forwarded to the client as a `token` SSE event — `chat/stream.py`
+streams deltas through as they arrive, never buffers), a retry would
+either duplicate that text or silently overwrite it with a different
+draft the client already saw part of — neither is acceptable, so a
+mid-stream failure after any output has shipped still propagates
+exactly as before this stage. That's deliberately left as Stage
+7.14's problem ("clear partial-answer state on mid-stream error"),
+not this one's — this stage only closes the "silent failure before
+the user sees anything at all" gap the exit criteria actually
+describes.
+**Tests:** New `test_stage_7_12_generate_retry.py`, 7 tests. Four on
+`stream_text` (a hand-built fake httpx client, not a real transport —
+needed to deterministically simulate "fails partway through, after
+already yielding text," which a real transport can't easily do):
+recovers from a connection error before any text; recovers from a
+non-2xx response before any text; gives up after the retry budget
+(exactly `GENERATE_MAX_RETRIES + 1` attempts, not an infinite loop);
+and the safety property — a mid-stream failure *after* real text has
+shipped is never retried, raises immediately, exactly one attempt
+made. Three on `run_interaction` (real fake-transport pattern, same as
+`test_stage_3_6_document_storage.py`): recovers from a transient
+timeout; recovers from a non-2xx response; gives up after the retry
+budget on a persistent failure. Full suite: 490/490 passing, ruff
+clean.
 
 ### Stage 7.13 — Explicit generation config
 **Exit criteria:** No `temperature`, `max_output_tokens`, `top_p`/
