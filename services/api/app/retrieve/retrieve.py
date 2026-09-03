@@ -310,10 +310,11 @@ async def retrieve(
     exact-phrase check against sealed content shouldn't be run against a
     paraphrase.
 
-    Stage 5.2 — `use_hyde`, off by default and not wired into
-    chat/stream.py (this stage's own exit criteria calls for an
-    A/B-able flag, not a silent default-on switch): when True, one more
-    cheap generation call writes a short hypothetical answer to
+    Stage 5.2 — `use_hyde`, off by default in this function (its own
+    exit criteria called for an A/B-able flag, not a silent default-on
+    switch) but explicitly turned on by `chat/stream.py`'s real chat
+    turns as of the retrieval-quality pass: when True, one more cheap
+    generation call writes a short hypothetical answer to
     `effective_query` (see retrieve/hyde.py), and *that* — not the real
     query — is what gets embedded for vector search specifically. FTS
     and rerank still use `effective_query`: a hypothetical passage may

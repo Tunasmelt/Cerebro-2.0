@@ -13,6 +13,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
+from app.chat import generate as generate_module
 from app.chat import storage as chat_storage_module
 from app.chat.generate import set_generate_client
 from app.core import auth as auth_module
@@ -117,6 +118,14 @@ def chat_storage():
     return _FakeChatStorage()
 
 
+async def _no_op_run_interaction(**kwargs):
+    # retrieve() now runs HyDE unconditionally (chat/stream.py passes
+    # use_hyde=True) — without this stub, every route test that reaches
+    # stream_chat would fire a real network call to Gemini via
+    # retrieve/hyde.py's run_interaction.
+    return {"steps": []}
+
+
 @pytest.fixture(autouse=True)
 def _wire_test_seams(keypair, chat_storage, monkeypatch):
     _private_key, public_key = keypair
@@ -127,6 +136,7 @@ def _wire_test_seams(keypair, chat_storage, monkeypatch):
     retrieve_module.set_rerank_client(_FakeRerankClient())
     retrieve_module.set_retrieve_storage(_FakeRetrieveStorage())
     set_generate_client(_FakeGenerateClient())
+    monkeypatch.setattr(generate_module, "run_interaction", _no_op_run_interaction)
     yield
     auth_module.set_jwks_client(None)
     chat_storage_module.set_chat_storage(chat_storage_module.SupabaseChatStorage())

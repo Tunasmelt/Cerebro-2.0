@@ -38,6 +38,7 @@ from typing import AsyncIterator
 from app.chat.generate import get_generate_client
 from app.chat.prompt import build_system_instruction, extract_citations
 from app.chat.storage import get_chat_storage
+from app.core.documents_storage import get_documents_storage
 from app.core.tracing import get_tracer
 from app.graph.edges import get_chunk_edges_storage
 from app.retrieve.retrieve import retrieve
@@ -89,9 +90,42 @@ async def stream_chat(
                 retrieved_chunk_ids=[],
             )
 
+            # Retrieval quality pass — Stage 5.2's HyDE was fully built
+            # and tested but never actually turned on here (its own exit
+            # criteria wanted an A/B-able flag, not a silent default).
+            # A vague prompt is exactly where it earns its keep: a short
+            # query like "what's in the schedule" shares little
+            # vocabulary with dense indexed passages, but a hypothetical
+            # answer written in passage-shaped language closes that gap
+            # for vector search. Same "degrade, don't crash" contract as
+            # every other quality step in retrieve() — a failed or empty
+            # hypothetical falls back to embedding the real query.
             chunks = await retrieve(
-                user_jwt=user_jwt, query=query, recent_messages=recent_messages
+                user_jwt=user_jwt,
+                query=query,
+                recent_messages=recent_messages,
+                use_hyde=True,
             )
+
+            # Retrieval quality pass — chunks alone never told the model
+            # which document each one came from, so a question spanning
+            # more than one source ("what does the schedule say vs the
+            # PDF") got answered by a model that had no way to tell them
+            # apart. Best-effort and never part of the critical failure
+            # path: build_system_instruction already degrades to its old
+            # flat, title-less format when document_titles is empty, the
+            # exact same shape a lookup failure here produces.
+            document_titles: dict[str, str] = {}
+            try:
+                document_titles = await get_documents_storage().get_titles(
+                    user_jwt=user_jwt,
+                    document_ids=list({c.document_id for c in chunks}),
+                )
+            except Exception:
+                logger.exception(
+                    "resolving document titles for chat prompt failed for session %s",
+                    session_id,
+                )
 
             # Stage 5.3 — the associative memory graph's primary, free
             # edge source: every pair of chunks that landed in this
@@ -124,7 +158,7 @@ async def stream_chat(
                 },
             )
 
-            system_instruction = build_system_instruction(chunks)
+            system_instruction = build_system_instruction(chunks, document_titles)
             full_text = ""
             with tracer.start_as_current_observation(
                 as_type="generation",

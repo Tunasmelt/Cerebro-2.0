@@ -104,6 +104,10 @@ class DocumentsStorage(Protocol):
         self, *, user_jwt: str, document_id: str
     ) -> dict[str, Any] | None: ...
 
+    async def get_titles(
+        self, *, user_jwt: str, document_ids: list[str]
+    ) -> dict[str, str]: ...
+
     async def get_signed_url(
         self, *, user_jwt: str, document_id: str, variant: str
     ) -> str: ...
@@ -301,6 +305,29 @@ class SupabaseDocumentsStorage:
         document["ingest_state"] = job_rows[0]["state"] if job_rows else None
         document["last_error"] = job_rows[0]["last_error"] if job_rows else None
         return document
+
+    async def get_titles(
+        self, *, user_jwt: str, document_ids: list[str]
+    ) -> dict[str, str]:
+        """Bulk id -> title lookup, RLS-scoped like every other query here
+        (a foreign document_id just resolves to nothing, not an error).
+        Same shape chat/storage.py's get_messages and chat/playground.py
+        already built inline for their own citation/badge display — this
+        is that pattern made reusable instead of a third copy, for
+        Retrieval quality's chat/stream.py use: labeling each context
+        block with its real source document name (see chat/prompt.py's
+        build_system_instruction)."""
+        if not document_ids:
+            return {}
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers=self._headers(user_jwt),
+                params={"id": f"in.({','.join(document_ids)})", "select": "id,title"},
+            )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="document_titles_lookup_failed")
+        return {d["id"]: d["title"] for d in response.json()}
 
     async def get_signed_url(
         self, *, user_jwt: str, document_id: str, variant: str

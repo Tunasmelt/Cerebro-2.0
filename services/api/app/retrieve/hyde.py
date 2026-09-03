@@ -22,14 +22,17 @@ is the one detail that makes HyDE's premise ("answer-shaped text
 overlaps document chunks better") actually hold at the embedding level,
 not just conceptually.
 
-Strictly opt-in and never a new way for retrieval to fail: `retrieve()`
-only takes this path when explicitly asked (`use_hyde=True`, off by
-default and not wired into chat/stream.py — this stage's own exit
-criteria calls for a flag "so it can be A/B'd against direct retrieval
-rather than replacing it outright," not a silent default-on switch). A
-failed or empty generation falls back to `None`, and `retrieve()` falls
-back to embedding the real query exactly as it does when `use_hyde` is
-False.
+Off by default in `retrieve()` itself (`use_hyde=False`) — this stage's
+own exit criteria called for a flag "so it can be A/B'd against direct
+retrieval rather than replacing it outright," not a silent default-on
+switch for every caller of `retrieve()`. Retrieval quality pass: live
+chat turns (`chat/stream.py`'s `stream_chat`) now pass `use_hyde=True`
+explicitly — a short, vague prompt is exactly where closing the
+question/passage vocabulary gap earns its keep, and this was a fully-
+built, tested capability sitting unused. Never a new way for retrieval
+to fail either way: a failed or empty generation falls back to `None`,
+and `retrieve()` falls back to embedding the real query exactly as it
+does when `use_hyde` is False.
 """
 import logging
 
