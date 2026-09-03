@@ -2000,6 +2000,21 @@ passing (up from 418), `ruff` clean on the whole repo — including the
 full existing suite passing unmodified, confirming no test-file
 changes were actually needed.
 
+**Unrelated CI casualty, fixed alongside:** this PR's own CI run hit
+`test_draft_mode_decode_uses_meaningfully_less_peak_memory`
+(`test_stage_1_2_normalize.py`) failing consistently — 3/3 identical
+"0 bytes RSS for both" failures — despite staying 424/424 clean
+locally on every run and touching code nowhere near this change. Root
+cause: that test's own pytest process runs 400+ other tests first; by
+the time it runs, glibc's malloc arena on Linux CI typically already
+holds freed-but-resident pages from earlier tests' large allocations,
+so its new allocation gets satisfied without RSS ever growing —
+Windows' allocator behaves differently, hence never reproducing
+locally. Fixed by isolating the actual before/after measurement in a
+fresh subprocess, which has no prior allocation history to be
+satisfied from. Confirmed stable: passed 3/3 on repeated local runs and
+green on this PR's next CI run.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks
