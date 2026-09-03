@@ -144,6 +144,7 @@ class _FakeSealedStorage:
     def __init__(self):
         self.sealed_calls = []
         self.seal_error: SealedStorageError | None = None
+        self.salt_to_return: str | None = None
         self.claim_to_issue: UnlockClaim | None = None
         self.unlock_error: SealedStorageError | None = None
         self.unseal_result: list | None = None
@@ -153,6 +154,9 @@ class _FakeSealedStorage:
         if self.seal_error:
             raise self.seal_error
         self.sealed_calls.append((document_id, chunks))
+
+    async def get_salt(self, *, user_jwt, document_id):
+        return self.salt_to_return
 
     async def create_unlock_claim(self, *, user_jwt, user_id, document_id, key_b64):
         if self.unlock_error:
@@ -217,6 +221,37 @@ def test_seal_rejects_a_document_whose_ingest_isnt_finished_yet(client, keypair)
     )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "not_ready"
+
+
+# --- Route tests: /seal-salt (needed before the client can even attempt --------
+# --- an unlock — it has to re-derive the key against the right salt) -----------
+
+
+def test_get_seal_salt_returns_the_salt(client, keypair):
+    private_key, _ = keypair
+    fake = _FakeSealedStorage()
+    fake.salt_to_return = "c2FsdA=="
+    sealed_storage_module.set_sealed_storage(fake)
+
+    response = client.get("/api/v1/documents/doc-1/seal-salt", headers=auth_headers(private_key))
+    assert response.status_code == 200
+    assert response.json() == {"salt": "c2FsdA=="}
+
+
+def test_get_seal_salt_not_sealed_returns_404(client, keypair):
+    private_key, _ = keypair
+    fake = _FakeSealedStorage()
+    fake.salt_to_return = None
+    sealed_storage_module.set_sealed_storage(fake)
+
+    response = client.get("/api/v1/documents/doc-1/seal-salt", headers=auth_headers(private_key))
+    assert response.status_code == 404
+
+
+def test_get_seal_salt_requires_auth(client):
+    sealed_storage_module.set_sealed_storage(_FakeSealedStorage())
+    response = client.get("/api/v1/documents/doc-1/seal-salt")
+    assert response.status_code == 401
 
 
 # --- Route tests: /unlock ---------------------------------------------------

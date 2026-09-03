@@ -47,6 +47,19 @@ async def seal_document(request: Request, document_id: str, body: SealBody):
     return JSONResponse({"id": document_id, "status": "sealed"}, status_code=200)
 
 
+@router.get("/api/v1/documents/{document_id}/seal-salt")
+async def get_seal_salt(request: Request, document_id: str):
+    """The one piece of information the client needs before it can even
+    attempt an unlock: the salt its own passphrase must be re-derived
+    against. Not secret (see SupabaseSealedStorage.get_salt's docstring)
+    — RLS still scopes this to the caller's own document either way."""
+    storage = get_sealed_storage()
+    salt = await storage.get_salt(user_jwt=request.state.user_jwt, document_id=document_id)
+    if salt is None:
+        return _error("not_found", "No sealed content for this document", 404)
+    return JSONResponse({"salt": salt}, status_code=200)
+
+
 class UnlockBody(BaseModel):
     key: str  # base64 — the Argon2id-derived AES-256-GCM key, this request only
 

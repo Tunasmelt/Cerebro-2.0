@@ -44,15 +44,21 @@ export function generateNonce(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
 }
 
-/** Derives a non-extractable AES-256-GCM CryptoKey from a passphrase and
- * salt. Deterministic: the same passphrase + salt always derives the
- * same key, which is what lets a later unlock (Stage 3.3) re-derive the
- * key from the same salt instead of it ever being stored. */
-export async function deriveKey(
+/** The Argon2id derivation alone, no WebCrypto import — the raw bytes a
+ * document's unlock flow needs to send to the server as-is (base64),
+ * since per CLAUDE.md/architecture-and-security.md the derived key
+ * *does* transit to the server per unlock/unseal request (the server
+ * decrypts there — that's the whole point of "not zero-knowledge").
+ * deriveKey below wraps this for the sealing path, where a real
+ * non-extractable CryptoKey is what's actually needed for
+ * crypto.subtle.encrypt. Deterministic: the same passphrase + salt
+ * always derives the same bytes, which is what lets a later unlock
+ * re-derive the exact key from the same stored (non-secret) salt. */
+export async function deriveKeyBytes(
   passphrase: string,
   salt: Uint8Array
-): Promise<CryptoKey> {
-  const rawKey = await argon2id({
+): Promise<Uint8Array> {
+  return argon2id({
     password: passphrase,
     salt,
     iterations: ARGON2_ITERATIONS,
@@ -61,7 +67,17 @@ export async function deriveKey(
     hashLength: AES_KEY_BITS / 8,
     outputType: "binary",
   });
+}
 
+/** Derives a non-extractable AES-256-GCM CryptoKey from a passphrase and
+ * salt. Deterministic: the same passphrase + salt always derives the
+ * same key, which is what lets a later unlock (Stage 3.3) re-derive the
+ * key from the same salt instead of it ever being stored. */
+export async function deriveKey(
+  passphrase: string,
+  salt: Uint8Array
+): Promise<CryptoKey> {
+  const rawKey = await deriveKeyBytes(passphrase, salt);
   return crypto.subtle.importKey(
     "raw",
     toBufferSource(rawKey),
@@ -79,7 +95,10 @@ export interface SealedPayload {
 
 /** Encrypts file bytes client-side. Generates a fresh salt (so deriveKey
  * output is scoped to this file) and a fresh nonce (AES-GCM's nonce must
- * never repeat for the same key). */
+ * never repeat for the same key). Fine for sealing a single standalone
+ * payload; a multi-chunk document must NOT call this once per chunk —
+ * see sealChunkWithKey below for why, and documents/page.tsx's
+ * handleConfirmSeal for the real orchestration. */
 export async function sealBytes(
   plaintext: Uint8Array,
   passphrase: string
@@ -95,6 +114,34 @@ export async function sealBytes(
   );
 
   return { ciphertext: new Uint8Array(encrypted), salt, nonce };
+}
+
+export interface SealedChunkPayload {
+  ciphertext: Uint8Array;
+  nonce: Uint8Array;
+}
+
+/** Encrypts one chunk with an already-derived key — only the nonce is
+ * fresh per call. This is the correct AES-GCM pattern for a multi-chunk
+ * document: one key derived once (via deriveKey, from one salt), reused
+ * across every chunk with a unique nonce each time, exactly what
+ * unseal_document on the backend has only ever assumed (it decrypts
+ * every chunk of a document with one caller-supplied key). A real bug
+ * this replaces: sealing every chunk through sealBytes() independently
+ * gave each one its own fresh salt and therefore its own different
+ * derived key, even though they share one passphrase — the backend
+ * could only ever correctly decrypt a document's first chunk. */
+export async function sealChunkWithKey(
+  plaintext: Uint8Array,
+  key: CryptoKey
+): Promise<SealedChunkPayload> {
+  const nonce = generateNonce();
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: toBufferSource(nonce) },
+    key,
+    toBufferSource(plaintext)
+  );
+  return { ciphertext: new Uint8Array(encrypted), nonce };
 }
 
 /** Decrypts a sealed payload given the same passphrase used to seal it.

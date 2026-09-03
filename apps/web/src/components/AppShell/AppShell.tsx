@@ -113,7 +113,28 @@ export default function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  // Collapsed state persists across reloads via localStorage — starts
+  // false (matches SSR markup, avoids a hydration mismatch) and syncs
+  // to the stored value on mount.
   const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem("cerebro:sidebar-collapsed") === "1");
+    } catch {
+      // storage unavailable (private browsing, etc.) — keep default
+    }
+  }, []);
+  function toggleCollapsed() {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem("cerebro:sidebar-collapsed", next ? "1" : "0");
+      } catch {
+        // storage unavailable — collapse still works for this session
+      }
+      return next;
+    });
+  }
   const [menuOpen, setMenuOpen] = useState(false);
   // Sidebar is a fixed off-canvas drawer below the mobile breakpoint
   // (see AppShell.module.css's @media block) — closed by default so a
@@ -154,7 +175,7 @@ export default function AppShell({
           </span>
           <button
             className={`${styles.collapseBtn} ${collapsed ? styles.collapseBtnFlipped : ""}`}
-            onClick={() => setCollapsed((c) => !c)}
+            onClick={toggleCollapsed}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             ‹

@@ -3,8 +3,9 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/components/AppShell";
+import ConfirmModal from "@/components/ConfirmModal";
 import { authedFetch } from "@/lib/api";
-import { sealBytes } from "@/lib/crypto/seal";
+import { deriveKey, deriveKeyBytes, generateSalt, sealChunkWithKey } from "@/lib/crypto/seal";
 import type { DocumentRow } from "@/lib/graph/types";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthedUser } from "@/lib/useAuthedUser";
@@ -18,6 +19,13 @@ function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
   return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 // Mirrors services/api/app/core/documents_storage.py's ALLOWED_MIME_TYPES —
@@ -95,6 +103,12 @@ const ACTION_ICONS: Record<string, React.ReactNode> = {
       <path d="M4.5 6.5V4.5a2.5 2.5 0 0 1 5 0V6.5" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   ),
+  unlock: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect x="3" y="6.5" width="8" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M4.5 6.5V4.5a2.5 2.5 0 0 1 5 0" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  ),
   view: (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <path d="M1.5 7S3.8 3 7 3s5.5 4 5.5 4-2.3 4-5.5 4S1.5 7 1.5 7Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
@@ -132,9 +146,22 @@ export default function DocumentsPage() {
   const [sealing, setSealing] = useState(false);
   const [sealError, setSealError] = useState<string | null>(null);
 
+  const [unlockPromptFor, setUnlockPromptFor] = useState<string | null>(null);
+  const [unlockPassphrase, setUnlockPassphrase] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  // Decrypted content lives only in memory, keyed by document id, never
+  // written anywhere else — closing it (closeUnsealedContent) is the
+  // only way it goes away, same "never persisted" posture as the
+  // passphrase-derived key itself.
+  const [unsealedContent, setUnsealedContent] = useState<
+    Record<string, { ordinal: number; content: string }[]>
+  >({});
+
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletePromptFor, setDeletePromptFor] = useState<DocumentRow | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
+  const [viewErrorMessage, setViewErrorMessage] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameSaving, setRenameSaving] = useState(false);
@@ -272,7 +299,7 @@ export default function DocumentsPage() {
       const body = await res.json();
       if (!res.ok) {
         pending?.close();
-        alert(body?.error?.message || "Could not open this document");
+        setViewErrorMessage(body?.error?.message || "Could not open this document");
         return;
       }
       if (pending) {
@@ -398,16 +425,27 @@ export default function DocumentsPage() {
       const chunksBody = await chunksRes.json();
       const chunks: { ordinal: number; content: string }[] = chunksBody.chunks ?? [];
 
-      // Each chunk is sealed independently with its own fresh salt/nonce
-      // (sealBytes generates both per call) — the passphrase itself
-      // never leaves this function, only the resulting ciphertext does.
+      // One salt, derived once for the whole document — not once per
+      // chunk. A real bug this fixed: calling sealBytes() independently
+      // per chunk gave each one its own fresh salt and therefore its
+      // own different derived key, even though they share one
+      // passphrase, so the backend (which decrypts every chunk of a
+      // document with one caller-supplied key) could only ever
+      // correctly unseal a document's first chunk. One key reused with
+      // a fresh nonce per chunk is the correct AES-GCM pattern, and the
+      // one the unlock flow below actually depends on. The passphrase
+      // itself never leaves this function, only the resulting
+      // ciphertext (and the public, non-secret salt) does.
+      const salt = generateSalt();
+      const key = await deriveKey(passphrase, salt);
+      const saltB64 = bytesToBase64(salt);
       const sealedChunks = await Promise.all(
         chunks.map(async (chunk) => {
-          const payload = await sealBytes(new TextEncoder().encode(chunk.content), passphrase);
+          const payload = await sealChunkWithKey(new TextEncoder().encode(chunk.content), key);
           return {
             ordinal: chunk.ordinal,
             content_ciphertext: bytesToBase64(payload.ciphertext),
-            salt: bytesToBase64(payload.salt),
+            salt: saltB64,
             nonce: bytesToBase64(payload.nonce),
           };
         })
@@ -435,6 +473,83 @@ export default function DocumentsPage() {
     } finally {
       setSealing(false);
     }
+  }
+
+  function openUnlockPrompt(documentId: string) {
+    setUnlockPromptFor(documentId);
+    setUnlockPassphrase("");
+    setUnlockError(null);
+  }
+
+  // Unlock is a three-step round trip, per Stage 3.3's design: (1) fetch
+  // the document's salt (not secret — needed just to re-derive the
+  // exact key it was sealed with), (2) POST /unlock, which server-side
+  // test-decrypts one real chunk against the derived key and — only if
+  // that succeeds — issues a short-lived (15min) claim scoped to this
+  // document, (3) POST /unseal with that claim + the same key, which
+  // decrypts and returns every chunk. The derived key transits the
+  // server on steps 2/3 by design (see CLAUDE.md's naming-discipline
+  // note: this is "passphrase-gated," deliberately never called
+  // "zero-knowledge") — never stored, never sent anywhere else, and
+  // never persisted client-side either; closing the view is what clears
+  // it from this page's own memory.
+  async function handleConfirmUnlock(documentId: string) {
+    const passphrase = unlockPassphrase;
+    if (!passphrase) return;
+    setUnlocking(true);
+    setUnlockError(null);
+    try {
+      const saltRes = await authedFetch(`/api/documents/${documentId}/seal-salt`);
+      if (!saltRes.ok) {
+        const body = await saltRes.json().catch(() => ({}));
+        throw new Error(body?.error?.message || "Could not find sealed content for this document");
+      }
+      const { salt } = await saltRes.json();
+      const keyBytes = await deriveKeyBytes(passphrase, base64ToBytes(salt));
+      const keyB64 = bytesToBase64(keyBytes);
+
+      const unlockRes = await authedFetch(`/api/documents/${documentId}/unlock`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: keyB64 }),
+      });
+      if (!unlockRes.ok) {
+        const body = await unlockRes.json().catch(() => ({}));
+        throw new Error(
+          body?.error?.code === "invalid_key"
+            ? "Incorrect passphrase"
+            : body?.error?.message || "Could not unlock this document"
+        );
+      }
+      const { claim_id: claimId } = await unlockRes.json();
+
+      const unsealRes = await authedFetch(`/api/documents/${documentId}/unseal`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ claim_id: claimId, key: keyB64 }),
+      });
+      if (!unsealRes.ok) {
+        const body = await unsealRes.json().catch(() => ({}));
+        throw new Error(body?.error?.message || "Could not decrypt this document");
+      }
+      const unsealBody = await unsealRes.json();
+
+      setUnsealedContent((prev) => ({ ...prev, [documentId]: unsealBody.chunks ?? [] }));
+      setUnlockPromptFor(null);
+      setUnlockPassphrase("");
+    } catch (err) {
+      setUnlockError(err instanceof Error ? err.message : "Could not unlock this document");
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
+  function closeUnsealedContent(documentId: string) {
+    setUnsealedContent((prev) => {
+      const next = { ...prev };
+      delete next[documentId];
+      return next;
+    });
   }
 
   function handleDeclineActionItem(documentId: string, item: ActionItemCandidate) {
@@ -638,6 +753,16 @@ export default function DocumentsPage() {
                           {ACTION_ICONS.view}
                         </button>
                       )}
+                      {doc.status === "sealed" && (
+                        <button
+                          className={styles.iconActionBtn}
+                          onClick={() => openUnlockPrompt(doc.id)}
+                          title="Unlock"
+                          aria-label="Unlock"
+                        >
+                          {ACTION_ICONS.unlock}
+                        </button>
+                      )}
                       <button
                         className={`${styles.iconActionBtn} ${styles.iconActionBtnDanger}`}
                         disabled={deletingId === doc.id}
@@ -686,6 +811,73 @@ export default function DocumentsPage() {
                         </button>
                         {sealError && <span className={styles.sealPromptError}>{sealError}</span>}
                       </div>
+                    </td>
+                  </tr>
+                )}
+                {unlockPromptFor === doc.id && (
+                  <tr>
+                    <td colSpan={5} className={styles.actionItemsCell}>
+                      <div className={styles.sealPrompt}>
+                        <span className={styles.sealPromptLabel}>
+                          Enter the passphrase this document was sealed with.
+                        </span>
+                        <input
+                          type="password"
+                          autoFocus
+                          className={styles.sealPromptInput}
+                          placeholder="Passphrase"
+                          value={unlockPassphrase}
+                          onChange={(e) => setUnlockPassphrase(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleConfirmUnlock(doc.id);
+                            if (e.key === "Escape") setUnlockPromptFor(null);
+                          }}
+                          disabled={unlocking}
+                        />
+                        <button
+                          className={styles.retryBtn}
+                          disabled={!unlockPassphrase || unlocking}
+                          onClick={() => handleConfirmUnlock(doc.id)}
+                        >
+                          {unlocking ? "Unlocking…" : "Unlock"}
+                        </button>
+                        <button
+                          className={styles.retryBtn}
+                          disabled={unlocking}
+                          onClick={() => setUnlockPromptFor(null)}
+                        >
+                          Cancel
+                        </button>
+                        {unlockError && <span className={styles.sealPromptError}>{unlockError}</span>}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                {unsealedContent[doc.id] && (
+                  <tr>
+                    <td colSpan={5} className={styles.actionItemsCell}>
+                      <div className={styles.unsealedHeader}>
+                        <span className={styles.sealPromptLabel}>
+                          Unlocked — visible only in this view, never saved unsealed.
+                        </span>
+                        <button className={styles.retryBtn} onClick={() => closeUnsealedContent(doc.id)}>
+                          Close
+                        </button>
+                      </div>
+                      {unsealedContent[doc.id].length === 0 ? (
+                        <span className={styles.emptyRow}>No content found.</span>
+                      ) : (
+                        <div className={styles.actionItemsList}>
+                          {unsealedContent[doc.id]
+                            .slice()
+                            .sort((a, b) => a.ordinal - b.ordinal)
+                            .map((chunk) => (
+                              <div key={chunk.ordinal} className={styles.unsealedChunk}>
+                                {chunk.content}
+                              </div>
+                            ))}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )}
@@ -739,34 +931,31 @@ export default function DocumentsPage() {
       </div>
 
       {deletePromptFor && (
-        <div
-          className={styles.modalOverlay}
-          onClick={() => !deletingId && setDeletePromptFor(null)}
-        >
-          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <h2 className={styles.modalTitle}>Delete document</h2>
-            <p className={styles.modalBody}>
+        <ConfirmModal
+          title="Delete document"
+          body={
+            <>
               Delete <strong>&ldquo;{deletePromptFor.title}&rdquo;</strong>? This can&apos;t be
               undone.
-            </p>
-            <div className={styles.modalActions}>
-              <button
-                className={styles.retryBtn}
-                disabled={!!deletingId}
-                onClick={() => setDeletePromptFor(null)}
-              >
-                Cancel
-              </button>
-              <button
-                className={`${styles.retryBtn} ${styles.dangerBtn}`}
-                disabled={!!deletingId}
-                onClick={confirmDelete}
-              >
-                {deletingId ? "Deleting…" : "Delete"}
-              </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          confirmLabel={deletingId ? "Deleting…" : "Delete"}
+          cancelLabel="Cancel"
+          danger
+          loading={!!deletingId}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeletePromptFor(null)}
+        />
+      )}
+
+      {viewErrorMessage && (
+        <ConfirmModal
+          title="Can't open this document"
+          body={viewErrorMessage}
+          confirmLabel="OK"
+          onConfirm={() => setViewErrorMessage(null)}
+          onCancel={() => setViewErrorMessage(null)}
+        />
       )}
     </div>
     </AppShell>
