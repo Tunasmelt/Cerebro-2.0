@@ -24,6 +24,8 @@ from fastapi.testclient import TestClient
 from app.core import auth as auth_module
 from app.core import documents_storage as storage_module
 from app.core.documents_storage import MAX_CAPTURE_CHARS, SupabaseDocumentsStorage
+from app.ingest import embed as embed_module
+from app.ingest import extract as extract_module
 from app.main import app
 
 TEST_ISSUER = "https://test-project.supabase.co/auth/v1"
@@ -48,6 +50,70 @@ class _FakeDocumentsStorage:
         return self.document_id_to_return
 
 
+class _NoOpExtractStorage:
+    """Route-level tests exercise POST /documents/capture through the
+    real FastAPI app, which schedules _run_capture_pipeline as a real
+    BackgroundTask — and TestClient runs background tasks synchronously
+    as part of the request, so without this seam the real
+    SupabaseExtractStorage singleton would fire a real httpx call.
+    Same no-op pattern test_stage_1_1_upload.py already established for
+    exactly this reason."""
+
+    async def get_document(self, *, user_jwt, document_id):
+        return {
+            "user_id": TEST_SUB,
+            "mime": "text/plain",
+            "source": "capture",
+            "captured_text": "",
+            "storage_path": "unused",
+            "original_storage_path": "unused",
+        }
+
+    async def download_indexed(self, *, user_jwt, path):
+        return b""
+
+    async def download_original(self, *, user_jwt, path):
+        return b""
+
+    async def insert_chunks(self, **kwargs):
+        pass
+
+    async def mark_extracted(self, **kwargs):
+        pass
+
+    async def mark_failed(self, **kwargs):
+        pass
+
+
+class _NoOpEmbedStorage:
+    """Empty captured_text -> zero chunks -> extract succeeds and chains
+    into embed too; this keeps that leg off the real singleton as well."""
+
+    async def get_document(self, *, user_jwt, document_id):
+        return {"user_id": TEST_SUB, "mime": "text/plain", "original_storage_path": "unused"}
+
+    async def get_chunks(self, *, user_jwt, document_id):
+        return []
+
+    async def download_original(self, *, user_jwt, path):
+        return b""
+
+    async def get_checkpoint(self, *, user_jwt, document_id):
+        return {}
+
+    async def save_checkpoint(self, **kwargs):
+        pass
+
+    async def update_chunk_embedding(self, **kwargs):
+        pass
+
+    async def mark_ready(self, **kwargs):
+        pass
+
+    async def mark_failed(self, **kwargs):
+        pass
+
+
 @pytest.fixture
 def keypair():
     private_key = ec.generate_private_key(ec.SECP256R1())
@@ -65,9 +131,13 @@ def _wire_test_seams(keypair, documents_storage, monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://test-project.supabase.co")
     auth_module.set_jwks_client(_StubJWKClient(public_key))
     storage_module.set_documents_storage(documents_storage)
+    extract_module.set_extract_storage(_NoOpExtractStorage())
+    embed_module.set_embed_storage(_NoOpEmbedStorage())
     yield
     auth_module.set_jwks_client(None)
     storage_module.set_documents_storage(storage_module.SupabaseDocumentsStorage())
+    extract_module.set_extract_storage(extract_module.SupabaseExtractStorage())
+    embed_module.set_embed_storage(embed_module.SupabaseEmbedStorage())
 
 
 @pytest.fixture
