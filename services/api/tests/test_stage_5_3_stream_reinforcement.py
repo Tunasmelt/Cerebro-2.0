@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from app.chat import generate as generate_module
 from app.chat import storage as chat_storage_module
 from app.chat import stream as stream_module
 from app.chat.generate import GeminiGenerateClient, set_generate_client
@@ -79,8 +80,16 @@ def _chunk(chunk_id, content, document_id=None):
     }
 
 
+async def _no_op_run_interaction(**kwargs):
+    # retrieve() now runs HyDE unconditionally (chat/stream.py passes
+    # use_hyde=True) — without this stub every test here would fire a
+    # real network call to Gemini via retrieve/hyde.py's run_interaction.
+    return {"steps": []}
+
+
 @pytest.fixture(autouse=True)
-def _reset():
+def _reset(monkeypatch):
+    monkeypatch.setattr(generate_module, "run_interaction", _no_op_run_interaction)
     yield
     embed_module.set_embed_client(embed_module.JinaEmbedClient())
     retrieve_module.set_rerank_client(retrieve_module.CohereRerankClient())

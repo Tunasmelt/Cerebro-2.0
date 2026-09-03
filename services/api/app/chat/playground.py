@@ -183,10 +183,15 @@ class ChatPlaygroundStorage:
         # display content, for readability; the real input-token count
         # (and the cost derived from it) is estimated from the actual
         # assembled string build_system_instruction produces live —
-        # including the "[[chunk:id]]" markers and joiners the sections
-        # above don't repeat per-badge — plus the query, so cost can't
-        # silently drift from what a live turn really sends.
-        assembled_instruction = build_system_instruction(chunks)
+        # including the "[[chunk:id]]" markers, "### Source:" headers,
+        # and joiners the sections above don't repeat per-badge — plus
+        # the query, so cost can't silently drift from what a live turn
+        # really sends. document_titles was already fetched above for
+        # the per-section citation badges (line ~165) — reused here
+        # rather than a second lookup, and it's what keeps this estimate
+        # from quietly going stale now that a live turn's prompt is
+        # grouped/labeled by source, not just a flat chunk list.
+        assembled_instruction = build_system_instruction(chunks, document_titles)
         response_tokens = estimate_tokens(message["content"])
         input_tokens = estimate_tokens(assembled_instruction) + estimate_tokens(query_text)
         total_tokens = input_tokens + response_tokens

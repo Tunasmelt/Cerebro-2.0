@@ -18,10 +18,12 @@ import json
 
 import pytest
 
+from app.chat import generate as generate_module
 from app.chat import storage as chat_storage_module
 from app.chat import stream as stream_module
 from app.chat.generate import GeminiGenerateClient, parse_sse_line, set_generate_client
 from app.chat.prompt import build_system_instruction, extract_citations
+from app.core import documents_storage as documents_storage_module
 from app.ingest import embed as embed_module
 from app.retrieve import retrieve as retrieve_module
 from app.retrieve.retrieve import RetrievedChunk
@@ -116,14 +118,29 @@ def _chunk(chunk_id, content, document_id=None):
     }
 
 
+async def _no_op_run_interaction(**kwargs):
+    # Retrieval quality pass — retrieve() now runs HyDE unconditionally
+    # (chat/stream.py passes use_hyde=True), which calls this same
+    # run_interaction under the hood (retrieve/hyde.py). Without a stub,
+    # every test in this file would fire a real network call to Gemini —
+    # this file's own docstring promises "deterministic and network-free".
+    # Empty output makes generate_hypothetical_answer fall back to None,
+    # identical to how these tests behaved before HyDE existed.
+    return {"steps": []}
+
+
 @pytest.fixture(autouse=True)
-def _reset():
+def _reset(monkeypatch):
+    monkeypatch.setattr(generate_module, "run_interaction", _no_op_run_interaction)
     yield
     embed_module.set_embed_client(embed_module.JinaEmbedClient())
     retrieve_module.set_rerank_client(retrieve_module.CohereRerankClient())
     retrieve_module.set_retrieve_storage(retrieve_module.SupabaseRetrieveStorage())
     set_generate_client(GeminiGenerateClient())
     chat_storage_module.set_chat_storage(chat_storage_module.SupabaseChatStorage())
+    documents_storage_module.set_documents_storage(
+        documents_storage_module.SupabaseDocumentsStorage()
+    )
 
 
 def _wire_retrieve(chunks: list[dict]):
@@ -311,6 +328,76 @@ async def test_no_relevant_content_still_emits_retrieval_before_done():
     assert events[-1][0] == "done"
 
 
+# --- retrieval quality: real document titles reach the generation prompt -----
+
+
+class _FakeDocumentsStorageTitlesOnly:
+    """Only implements get_titles — stream_chat's title-resolution call
+    is the only DocumentsStorage method a chat turn should ever touch."""
+
+    def __init__(self, titles: dict[str, str]):
+        self._titles = titles
+        self.calls: list[list[str]] = []
+
+    async def get_titles(self, *, user_jwt, document_ids):
+        self.calls.append(sorted(document_ids))
+        return {did: self._titles[did] for did in document_ids if did in self._titles}
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_labels_context_with_the_real_document_title():
+    """End-to-end wiring proof: stream_chat resolves the retrieved
+    chunks' real document titles and the generation call actually
+    receives a prompt labeled with them — not just that
+    build_system_instruction can do it in isolation."""
+    _wire_retrieve(
+        [_chunk("c1111111-1111-1111-1111-111111111111", "9am meeting", document_id="d1111111-1111-1111-1111-111111111111")]
+    )
+    fake_docs_storage = _FakeDocumentsStorageTitlesOnly(
+        {"d1111111-1111-1111-1111-111111111111": "Schedule.jpg"}
+    )
+    documents_storage_module.set_documents_storage(fake_docs_storage)
+    generate_client = _FakeGenerateClient(["it's at 9am"])
+    set_generate_client(generate_client)
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query="when's the meeting?"
+        )
+    )
+
+    assert fake_docs_storage.calls == [["d1111111-1111-1111-1111-111111111111"]]
+    assert '### Source: "Schedule.jpg"' in generate_client.calls[0]["system_instruction"]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_title_lookup_failure_degrades_to_flat_prompt_not_a_failed_turn():
+    """Best-effort, same posture as chunk-edge reinforcement: a broken
+    title lookup must never turn into a failed chat turn."""
+
+    class _BrokenDocumentsStorage:
+        async def get_titles(self, *, user_jwt, document_ids):
+            raise RuntimeError("simulated documents-table outage")
+
+    _wire_retrieve(
+        [_chunk("c1111111-1111-1111-1111-111111111111", "content")]
+    )
+    documents_storage_module.set_documents_storage(_BrokenDocumentsStorage())
+    generate_client = _FakeGenerateClient(["answer"])
+    set_generate_client(generate_client)
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    events = await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t", user_id="u1", session_id="session-1", query="q"
+        )
+    )
+
+    assert events[-1][0] == "done"
+    assert '### Source: "' not in generate_client.calls[0]["system_instruction"]
+
+
 # --- persistence: real retrieved_chunk_ids stored on the assistant message -----
 
 
@@ -357,6 +444,116 @@ def test_build_system_instruction_includes_chunk_markers_and_content():
 def test_build_system_instruction_handles_empty_context():
     instruction = build_system_instruction([])
     assert "No relevant context" in instruction
+
+
+def test_build_system_instruction_without_titles_stays_flat_and_unlabeled():
+    """No document_titles given (e.g. an older call site) — same flat,
+    title-less format as before this change, not a behavior change for
+    callers that haven't been updated to fetch titles."""
+    chunks = [
+        RetrievedChunk(
+            chunk_id="c1111111-1111-1111-1111-111111111111",
+            document_id="d1111111-1111-1111-1111-111111111111",
+            ordinal=0,
+            content="Paris is the capital of France.",
+            meta={},
+            relevance_score=0.9,
+        )
+    ]
+    instruction = build_system_instruction(chunks)
+    assert '### Source: "' not in instruction
+
+
+def test_build_system_instruction_groups_chunks_under_labeled_source_headers():
+    """The real gap this closes: a question spanning more than one
+    document got answered by a model that had no way to tell which chunk
+    came from which file. Chunks from the same document must be grouped
+    under one labeled header, in first-appearance (rerank) order."""
+    chunks = [
+        RetrievedChunk(
+            chunk_id="c1111111-1111-1111-1111-111111111111",
+            document_id="d1111111-1111-1111-1111-111111111111",
+            ordinal=0,
+            content="The schedule shows a 9am meeting.",
+            meta={},
+            relevance_score=0.95,
+        ),
+        RetrievedChunk(
+            chunk_id="c2222222-2222-2222-2222-222222222222",
+            document_id="d2222222-2222-2222-2222-222222222222",
+            ordinal=0,
+            content="The QA plan requires two reviewers.",
+            meta={},
+            relevance_score=0.9,
+        ),
+        RetrievedChunk(
+            chunk_id="c3333333-3333-3333-3333-333333333333",
+            document_id="d1111111-1111-1111-1111-111111111111",
+            ordinal=1,
+            content="The 9am meeting is in room 4.",
+            meta={},
+            relevance_score=0.8,
+        ),
+    ]
+    document_titles = {
+        "d1111111-1111-1111-1111-111111111111": "Schedule.jpg",
+        "d2222222-2222-2222-2222-222222222222": "QA Engineer.pdf",
+    }
+    instruction = build_system_instruction(chunks, document_titles)
+
+    assert '### Source: "Schedule.jpg"' in instruction
+    assert '### Source: "QA Engineer.pdf"' in instruction
+    # The first document's two chunks land in one contiguous group, not
+    # interleaved with the other document's chunk between them.
+    schedule_section = instruction.split('### Source: "Schedule.jpg"')[1].split(
+        '### Source: "QA Engineer.pdf"'
+    )[0]
+    assert "9am meeting" in schedule_section
+    assert "room 4" in schedule_section
+    assert "QA plan" not in schedule_section
+    # Highest-relevance document's section comes first.
+    assert instruction.index('### Source: "Schedule.jpg"') < instruction.index(
+        '### Source: "QA Engineer.pdf"'
+    )
+
+
+def test_build_system_instruction_falls_back_to_untitled_for_an_unresolved_document():
+    """document_titles is non-empty (title resolution partially
+    succeeded) but doesn't cover this particular document_id — still
+    labeled, just with the fallback name, rather than silently dropping
+    back to the untitled flat format for the whole prompt."""
+    chunks = [
+        RetrievedChunk(
+            chunk_id="c1111111-1111-1111-1111-111111111111",
+            document_id="d1111111-1111-1111-1111-111111111111",
+            ordinal=0,
+            content="content",
+            meta={},
+            relevance_score=0.9,
+        )
+    ]
+    instruction = build_system_instruction(
+        chunks, {"d-some-other-doc": "Other Document.pdf"}
+    )
+    assert '### Source: "Untitled document"' in instruction
+
+
+def test_build_system_instruction_empty_titles_dict_degrades_to_flat_format():
+    """An empty dict (title resolution ran but returned nothing — e.g.
+    every referenced document was deleted mid-request) degrades exactly
+    like no titles were ever attempted, not a half-labeled prompt."""
+    chunks = [
+        RetrievedChunk(
+            chunk_id="c1111111-1111-1111-1111-111111111111",
+            document_id="d1111111-1111-1111-1111-111111111111",
+            ordinal=0,
+            content="content",
+            meta={},
+            relevance_score=0.9,
+        )
+    ]
+    instruction = build_system_instruction(chunks, {})
+    assert '### Source: "' not in instruction
 
 
 # --- generate.py's SSE line parsing (regression: real streaming call --------
@@ -406,6 +603,30 @@ def test_extract_citations_filters_unknown_ids():
     assert [c.chunk_id for c in citations] == ["c1111111-1111-1111-1111-111111111111"]
 
 
+def test_extract_citations_matches_a_sealed_document_style_chunk_id():
+    """Regression: retrieve.py's _sealed_exact_matches mints chunk ids
+    shaped "<document_id>:<ordinal>" for sealed content, not a bare
+    36-char UUID like every other chunk. The old regex only matched the
+    UUID shape, so a citation for sealed content could never actually
+    match and was always silently dropped — never a client-visible bug
+    report, just a citation chip that quietly never appeared."""
+    document_id = "d1111111-1111-1111-1111-111111111111"
+    sealed_chunk_id = f"{document_id}:3"
+    chunks = [
+        RetrievedChunk(
+            chunk_id=sealed_chunk_id,
+            document_id=document_id,
+            ordinal=3,
+            content="sealed content",
+            meta={},
+            relevance_score=1.0,
+        )
+    ]
+    text = f"According to the sealed note [[chunk:{sealed_chunk_id}]]."
+    citations = extract_citations(text, chunks)
+    assert [c.chunk_id for c in citations] == [sealed_chunk_id]
+
+
 # --- Stage 5.1: query rewriting wired end-to-end through stream_chat -----------
 
 
@@ -432,6 +653,13 @@ async def test_stream_chat_rewrites_query_using_real_recent_history(monkeypatch)
             raise NotImplementedError
 
     async def fake_run_interaction(*, system_instruction, input_data):
+        # retrieve() now also fires HyDE's own run_interaction call
+        # (same underlying function) unconditionally — only the
+        # rewrite-shaped call includes "Recent conversation" in its
+        # system_instruction; HyDE's uses a different, unrelated header
+        # and should just no-op here, this test's subject is rewriting.
+        if "recent conversation" not in system_instruction.lower():
+            return {"steps": []}
         assert "raft" in system_instruction.lower()
         return {
             "steps": [

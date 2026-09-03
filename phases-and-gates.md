@@ -1822,6 +1822,105 @@ behavior in a unit test — verified by reading the MDN spec and the
 screenshots that reproduced it, not a new test. 411/411 backend tests
 passing, `ruff` clean. Frontend `eslint` clean.
 
+### Retrieval/generation quality review and pass ✅
+Prompted directly: cross-document questions and vague prompts were
+producing glitchy/stale-feeling answers. A full read of the retrieval
+pipeline (`retrieve/retrieve.py`, `retrieve/rewrite.py`, `retrieve/hyde.py`,
+`retrieve/image_caption.py`, `chat/prompt.py`, `chat/stream.py`,
+`chat/generate.py`) surfaced three concrete, fixable problems — none of
+them "the algorithm is bad," all three "a real capability was either
+missing or built and never turned on":
+
+1. **The model never saw which document a chunk came from.**
+   `build_system_instruction` handed the model anonymous
+   `[[chunk:<id>]]` blobs with no filename/title attached anywhere. A
+   question spanning more than one document ("what does the schedule
+   say vs the PDF") got answered by a model that had no way to tell the
+   chunks apart, and no way to name a source even when asked to compare.
+   This is very likely the direct cause of the reported cross-document
+   glitchiness.
+2. **HyDE (Stage 5.2) was fully built, tested, and never actually
+   enabled.** Its own module docstring said as much — an A/B flag was
+   the exit criteria, but `chat/stream.py` never flipped it. A short,
+   vague prompt is exactly the case HyDE targets (closing the
+   question/passage vocabulary gap before vector search), so leaving it
+   off left the single most relevant built quality feature unused
+   against the exact complaint raised.
+3. **Sealed-content citations could never actually resolve.**
+   `_CITATION_RE` only matched a bare 36-char UUID; `_sealed_exact_matches`
+   mints chunk ids shaped `<document_id>:<ordinal>`, so a citation
+   pointing at sealed content silently never matched. Narrow (sealed
+   content is a small slice of retrieval), but a real, previously
+   undocumented bug.
+
+**Done:**
+- `chat/prompt.py`'s `build_system_instruction` gained an optional
+  `document_titles: dict[str, str]` param — when given, chunks are
+  grouped by document under a `### Source: "<title>"` header, in
+  first-appearance (rerank) order, and the system prompt now explicitly
+  tells the model to compare/synthesize across sources and name them.
+  No titles given (old call sites, or a failed lookup) falls back to the
+  exact old flat format — additive, not a breaking change to the shape.
+  A new `DocumentsStorage.get_titles()` bulk id→title lookup replaces
+  what `chat/storage.py` and `chat/playground.py` had each already built
+  inline for their own citation/badge displays — one reusable method,
+  not a third copy.
+- `chat/stream.py` resolves the turn's real document titles (best-effort
+  — a failed lookup degrades to the flat format, never a failed turn,
+  same posture as chunk-edge reinforcement right above it) and passes
+  `use_hyde=True` to `retrieve()` for every live chat turn.
+  `chat/playground.py`'s prompt-breakdown reconstruction was updated to
+  match (it already fetched `document_titles` for its own badges; now
+  reuses them for the assembled-instruction estimate too, or its
+  token/cost estimate would have quietly drifted from what a live turn
+  actually sends).
+- `_CITATION_RE` widened from a UUID-only pattern to match anything up
+  to the closing `]]` — `extract_citations`'s existing
+  `chunk_id not in by_id` check is what actually gates trust, not the
+  regex shape, so this doesn't loosen what gets accepted as real.
+- Enabling HyDE unconditionally meant `retrieve()` now calls
+  `generate/run_interaction` on every turn, not just when chat history
+  triggers a rewrite — five test files that exercise `stream_chat`
+  end-to-end (`test_stage_1_7_chat.py`, `test_stage_1_8_tracing.py`,
+  `test_stage_5_3_stream_reinforcement.py`, `test_chat_routes.py`, plus
+  one existing test in the first file whose fake asserted on rewrite-
+  specific prompt text) needed a `run_interaction` stub added so HyDE
+  doesn't fire a real network call in every CI run — found by tracing
+  every `stream_chat` call site with grep, not by trial and error.
+- Applies equally to images and text: an image chunk's query-time
+  caption (`retrieve/image_caption.py`) flows through the exact same
+  `RetrievedChunk`/grouping path as any text chunk, so a captioned image
+  now gets labeled with its real filename in a multi-source answer too,
+  with no separate image-specific prompt code needed.
+
+**Deliberately not done this pass (documented, not silently skipped):**
+- **Per-document diversity in the final top-K.** Rerank is purely by
+  relevance score — a single very-relevant document can fill all 5 of
+  `FINAL_TOP_K`'s slots, starving a genuinely cross-document question of
+  material from other real sources. Worth doing, but tuning it (a
+  reserved-slot scheme? a diversity penalty?) needs real usage to
+  evaluate against, not a guess — exactly the kind of thing the blocked
+  RAGAS regression gate (Stage 1.8's entry) exists to measure, and
+  exactly why `CLAUDE.md` sequences "RAG quality" as a pass over an
+  already-stable system rather than something to keep re-tuning blind.
+- **Adaptive/query-dependent `RELEVANCE_FLOOR`/`FINAL_TOP_K`.** A vague
+  "summarize everything" question and a narrow factual one arguably want
+  different breadth — not implemented; needs the same real-usage
+  evaluation basis as above.
+- **Latency tradeoff of always-on HyDE**: one extra non-streaming Gemini
+  call per turn (on top of the existing conditional rewrite call when
+  chat history exists) before the real generation starts streaming.
+  Real, currently unmeasured against production traffic — Langfuse
+  tracing (Stage 1.8, already live) is exactly the tool to watch this
+  with once real usage exists; deliberately not pre-optimized here.
+
+**Tests:** `chat/prompt.py` — grouped/titled format, empty-dict vs. no-
+titles-given distinction, sealed-format citation-id matching (new).
+`chat/stream.py` — end-to-end wiring proof that a real document title
+reaches the actual generation call, and that a broken title lookup
+degrades to the flat format rather than failing the turn (new). 418/418
+backend tests passing (up from 411), `ruff` clean on the whole repo.
+
 ### Phase 5 Gate *(future)*
 A held-out set of real queries against your own real documents shows
 HyDE/rewriting measurably improves recall (more known-relevant chunks
