@@ -1,13 +1,22 @@
-"""Stage 7.13 — explicit generation config.
+"""Stage 7.13 — explicit generation config (CORRECTED post-launch).
 
-Exit criteria: no temperature/max_output_tokens/top_p/top_k/safety-
-settings were set anywhere in the Gemini call — everything relied on
-platform defaults. Confirmed live against the current Interactions API
-reference (see generate.py's own module docstring) that temperature,
-top_p, and top_k don't exist in this API at all; what's actually
-settable — max_output_tokens (generation_config) and safety_settings —
-is now set explicitly on every call, both streaming (stream_text) and
-non-streaming (run_interaction).
+The original pass here also set `safety_settings`, "confirmed live"
+against docs that turned out to belong to a different product (Gemini
+Enterprise Agent Platform, not the consumer Gemini API this codebase
+calls). Caught live in production: every real chat turn failed with
+`{"error":{"message":"The parameter 'safety_settings' is not available
+on the Gemini API but it is available on the Gemini Enterprise Agent
+Platform.","code":"invalid_request"}}`. `safety_settings` was removed
+entirely as a result — see generate.py's own module docstring for the
+full account.
+
+What remains: `max_output_tokens` via `generation_config` (the
+production error named only `safety_settings` as invalid, so this one
+field's earlier live-check is retained, though at lower confidence
+than it should be), and a direct regression guard that `safety_settings`
+never quietly comes back, and that `GENERATION_CONFIG` never grows the
+temperature/top_p/top_k fields this API was already confirmed not to
+support.
 
 Real fake-httpx-transport pattern (same as
 test_stage_3_6_document_storage.py) so the request payload actually
@@ -18,12 +27,7 @@ import json as _json
 import httpx
 import pytest
 
-from app.chat.generate import (
-    GEMINI_MAX_OUTPUT_TOKENS,
-    GEMINI_SAFETY_SETTINGS,
-    GeminiGenerateClient,
-    run_interaction,
-)
+from app.chat.generate import GEMINI_MAX_OUTPUT_TOKENS, GENERATION_CONFIG, GeminiGenerateClient, run_interaction
 
 
 class _CapturingTransport(httpx.AsyncBaseTransport):
@@ -55,7 +59,9 @@ def _sse_body(text: str) -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_stream_text_sends_explicit_generation_config_and_safety_settings(monkeypatch):
+async def test_stream_text_sends_explicit_generation_config_and_no_safety_settings(
+    monkeypatch,
+):
     transport = _CapturingTransport(response_body=_sse_body("hi"))
     _patch_client(monkeypatch, transport)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
@@ -67,11 +73,11 @@ async def test_stream_text_sends_explicit_generation_config_and_safety_settings(
     assert len(transport.requests) == 1
     body = transport.requests[0]
     assert body["generation_config"] == {"max_output_tokens": GEMINI_MAX_OUTPUT_TOKENS}
-    assert body["safety_settings"] == GEMINI_SAFETY_SETTINGS
+    assert "safety_settings" not in body
 
 
 @pytest.mark.asyncio
-async def test_run_interaction_sends_explicit_generation_config_and_safety_settings(
+async def test_run_interaction_sends_explicit_generation_config_and_no_safety_settings(
     monkeypatch,
 ):
     transport = _CapturingTransport(response_body=_json.dumps({"steps": []}).encode())
@@ -84,26 +90,15 @@ async def test_run_interaction_sends_explicit_generation_config_and_safety_setti
     assert len(transport.requests) == 1
     body = transport.requests[0]
     assert body["generation_config"] == {"max_output_tokens": GEMINI_MAX_OUTPUT_TOKENS}
-    assert body["safety_settings"] == GEMINI_SAFETY_SETTINGS
+    assert "safety_settings" not in body
 
 
-def test_safety_settings_cover_the_four_standard_harm_categories_at_block_only_high():
-    categories = {s["category"] for s in GEMINI_SAFETY_SETTINGS}
-    assert categories == {
-        "HARM_CATEGORY_HATE_SPEECH",
-        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        "HARM_CATEGORY_DANGEROUS_CONTENT",
-        "HARM_CATEGORY_HARASSMENT",
-    }
-    assert all(s["threshold"] == "BLOCK_ONLY_HIGH" for s in GEMINI_SAFETY_SETTINGS)
-
-
-def test_generation_config_does_not_claim_unsupported_sampling_fields():
-    # Stage 7.13's real finding: temperature/top_p/top_k don't exist in
-    # the Interactions API at all — this must never silently regress
-    # back to guessing at fields the live API doesn't accept.
-    from app.chat.generate import GENERATION_CONFIG
-
+def test_generation_config_does_not_claim_unsupported_fields():
+    # Regression guard: this exact field must never quietly come back —
+    # a real production outage proved it's not valid on this API.
+    assert "safety_settings" not in GENERATION_CONFIG
+    # And the earlier, still-valid finding: temperature/top_p/top_k
+    # don't exist in this API at all.
     assert "temperature" not in GENERATION_CONFIG
     assert "top_p" not in GENERATION_CONFIG
     assert "top_k" not in GENERATION_CONFIG
