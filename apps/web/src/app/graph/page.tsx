@@ -55,6 +55,12 @@ function GraphPageInner() {
   // — the actual "still thinking" copy is derived from it in
   // renderAnswer() below.
   const [heartbeatCount, setHeartbeatCount] = useState(0);
+  // Stage 7.14 — set when generation fails partway through a turn that
+  // had already streamed real tokens: without this, a partial answer
+  // sat right next to the error message looking exactly like a
+  // normal, finished response, with nothing telling the user it might
+  // be cut off mid-thought. Reset on every new query.
+  const [answerFailed, setAnswerFailed] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [pulse, setPulse] = useState<GraphPulse | null>(null);
   const pulseKeyRef = useRef(0);
@@ -215,6 +221,7 @@ function GraphPageInner() {
     setCitations([]);
     setStreaming(true);
     setHeartbeatCount(0);
+    setAnswerFailed(false);
     setQuery("");
 
     try {
@@ -247,10 +254,12 @@ function GraphPageInner() {
         } else if (evt.event === "error") {
           const data = evt.data as { message: string };
           setChatError(data.message || "Something went wrong");
+          setAnswerFailed(true);
         }
       }
     } catch {
       setChatError("Connection failed");
+      setAnswerFailed(true);
     } finally {
       setStreaming(false);
     }
@@ -455,7 +464,19 @@ function GraphPageInner() {
       <div className={styles.chatDock}>
         {chatError && <div className={styles.chatError}>{chatError}</div>}
         {(streaming || answer) && (
-          <div className={styles.chatAnswer}>{renderAnswer()}</div>
+          <div
+            className={`${styles.chatAnswer} ${answerFailed ? styles.chatAnswerIncomplete : ""}`}
+          >
+            {renderAnswer()}
+            {/* Stage 7.14 — only ever shown once real tokens exist to be
+                ambiguous about; an error with no answer text at all
+                already reads unambiguously from chatError alone. */}
+            {answerFailed && answer && (
+              <div className={styles.incompleteNotice}>
+                ⚠ Response interrupted — this answer may be incomplete.
+              </div>
+            )}
+          </div>
         )}
         <form className={styles.chatForm} onSubmit={handleSend}>
           <button
