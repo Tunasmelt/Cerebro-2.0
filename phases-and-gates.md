@@ -2699,44 +2699,47 @@ clean.
 change or vary without this codebase's knowledge. Set these explicitly
 and deliberately based on what this product actually wants (grounded,
 citation-heavy answers, not creative-writing variance).
-**Done:** Confirmed live against the current Interactions API
-reference before touching anything (per CLAUDE.md's `/api-check`
-discipline, not assumed from the older generateContent shape or from
-training data): **`temperature`, `top_p`, and `top_k` don't exist
-anywhere in this API at all** — a real finding, not an oversight this
-stage could just "add." The endpoint's `generation_config` only
-exposes `max_output_tokens`, `seed`, `stop_sequences`, `thinking_
-level`, `thinking_summaries`, `tool_choice`, and modality-specific
-configs. So what actually got set explicitly: `GEMINI_MAX_OUTPUT_
-TOKENS=2048` (a real ceiling now, not implicitly unbounded) and
-`GEMINI_SAFETY_SETTINGS` — the four standard harm categories (hate
-speech, sexually explicit, dangerous content, harassment) all set to
-`BLOCK_ONLY_HIGH`, deliberately looser than the platform default: a
-personal vault answers grounded in the user's *own* uploaded
-documents, which can legitimately contain sensitive-sounding-but-
-benign content (medical records, legal filings, security research) a
-default/stricter threshold risks false-positive blocking — full
-immunity would defeat the point of having safety settings at all, so
-`BLOCK_ONLY_HIGH` rather than `BLOCK_NONE`. "Grounded, not creative-
-writing variance" is therefore achieved the only way this API actually
-allows: prompt design (`SYSTEM_PROMPT_HEADER`), not a sampling
-parameter that doesn't exist. `thinking_level` and the other unused
-`generation_config` fields were deliberately left unset — `thinking_
-level` is exactly what made gemini-3.7-flash unusably slow even at
-"low" (this module's own model-choice history), and there's zero
-live-tested data on how gemini-3.5-flash-lite's own default behaves
-under an explicit override; guessing without a real timed call to
-confirm against would risk silently reintroducing that same latency
-regression. Applied uniformly to both `stream_text` (live chat) and
-`run_interaction` (HyDE/rewrite/captioning/tool calls).
-**Tests:** New `test_stage_7_13_generation_config.py`, 4 tests — a
-real fake-httpx-transport test (this repo's established pattern)
-asserts the exact `generation_config`/`safety_settings` values in the
-request body sent by both `stream_text` and `run_interaction`; a
-direct test on `GEMINI_SAFETY_SETTINGS`' four categories and threshold;
-a regression guard asserting `GENERATION_CONFIG` never silently grows
-`temperature`/`top_p`/`top_k` keys the live API doesn't accept. Full
-suite: 494/494 passing, ruff clean.
+**Done:** First pass set `max_output_tokens` (via `generation_config`)
+and `safety_settings` explicitly, "confirmed live" against the current
+Interactions API reference. **That confirmation was wrong** — the
+WebFetch pass pulled schema from the Gemini *Enterprise Agent
+Platform's* Interactions API reference, a same-shaped but distinct
+product from the consumer Gemini API this codebase actually calls, and
+blended the two without catching it before merge. Caught live in
+production (screenshot from the user, real chat turn on the deployed
+app): every turn failed with `{"error":{"message":"The parameter
+'safety_settings' is not available on the Gemini API but it is
+available on the Gemini Enterprise Agent Platform.","code":
+"invalid_request"}}` — a real outage, not a test failure, because
+nothing in this codebase's test suite calls the real live API and
+could have caught a wrong-product schema mix-up before deploy.
+**`safety_settings` was removed entirely**, same-day hotfix, not
+"corrected" to a different shape — this pass no longer trusts the
+earlier "confirmed live" claim for anything about this endpoint that
+wasn't independently re-verified. `max_output_tokens` is retained
+only because the production error named `safety_settings` specifically
+and nothing else — a lower-confidence claim than the original "✅"
+here implied, flagged honestly rather than re-asserted as settled.
+The `temperature`/`top_p`/`top_k`-don't-exist finding is unaffected by
+this correction — that part came from the *general* Gemini API
+reference page, not the Enterprise Agent Platform one, and nothing
+about it was ever contradicted live. Applied uniformly to both
+`stream_text` (live chat) and `run_interaction` (HyDE/rewrite/
+captioning/tool calls) — both were broken, both are now fixed.
+**Lesson for this file and future `/api-check`-style research:** a
+WebFetch/WebSearch pass across multiple same-topic doc pages can
+silently blend content from adjacent-but-different products when
+their schemas are structurally similar (both call it "Interactions
+API," both use `generation_config`/`safety_settings` field names) —
+"confirmed live" should mean confirmed against the one exact product
+in use, with the source URL's own product name checked, not just that
+*a* live page was fetched.
+**Tests:** `test_stage_7_13_generation_config.py` rewritten, 3 tests —
+`stream_text` and `run_interaction` both send `max_output_tokens` and
+explicitly do *not* send `safety_settings`; a direct regression guard
+that `GENERATION_CONFIG` never grows `safety_settings` back, nor
+`temperature`/`top_p`/`top_k`. Full suite: 493/493 passing, ruff
+clean.
 
 ### Stage 7.14 — Clear partial-answer state on mid-stream error ✅
 **Exit criteria:** If generation fails partway through today, whatever
