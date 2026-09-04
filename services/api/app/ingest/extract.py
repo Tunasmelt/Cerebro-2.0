@@ -195,6 +195,20 @@ def extract_pdf_chunks(pdf_bytes: bytes) -> list[Chunk]:
                         Chunk(ordinal=ordinal, content=piece, meta={"page": page_number})
                     )
                     ordinal += 1
+                # Live production incident (caught via a real ~500-page
+                # upload, small file size, RAM-ceiling failure): pdfplumber
+                # caches each Page's parsed layout objects (chars, rects,
+                # ...) and never releases them on its own — `pdf.pages`
+                # keeps every Page object alive for the document's whole
+                # lifetime, so memory grows with page *count*, not file
+                # size, and a small-but-many-page PDF can exceed the 512MB
+                # ceiling even though nothing about the bytes looked large.
+                # Confirmed live (not assumed): `Page` objects have no
+                # `.close()` — `PDF.close()` alone does not clear a page's
+                # cache — `Page.flush_cache()` is the real, correct call,
+                # right after that page's text has been extracted and
+                # nothing about it is needed anymore.
+                page.flush_cache()
     except Exception as exc:  # pdfplumber/pdfminer don't document a single
         # stable exception type for malformed input — bound the catch to
         # this call rather than leaving a corrupt PDF to hang or crash

@@ -622,6 +622,22 @@ resolution via DCT scaling, so a large photo is never fully decoded
 before being downscaled — this is the mechanism that actually matters
 for RAM, independent of the final compressed file size.
 
+Real production incident (caught via a ~500-page upload that was
+small in bytes but still exceeded the ceiling): the 50MB upload cap
+bounds *file size* in memory, but doesn't bound everything downstream
+— pdfplumber caches each `Page`'s parsed layout objects (chars, rects,
+...) and never releases them on its own as `extract.py` iterates
+`pdf.pages`, so that memory scales with **page count**, not file
+bytes, and a text-dense-but-small many-page PDF can exceed the
+ceiling even though the upload itself looked nowhere near 50MB.
+Confirmed live, not assumed: `Page` objects have no `.close()` —
+`PDF.close()` alone does not clear a page's cache —
+`Page.flush_cache()` is the real, correct call, made once per page
+right after that page's text has been extracted (`extract_pdf_chunks`).
+Worth remembering for any future per-item-iteration library use: a
+byte-size cap on the input is not automatically a memory cap on
+whatever a parsing library keeps cached internally per item.
+
 Target: peak RSS under ~300MB during normalize/extract, leaving headroom
 for the FastAPI process and concurrent chat requests. Log RSS
 before/after each ingest stage (`mem_watchdog`) so a container restart

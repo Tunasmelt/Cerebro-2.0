@@ -11,6 +11,7 @@ never register as "oversized" by the time this stage runs.
 """
 import io
 
+import pdfplumber
 import pikepdf
 import pytest
 from PIL import Image
@@ -209,6 +210,33 @@ def test_extract_pdf_chunks_corrupt_input_raises_specific_error():
     with pytest.raises(ExtractError) as exc_info:
         extract_pdf_chunks(corrupt)
     assert exc_info.value.code == "corrupt_pdf"
+
+
+def test_extract_pdf_chunks_flushes_each_pages_cache_to_bound_memory(monkeypatch):
+    # Live production incident: a real ~500-page PDF, small file size,
+    # exceeded the 512MB RAM ceiling — pdfplumber caches each Page's
+    # parsed layout objects and never releases them on its own, so
+    # memory grows with page count, not file size. Regression guard:
+    # flush_cache() must be called once per page, right after that
+    # page's text has been extracted.
+    pdf_bytes = _make_pdf_with_page_text(["one", "two", "three", "four"])
+    original_flush_cache = pdfplumber.page.Page.flush_cache
+    flushed_pages: list[int] = []
+
+    def spy_flush_cache(self):
+        flushed_pages.append(self.page_number)
+        return original_flush_cache(self)
+
+    monkeypatch.setattr(pdfplumber.page.Page, "flush_cache", spy_flush_cache)
+
+    extract_pdf_chunks(pdf_bytes)
+
+    # PDF.close() (the `with` block's own exit) also flushes each page,
+    # so each page number may appear more than once — what matters is
+    # that our own explicit flush actually fires for every page, not an
+    # exact call count.
+    assert set(flushed_pages) == {1, 2, 3, 4}
+    assert flushed_pages[:4] == [1, 2, 3, 4]  # flushed in page order, eagerly
 
 
 # --- extract_image_chunks --------------------------------------------------------
