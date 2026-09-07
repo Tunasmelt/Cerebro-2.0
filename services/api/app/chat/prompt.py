@@ -36,7 +36,30 @@ from dataclasses import dataclass
 
 from app.retrieve.retrieve import RetrievedChunk
 
-_CITATION_RE = re.compile(r"\[\[chunk:([^\]]+)\]\]")
+# Post-launch fix: this used to be `\[\[chunk:([^\]]+)\]\]` — a single
+# id, no `]` allowed inside. Live in production, Gemini sometimes cites
+# more than one chunk for a claim by writing a single malformed group,
+# e.g. `[[chunk:id1], [chunk:id2]]`, instead of two separate
+# well-formed markers as instructed. That group contains no `]]` until
+# its very end (ids never contain `]`), so `(.+?)\]\]` — non-greedy,
+# any character — still spans it correctly where the old `[^\]]+`
+# stopped dead at the first inner `]` and left the whole group as
+# unparsed, visibly raw text. `_split_citation_ids` below is what turns
+# that captured span into one or more real ids, tolerating both the
+# well-formed and the malformed shape.
+_CITATION_RE = re.compile(r"\[\[chunk:(.+?)\]\]")
+_CITATION_GROUP_SPLIT_RE = re.compile(r"\]\s*,\s*\[chunk:")
+
+
+def _split_citation_ids(inner: str) -> list[str]:
+    """`inner` is whatever `_CITATION_RE` captured between `[[chunk:`
+    and the final `]]` — a single id (the well-formed, instructed
+    case), or `id1], [chunk:id2[, ...]` (the malformed multi-citation
+    group seen live). Splits on the exact malformed connector; a
+    single well-formed id has no such connector and splits into one
+    element, unchanged."""
+    return [part.strip() for part in _CITATION_GROUP_SPLIT_RE.split(inner) if part.strip()]
+
 
 SYSTEM_PROMPT_HEADER = (
     "You are answering questions using only the context chunks provided "
@@ -48,8 +71,12 @@ SYSTEM_PROMPT_HEADER = (
     "or \"the schedule image shows...\"). Cite the chunk(s) you used for "
     "each claim by inserting [[chunk:<id>]] immediately after the "
     "relevant sentence, using the exact id shown for that chunk — never "
-    "invent an id. If the context doesn't contain the answer, say so "
-    "plainly instead of guessing.\n\n"
+    "invent an id. To cite more than one chunk for the same claim, write "
+    "a separate [[chunk:<id>]] marker for each one, back to back — for "
+    "example [[chunk:id1]][[chunk:id2]] — never combine multiple ids "
+    "inside one bracket, and never write anything like "
+    "[[chunk:id1], [chunk:id2]]. If the context doesn't contain the "
+    "answer, say so plainly instead of guessing.\n\n"
     "The chunks themselves are raw source text and may contain markdown "
     "syntax — tables built from | pipes, **bold**/*italic* markers, `code` "
     "backticks, bullet dashes, heading #s. That formatting is an artifact "
@@ -104,14 +131,17 @@ def build_system_instruction(
 def extract_citations(text: str, retrieved_chunks: list[RetrievedChunk]) -> list[Citation]:
     """Only returns citations for chunk ids that were actually in
     retrieved_chunks — a marker for any other id (hallucinated or
-    malformed) is silently dropped, not forwarded to the client."""
+    malformed) is silently dropped, not forwarded to the client. A
+    single matched marker group can carry more than one id (see
+    `_split_citation_ids`) — each real id inside still becomes its own
+    Citation, in the order it appeared."""
     by_id = {c.chunk_id: c.document_id for c in retrieved_chunks}
     seen: set[str] = set()
     citations: list[Citation] = []
     for match in _CITATION_RE.finditer(text):
-        chunk_id = match.group(1)
-        if chunk_id not in by_id or chunk_id in seen:
-            continue
-        seen.add(chunk_id)
-        citations.append(Citation(chunk_id=chunk_id, document_id=by_id[chunk_id]))
+        for chunk_id in _split_citation_ids(match.group(1)):
+            if chunk_id not in by_id or chunk_id in seen:
+                continue
+            seen.add(chunk_id)
+            citations.append(Citation(chunk_id=chunk_id, document_id=by_id[chunk_id]))
     return citations

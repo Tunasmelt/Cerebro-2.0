@@ -314,12 +314,13 @@ function GraphPageInner() {
   // Stage 7.10 — real markdown via AnswerMarkdown, not a plain-text
   // <span>. While streaming, citation events (the only source of truth
   // for which markers are real) haven't all arrived yet, so `citations`
-  // is passed empty — every marker disappears rather than resolving,
-  // same "can't resolve yet" reasoning the old stripCitationMarkers
-  // path used, but markdown formatting (lists, emphasis) still renders
-  // live either way. Once done, markers resolve against the real
-  // citations collected during the stream; clicking one selects that
-  // node on the graph, same as clicking it directly.
+  // is passed empty — every marker disappears rather than resolving
+  // ("can't resolve yet" — the same reasoning citations.ts's
+  // stripCitationMarkers used pre-7.10), but markdown formatting
+  // (lists, emphasis) still renders live either way. Once done, markers
+  // resolve against the real citations collected during the stream;
+  // clicking one selects that node on the graph, same as clicking it
+  // directly.
   function renderAnswer() {
     if (!answer) {
       if (!streaming) return null;

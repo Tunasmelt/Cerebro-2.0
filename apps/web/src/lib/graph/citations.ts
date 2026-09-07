@@ -7,15 +7,40 @@
 // stream — matching the mockup's numbered cite-chip pattern in
 // Mockups/ui_kits/chat/index.html instead of leaking the raw
 // [[chunk:...]] syntax into the UI.
-const CITATION_MARKER_RE = /\[\[chunk:([^\]]+)\]\]/g;
+//
+// Post-launch fix: this used to be /\[\[chunk:([^\]]+)\]\]/g — a
+// single id, no `]` allowed inside. Live in production, Gemini
+// sometimes cited more than one chunk for a claim as a single
+// malformed group, e.g. [[chunk:id1], [chunk:id2]], instead of two
+// separate well-formed markers as instructed (chat/prompt.py's
+// SYSTEM_PROMPT_HEADER now says so explicitly). That group has no
+// `]]` until its very end (ids never contain `]`), so `(.+?)\]\]` —
+// non-greedy, any character — still spans it correctly where the old
+// `[^\]]+` stopped dead at the first inner `]` and left the whole
+// group as raw, unrendered text. Mirrors chat/prompt.py's
+// `_CITATION_RE`/`_split_citation_ids` exactly — same widened regex,
+// same split-on-malformed-connector logic — since both sides must
+// recognize the identical marker syntax.
+const CITATION_MARKER_RE = /\[\[chunk:(.+?)\]\]/g;
+const CITATION_GROUP_SPLIT_RE = /\]\s*,\s*\[chunk:/;
+
+function splitCitationIds(inner: string): string[] {
+  return inner
+    .split(CITATION_GROUP_SPLIT_RE)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
 
 export type AnswerSegment =
   | { type: "text"; text: string }
   | { type: "citation"; chunkId: string };
 
-/** Splits assistant answer text on [[chunk:<id>]] markers. Pure, no
- * React or DOM — call after streaming finishes, once the authoritative
- * `citation` events are all in. */
+/** Splits assistant answer text on [[chunk:<id>]] markers — including
+ * the malformed multi-id group shape (see module docstring), which
+ * yields one citation segment per real id inside it, back to back
+ * with no text between them. Pure, no React or DOM — call after
+ * streaming finishes, once the authoritative `citation` events are
+ * all in. */
 export function parseAnswerSegments(text: string): AnswerSegment[] {
   const segments: AnswerSegment[] = [];
   let lastIndex = 0;
@@ -24,44 +49,13 @@ export function parseAnswerSegments(text: string): AnswerSegment[] {
     if (start > lastIndex) {
       segments.push({ type: "text", text: text.slice(lastIndex, start) });
     }
-    segments.push({ type: "citation", chunkId: match[1] });
+    for (const chunkId of splitCitationIds(match[1])) {
+      segments.push({ type: "citation", chunkId });
+    }
     lastIndex = start + match[0].length;
   }
   if (lastIndex < text.length) {
     segments.push({ type: "text", text: text.slice(lastIndex) });
   }
   return segments;
-}
-
-/** Strips markers entirely — used while a response is still streaming.
- * `citation` events (the only thing that tells us a marker is real, not
- * dropped) arrive only after the full token stream completes per
- * stream.py's ordering, so a marker visible mid-stream can't yet be
- * resolved into a chip; showing the raw bracket syntax in the meantime
- * would be worse than briefly hiding it. */
-export function stripCitationMarkers(text: string): string {
-  return text.replace(CITATION_MARKER_RE, "");
-}
-
-/** Stage 7.10 — rewrites [[chunk:<id>]] markers into a real-markdown-
- * renderable form ahead of handing text to a markdown renderer:
- * markers that resolve against `citations` become a special `cite:`
- * link (AnswerMarkdown's `a` override turns that into a real citation
- * chip button, never a plain link); anything else — a hallucinated or
- * server-dropped marker, or every marker at all if `citations` is
- * empty (the streaming-in-progress case, same "can't resolve yet"
- * reasoning as stripCitationMarkers) — disappears entirely, same as
- * parseAnswerSegments' existing "unresolved marker renders nothing"
- * behavior. The chunk id is URI-encoded since it can itself contain a
- * `:` (see retrieve.py's sealed-match chunk_id format,
- * `<document_id>:<ordinal>`), which would otherwise break the link
- * syntax markdown parsers expect. */
-export function prepareCitationMarkersForMarkdown(
-  text: string,
-  citations: { chunk_id: string }[],
-): string {
-  return text.replace(CITATION_MARKER_RE, (_match, chunkId: string) => {
-    const resolved = citations.some((c) => c.chunk_id === chunkId);
-    return resolved ? `[cite](cite:${encodeURIComponent(chunkId)})` : "";
-  });
 }

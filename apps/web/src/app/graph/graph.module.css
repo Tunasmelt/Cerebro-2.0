@@ -244,9 +244,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 17px;
+  gap: 2px;
+  min-width: 17px;
   height: 17px;
-  border-radius: 50%;
+  padding: 0 4px;
+  border-radius: 999px;
   background: var(--bg-elevated-hover);
   border: 1px solid var(--border-default);
   color: var(--accent-primary-hover);
