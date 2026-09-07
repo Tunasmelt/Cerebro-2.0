@@ -723,6 +723,75 @@ def test_extract_citations_matches_a_sealed_document_style_chunk_id():
     assert [c.chunk_id for c in citations] == [sealed_chunk_id]
 
 
+def test_extract_citations_handles_the_malformed_multi_id_group_seen_live():
+    """Post-launch fix: live in production, Gemini sometimes cited two
+    chunks for one claim as a single malformed group —
+    [[chunk:id1], [chunk:id2]] — instead of two separate well-formed
+    markers as instructed. The old [^\\]]+ regex stopped dead at the
+    first inner ], so the whole group (and everything after it on that
+    line) was left as unparsed, visibly raw [[chunk:...]] text in the
+    UI. Both real ids must still be extracted."""
+    chunks = [
+        RetrievedChunk(
+            chunk_id="c1111111-1111-1111-1111-111111111111",
+            document_id="d1111111-1111-1111-1111-111111111111",
+            ordinal=0,
+            content="x",
+            meta={},
+            relevance_score=0.9,
+        ),
+        RetrievedChunk(
+            chunk_id="c2222222-2222-2222-2222-222222222222",
+            document_id="d2222222-2222-2222-2222-222222222222",
+            ordinal=0,
+            content="y",
+            meta={},
+            relevance_score=0.9,
+        ),
+    ]
+    text = (
+        "This claim draws on two sources "
+        "[[chunk:c1111111-1111-1111-1111-111111111111], "
+        "[chunk:c2222222-2222-2222-2222-222222222222]]."
+    )
+    citations = extract_citations(text, chunks)
+    assert [c.chunk_id for c in citations] == [
+        "c1111111-1111-1111-1111-111111111111",
+        "c2222222-2222-2222-2222-222222222222",
+    ]
+
+
+def test_extract_citations_still_handles_well_formed_back_to_back_markers():
+    chunks = [
+        RetrievedChunk(
+            chunk_id="c1111111-1111-1111-1111-111111111111",
+            document_id="d1111111-1111-1111-1111-111111111111",
+            ordinal=0,
+            content="x",
+            meta={},
+            relevance_score=0.9,
+        ),
+        RetrievedChunk(
+            chunk_id="c2222222-2222-2222-2222-222222222222",
+            document_id="d2222222-2222-2222-2222-222222222222",
+            ordinal=0,
+            content="y",
+            meta={},
+            relevance_score=0.9,
+        ),
+    ]
+    text = (
+        "Two sources back to back "
+        "[[chunk:c1111111-1111-1111-1111-111111111111]]"
+        "[[chunk:c2222222-2222-2222-2222-222222222222]]."
+    )
+    citations = extract_citations(text, chunks)
+    assert [c.chunk_id for c in citations] == [
+        "c1111111-1111-1111-1111-111111111111",
+        "c2222222-2222-2222-2222-222222222222",
+    ]
+
+
 # --- Stage 5.1: query rewriting wired end-to-end through stream_chat -----------
 
 
