@@ -11,6 +11,25 @@ from dotenv import load_dotenv
 # vars by hand.
 load_dotenv()
 
+
+def _validate_single_process_deployment() -> None:
+    """Fail fast instead of silently weakening locks/rate limits.
+
+    Horizontal scaling requires shared replacements for the in-memory
+    limiter and ingest lock. Operators must make that architectural change
+    before declaring more than one process/instance here.
+    """
+    workers = int(os.environ.get("WEB_CONCURRENCY", "1"))
+    instances = int(os.environ.get("CEREBRO_INSTANCE_COUNT", "1"))
+    if workers != 1 or instances != 1:
+        raise RuntimeError(
+            "Cerebro requires one API process and one instance; configure "
+            "shared rate limiting and ingest locking before scaling out"
+        )
+
+
+_validate_single_process_deployment()
+
 from fastapi import FastAPI, Request  # noqa: E402
 
 from app.core.middleware import AuthMiddleware  # noqa: E402

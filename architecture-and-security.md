@@ -652,13 +652,11 @@ is traceable to a specific document, not a guess.
 | Graph fetch | 60 req/min |
 | General API | 100 req/min |
 
-**Constraint this depends on:** the limiter is in-process/in-memory, not
-Redis-backed. That's only correct under single-instance deployment —
-true on Render's free tier by default, not guaranteed under any paid
-tier with autoscaling. Before ever running more than one instance, this
-must move to a shared store (Redis, or Supabase itself) or the limiter
-silently becomes N× more permissive than this table states, with no
-error to catch it.
+**Constraint this depends on:** the limiter and ingest lock are in-process.
+The API fails fast unless `WEB_CONCURRENCY=1` and
+`CEREBRO_INSTANCE_COUNT=1`, preventing accidental scale-out from silently
+weakening limits or allowing concurrent ingest. Multiple processes require
+shared replacements before those guards may be raised.
 
 ---
 
