@@ -77,15 +77,13 @@ POST   /documents/{id}/upload-confirm  No body. Server verifies the
                                     call needed) — see
                                     architecture-and-security.md's
                                     "Incremental clustering" section.
-POST   /documents/{id}/retry-ingest  No body. Retries a failed job, but
-                                    only if it failed during embed —
-                                    proxied by chunks already existing
-                                    for the document (extract completed).
-                                    404 if no job exists, 409 if the job
-                                    isn't in state=failed or failed before
-                                    any chunk was extracted (normalize/
-                                    extract retry isn't safe yet — see
-                                    embed.py's check_retry_eligible).
+POST   /documents/{id}/retry-ingest  No body. Resumes a failed job from
+                                    normalizing, extracting, or embedding
+                                    using persisted state/checkpoints.
+                                    Captures resume at extracting because
+                                    they intentionally have no normalize
+                                    stage. 404 if no job exists; 409 when
+                                    the persisted state is not resumable.
                                     202 + state=embedding on success, with
                                     the actual retry running in the
                                     background, same pattern as
