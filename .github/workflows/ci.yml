@@ -19,6 +19,7 @@ jobs:
       - run: npm ci
       - run: npm run lint --workspace=apps/web
       - run: npm run test --workspace=apps/web
+      - run: npm exec --workspace=apps/web tsc -- --noEmit
       - run: npm run build --workspace=apps/web
 
   api:
