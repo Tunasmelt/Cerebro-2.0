@@ -75,7 +75,7 @@ from typing import Any, Protocol
 from app.core.http_client import CachedHttpClientMixin
 from app.core.sealed_storage import SealedStorageError, get_sealed_storage
 from app.core.tracing import get_tracer
-from app.ingest.embed import get_embed_client
+from app.ingest.embed import EmbedError, get_embed_client, get_embed_clients_by_provider
 from app.retrieve.hyde import generate_hypothetical_answer
 from app.retrieve.image_caption import caption_image
 from app.retrieve.rewrite import rewrite_query
@@ -246,6 +246,8 @@ def set_rerank_client(client: RerankClient) -> None:
 
 
 class RetrieveStorage(Protocol):
+    async def list_embedding_providers(self, *, user_jwt: str) -> list[str]: ...
+
     async def vector_search(
         self,
         *,
@@ -270,6 +272,17 @@ class SupabaseRetrieveStorage(CachedHttpClientMixin):
             "Authorization": f"Bearer {user_jwt}",
             "Content-Type": "application/json",
         }
+
+    async def list_embedding_providers(self, *, user_jwt: str) -> list[str]:
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"status": "eq.ready", "select": "embedding_provider"},
+        )
+        if response.status_code >= 400:
+            return [get_embed_client().provider]
+        return list({row["embedding_provider"] for row in response.json() if row.get("embedding_provider")})
 
     async def vector_search(
         self,
@@ -446,37 +459,44 @@ async def retrieve(
         # adapter those passages were embedded with (see hyde.py's
         # module docstring for why this is the detail that makes HyDE
         # actually work, not just a stylistic choice).
-        if hyde_text is not None:
-            query_embedding = await embed_client.embed_text(hyde_text, task="retrieval.passage")
-        else:
-            query_embedding = await embed_client.embed_text(
-                effective_query, task="retrieval.query"
-            )
-        span.update(output={"dimensions": len(query_embedding)})
+        provider_lookup = get_embed_clients_by_provider()
+        list_providers = getattr(storage, "list_embedding_providers", None)
+        providers = await list_providers(user_jwt=user_jwt) if list_providers else [embed_client.provider]
+        query_embeddings: dict[str, list[float]] = {}
+        for provider in providers:
+            client = provider_lookup.get(provider)
+            if client is None:
+                continue
+            try:
+                query_embeddings[provider] = await client.embed_text(
+                    hyde_text if hyde_text is not None else effective_query,
+                    task="retrieval.passage" if hyde_text is not None else "retrieval.query",
+                )
+            except EmbedError:
+                logger.exception("query embedding failed for provider %s", provider)
+        span.update(output={"providers": list(query_embeddings)})
 
-    # Vector search is scoped to documents embedded by the same provider
-    # as the query itself (always the primary client — see embed.py's
-    # module docstring for why fallback doesn't apply at query time).
-    # A document that fell back to Voyage/Cohere lives in a different
-    # vector space and must not be compared against this query vector.
+    # Each query embedding is searched only against documents embedded by
+    # that same provider. Rankings are fused later; incompatible vectors
+    # are never compared directly.
     with tracer.start_as_current_observation(
         as_type="span", name="vector_search", input={"match_count": VECTOR_CANDIDATES}
     ) as span:
-        try:
-            vector_results = await storage.vector_search(
-                user_jwt=user_jwt,
-                query_embedding=query_embedding,
-                match_count=VECTOR_CANDIDATES,
-                primary_provider=embed_client.provider,
-            )
-        except RetrieveError:
-            # Degrade, don't crash — same posture as rewrite_query/
-            # generate_hypothetical_answer: one search leg failing
-            # shouldn't fail the whole turn when the other leg might
-            # still carry it. fts_search below runs regardless.
-            logger.exception("vector_search failed, degrading to FTS-only results")
-            vector_results = []
-        span.update(output={"result_count": len(vector_results)})
+        vector_rankings: list[list[dict[str, Any]]] = []
+        for provider, query_embedding in query_embeddings.items():
+            try:
+                vector_rankings.append(
+                    await storage.vector_search(
+                        user_jwt=user_jwt,
+                        query_embedding=query_embedding,
+                        match_count=VECTOR_CANDIDATES,
+                        primary_provider=provider,
+                    )
+                )
+            except RetrieveError:
+                logger.exception("vector_search failed for provider %s", provider)
+        vector_results = [row for ranking in vector_rankings for row in ranking]
+        span.update(output={"result_count": len(vector_results), "providers": list(query_embeddings)})
 
     with tracer.start_as_current_observation(
         as_type="span", name="fts_search", input={"match_count": FTS_CANDIDATES}
@@ -495,7 +515,8 @@ async def retrieve(
 
     with tracer.start_as_current_observation(as_type="span", name="rrf_fuse") as span:
         fused_ids = rrf_fuse(
-            [r["id"] for r in vector_results], [r["id"] for r in fts_results]
+            *[[r["id"] for r in ranking] for ranking in vector_rankings],
+            [r["id"] for r in fts_results],
         )[:RERANK_TOP_N]
         span.update(output={"fused_ids": fused_ids})
     if not fused_ids:

@@ -73,6 +73,15 @@ class _FakeEmbedClient:
         raise NotImplementedError
 
 
+class _ProviderEmbedClient(_FakeEmbedClient):
+    def __init__(self, provider: str, marker: float):
+        self.provider = provider
+        self.marker = marker
+
+    async def embed_text(self, text: str, task: str = "retrieval.passage") -> list[float]:
+        return [self.marker] * 1024
+
+
 class _FakeRerankClient:
     """Scores documents by a simple deterministic rule the tests control
     via a lookup table, so "known-relevant chunk ranks in top 3" is
@@ -162,6 +171,43 @@ async def test_known_relevant_chunk_appears_in_top_3():
     top_3_ids = [r.chunk_id for r in results[:3]]
     assert "relevant-1" in top_3_ids
     assert results[0].chunk_id == "relevant-1"  # highest score, should be #1
+
+
+@pytest.mark.asyncio
+async def test_queries_each_vector_provider_in_the_users_corpus(monkeypatch):
+    jina_chunk = _chunk("jina-1", "primary result")
+    voyage_chunk = _chunk("voyage-1", "fallback-provider result")
+
+    class MultiProviderStorage(_FakeRetrieveStorage):
+        def __init__(self):
+            super().__init__(vector_results=[], fts_results=[])
+            self.providers_seen: list[str] = []
+
+        async def list_embedding_providers(self, *, user_jwt):
+            return ["jina", "voyage"]
+
+        async def vector_search(self, *, user_jwt, query_embedding, match_count, primary_provider):
+            self.providers_seen.append(primary_provider)
+            return [jina_chunk] if primary_provider == "jina" else [voyage_chunk]
+
+    storage = MultiProviderStorage()
+    jina = _ProviderEmbedClient("jina", 0.1)
+    voyage = _ProviderEmbedClient("voyage", 0.2)
+    monkeypatch.setattr(
+        retrieve_module,
+        "get_embed_clients_by_provider",
+        lambda: {"jina": jina, "voyage": voyage},
+    )
+    embed_module.set_embed_client(jina)
+    retrieve_module.set_retrieve_storage(storage)
+    retrieve_module.set_rerank_client(
+        _FakeRerankClient({jina_chunk["content"]: 0.8, voyage_chunk["content"]: 0.9})
+    )
+
+    results = await retrieve(user_jwt="t", query="cross-provider query")
+
+    assert storage.providers_seen == ["jina", "voyage"]
+    assert [result.chunk_id for result in results] == ["voyage-1", "jina-1"]
 
 
 @pytest.mark.asyncio

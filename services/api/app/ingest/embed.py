@@ -40,11 +40,8 @@ comment there wrongly claimed Voyage's multimodal API had no query/
 document distinction, an assumption never actually checked against
 Voyage's docs; caught only because the user asked "what about Cohere
 and Voyage" after the Jina fix shipped, not by anything in this repo.
-Low real-world severity today regardless, since `retrieve()` only
-vector-searches `documents.embedding_provider = jina` chunks — a
-document that fell back to Voyage/Cohere is invisible to vector search
-entirely, fallback-provider correctness only matters if that scoping
-ever changes.
+Retrieval now queries each provider represented in the user's corpus in
+its own vector space, so these mappings matter for fallback documents too.
 
 Stage 7.2 — image chunk captioning: extract.py leaves image chunk
 `content` empty (see that module's docstring), which meant FTS could
@@ -74,10 +71,9 @@ any provider succeeds, the document is locked to it
 (documents.embedding_provider, supabase/migrations/0007) for every
 remaining chunk and for any future resumed run — no more switching once
 even one chunk has committed. A locked-provider failure just fails the
-job as before; it does not cascade further. Query-time embedding
-(retrieve.py) always uses the primary client only — falling back there
-would only produce vectors incomparable to the corpus, which isn't a
-fix, so a primary-provider outage at query time fails honestly instead.
+job as before; it does not cascade further. Query-time retrieval embeds
+once per provider represented in the caller's corpus and searches only
+that provider's documents before fusing ranked lists.
 Voyage (voyage-multimodal-3.5) and Cohere (embed-v4.0) dims/request
 shapes confirmed against their live docs before writing these clients,
 both explicitly asked for 1024-dim output via output_dimension to match
@@ -261,9 +257,7 @@ _client: EmbedClient = JinaEmbedClient()
 
 
 def get_embed_client() -> EmbedClient:
-    """The primary provider. Always what query-time embedding uses too
-    (retrieve.py) — a query never falls back, since a fallback-provider
-    query vector wouldn't be comparable to the (Jina-space) corpus."""
+    """The primary ingest provider and default query provider."""
     return _client
 
 
@@ -282,6 +276,16 @@ _fallback_clients: list[EmbedClient] = default_fallback_clients()
 
 def get_fallback_embed_clients() -> list[EmbedClient]:
     return _fallback_clients
+
+
+def get_embed_clients_by_provider() -> dict[str, EmbedClient]:
+    """All configured adapters keyed by vector-space identity.
+
+    Retrieval uses this to embed one query per provider actually present in
+    the caller's corpus; vectors from different providers are still never
+    compared with each other.
+    """
+    return {client.provider: client for client in [_client, *_fallback_clients]}
 
 
 def set_fallback_embed_clients(clients: list[EmbedClient]) -> None:
