@@ -124,6 +124,34 @@ class _FakeRequest:
 
 
 @pytest.mark.asyncio
+async def test_list_route_leases_and_resumes_abandoned_jobs(monkeypatch):
+    class RecoveryStorage:
+        async def claim_recoverable_jobs(self, *, user_jwt):
+            return [
+                {"document_id": "d1", "state": "embedding", "source": "upload"},
+                {"document_id": "d2", "state": "extracting", "source": "capture"},
+                {"document_id": "d3", "state": "extracting", "source": "upload"},
+            ]
+
+        async def list_documents(self, *, user_jwt, user_id):
+            return []
+
+    monkeypatch.setattr(documents_module, "get_documents_storage", lambda: RecoveryStorage())
+    background_tasks = BackgroundTasks()
+
+    response = await documents_module.list_documents(
+        _FakeRequest(user_jwt="t", sub="u"), background_tasks
+    )
+
+    assert response.status_code == 200
+    assert [task.func for task in background_tasks.tasks] == [
+        documents_module._embed_then_place,
+        documents_module._run_capture_pipeline,
+        documents_module._run_ingest_pipeline,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_retry_route_schedules_embed_then_place_when_embedding(monkeypatch):
     async def fake_check(*, user_jwt, document_id):
         return "embedding"

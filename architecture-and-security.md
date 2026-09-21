@@ -110,15 +110,12 @@ before this chain existed — no cascading mid-job.
 
 `documents.embedding_provider` (`supabase/migrations/0007`, default
 `'jina'`) makes this explicit rather than inferred. Vector search
-(`match_chunks_vector`) takes a `primary_provider` parameter and joins
-`documents` to filter to it — a query, which always embeds with the
-primary client only (no fallback at query time; a fallback-provider
-query vector wouldn't be comparable to the Jina-space corpus anyway),
-never gets compared against a document that fell back to Voyage or
-Cohere. Such a document simply isn't reachable by vector search until
-it's re-embedded with the primary provider — a deliberate correctness
-trade (filter and accept reduced recall for that document) over silently
-comparing incompatible vectors.
+(`match_chunks_vector`) filters to one provider at a time. Retrieval
+discovers the providers represented in the caller's ready documents,
+embeds the query with each matching adapter, searches those vector spaces
+independently, and RRF-fuses their rankings with FTS. Incompatible vectors
+are never compared directly, while fallback-provider documents retain
+vector recall.
 
 ### Retrieval pipeline (detail, Stage 1.5)
 
@@ -128,8 +125,8 @@ the documented hybrid+RRF+rerank behavior instead (see Stage 1.5's
 conversation record).
 
 ```
-query → embed (primary client only — Jina, same as ingest's primary;
-        no fallback at query time, see "Embedding provider fallback")
+query → embed once per provider represented in the caller's corpus
+        (each searched only against its own vector space)
       → vector search (match_chunks_vector RPC, cosine distance)  ─┐
       → full-text search (match_chunks_fts RPC, ts_rank)          ─┤→ RRF fuse (k=60)
       → top RERANK_TOP_N fused candidates → Cohere rerank-v4.0-pro
@@ -655,13 +652,11 @@ is traceable to a specific document, not a guess.
 | Graph fetch | 60 req/min |
 | General API | 100 req/min |
 
-**Constraint this depends on:** the limiter is in-process/in-memory, not
-Redis-backed. That's only correct under single-instance deployment —
-true on Render's free tier by default, not guaranteed under any paid
-tier with autoscaling. Before ever running more than one instance, this
-must move to a shared store (Redis, or Supabase itself) or the limiter
-silently becomes N× more permissive than this table states, with no
-error to catch it.
+**Constraint this depends on:** the limiter and ingest lock are in-process.
+The API fails fast unless `WEB_CONCURRENCY=1` and
+`CEREBRO_INSTANCE_COUNT=1`, preventing accidental scale-out from silently
+weakening limits or allowing concurrent ingest. Multiple processes require
+shared replacements before those guards may be raised.
 
 ---
 

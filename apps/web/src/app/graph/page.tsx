@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import AnswerMarkdown from "@/components/AnswerMarkdown";
 import AppShell from "@/components/AppShell";
 import { authedFetch } from "@/lib/api";
+import { getActiveUnlocks } from "@/lib/crypto/unlockSession";
 import { parseSSEStream } from "@/lib/graph/sse";
 import type {
   AssociativeEdge,
@@ -231,7 +232,7 @@ function GraphPageInner() {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ query: trimmed }),
+          body: JSON.stringify({ query: trimmed, unlocked: getActiveUnlocks() }),
         }
       );
       if (!res.body) throw new Error("no response body");

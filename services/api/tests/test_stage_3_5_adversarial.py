@@ -8,10 +8,9 @@ for. Each test is one attack attempt, named for what it tries, asserting
 it fails closed — never a 200 with sealed content, never a 500 leaking
 internals, never silent success. Categories:
 
-1. Prompt injection through chat — chat's retrieve() call never passes
-   `unlocked`, so no query text, however crafted, can reach sealed
-   storage at all. Proven by inspecting the real call site plus a live
-   route-level test with injection-style query text.
+1. Prompt injection through chat — sealed retrieval requires an explicit
+   structured unlock claim and derived key. Query text cannot manufacture
+   that capability; absent credentials always become an empty unlock list.
 2. Malformed unlock claims — garbage claim_id, garbage/wrong-length/
    non-base64 key, empty values, SQL-metacharacter payloads — against
    both /unlock and /unseal.
@@ -128,16 +127,16 @@ def _fake_storage():
 # --- Category 1: prompt injection through chat -------------------------------
 
 
-def test_chat_retrieval_never_passes_unlocked_context():
-    """Structural proof, not a live call: stream_chat's retrieve() call
-    site has no `unlocked` argument at all, in source. No query text —
-    injected instructions or otherwise — can turn this into a path to
-    sealed content, because the capability that reads sealed content
-    isn't reachable from chat regardless of what's asked."""
+def test_chat_retrieval_requires_explicit_unlocked_context():
+    """The capability is a separate optional argument, never query-derived.
+
+    Runtime pre/post-unlock and invalid-claim behavior is covered in
+    test_stage_3_4_metadata_only_search.py.
+    """
     from app.chat.stream import stream_chat
 
-    source = inspect.getsource(stream_chat)
-    assert "unlocked" not in source
+    parameter = inspect.signature(stream_chat).parameters["unlocked"]
+    assert parameter.default is None
 
 
 @pytest.mark.parametrize(

@@ -18,6 +18,7 @@ import {
 } from "./seal";
 
 const encoder = new TextEncoder();
+const bufferSource = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => Uint8Array.from(bytes);
 
 describe("deriveKey", () => {
   it("is deterministic for the same passphrase + salt", async () => {
@@ -31,14 +32,14 @@ describe("deriveKey", () => {
     const nonce = generateNonce();
     const plaintext = encoder.encode("known-answer probe");
     const ctA = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce },
+      { name: "AES-GCM", iv: bufferSource(nonce) },
       keyA,
-      plaintext
+      bufferSource(plaintext)
     );
     const ctB = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce },
+      { name: "AES-GCM", iv: bufferSource(nonce) },
       keyB,
-      plaintext
+      bufferSource(plaintext)
     );
     expect(new Uint8Array(ctA)).toEqual(new Uint8Array(ctB));
   });
@@ -51,14 +52,14 @@ describe("deriveKey", () => {
     const keyB = await deriveKey("same passphrase", generateSalt());
 
     const ctA = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce },
+      { name: "AES-GCM", iv: bufferSource(nonce) },
       keyA,
-      plaintext
+      bufferSource(plaintext)
     );
     const ctB = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce },
+      { name: "AES-GCM", iv: bufferSource(nonce) },
       keyB,
-      plaintext
+      bufferSource(plaintext)
     );
     expect(new Uint8Array(ctA)).not.toEqual(new Uint8Array(ctB));
   });
@@ -80,9 +81,9 @@ describe("deriveKey", () => {
     const nonce = new Uint8Array(12); // all-zero, fixed
     const key = await deriveKey("known-answer-test-passphrase", salt);
     const ciphertext = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce },
+      { name: "AES-GCM", iv: bufferSource(nonce) },
       key,
-      encoder.encode("known-answer plaintext")
+      bufferSource(encoder.encode("known-answer plaintext"))
     );
     const hex = Buffer.from(ciphertext).toString("hex");
     expect(hex).toBe(
@@ -113,20 +114,20 @@ describe("deriveKeyBytes", () => {
     const plaintext = encoder.encode("known-answer probe");
     const importedKey = await crypto.subtle.importKey(
       "raw",
-      rawBytes,
+      bufferSource(rawBytes),
       { name: "AES-GCM" },
       false,
       ["encrypt"]
     );
     const ctFromRawBytes = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce },
+      { name: "AES-GCM", iv: bufferSource(nonce) },
       importedKey,
-      plaintext
+      bufferSource(plaintext)
     );
     const ctFromDeriveKey = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: nonce },
+      { name: "AES-GCM", iv: bufferSource(nonce) },
       cryptoKey,
-      plaintext
+      bufferSource(plaintext)
     );
     expect(new Uint8Array(ctFromRawBytes)).toEqual(new Uint8Array(ctFromDeriveKey));
   });
@@ -155,9 +156,9 @@ describe("sealChunkWithKey — the multi-chunk document fix", () => {
 
     for (let i = 0; i < chunkTexts.length; i++) {
       const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: sealedChunks[i].nonce },
+        { name: "AES-GCM", iv: bufferSource(sealedChunks[i].nonce) },
         key,
-        sealedChunks[i].ciphertext
+        bufferSource(sealedChunks[i].ciphertext)
       );
       expect(new TextDecoder().decode(decrypted)).toBe(chunkTexts[i]);
     }

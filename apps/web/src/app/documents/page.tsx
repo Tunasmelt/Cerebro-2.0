@@ -6,6 +6,7 @@ import AppShell from "@/components/AppShell";
 import ConfirmModal from "@/components/ConfirmModal";
 import { authedFetch } from "@/lib/api";
 import { deriveKey, deriveKeyBytes, generateSalt, sealChunkWithKey } from "@/lib/crypto/seal";
+import { forgetUnlock, rememberUnlock } from "@/lib/crypto/unlockSession";
 import type { DocumentRow } from "@/lib/graph/types";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthedUser } from "@/lib/useAuthedUser";
@@ -538,7 +539,14 @@ export default function DocumentsPage() {
             : body?.error?.message || "Could not unlock this document"
         );
       }
-      const { claim_id: claimId } = await unlockRes.json();
+      const { claim_id: claimId, expires_at: expiresAt } = await unlockRes.json();
+
+      rememberUnlock({
+        document_id: documentId,
+        claim_id: claimId,
+        key: keyB64,
+        expires_at: expiresAt,
+      });
 
       const unsealRes = await authedFetch(`/api/documents/${documentId}/unseal`, {
         method: "POST",
@@ -562,6 +570,7 @@ export default function DocumentsPage() {
   }
 
   function closeUnsealedContent(documentId: string) {
+    forgetUnlock(documentId);
     setUnsealedContent((prev) => {
       const next = { ...prev };
       delete next[documentId];

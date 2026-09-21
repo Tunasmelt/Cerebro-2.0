@@ -2793,6 +2793,13 @@ needs an actual live pass through `/chat` and `/graph` (a real
 document ingested, a real cross-document question, a deliberately
 slow/failing turn) before this line changes.
 
+Post-review automated hardening: standalone TypeScript checking is now a CI
+step; sealed unlock credentials flow from a memory-only browser registry into
+chat retrieval; fallback-provider vector spaces are searched independently;
+abandoned ingest stages are leased and resumed when the owner next opens
+Documents; and unsupported multi-process deployment fails fast. These changes
+reduce known code risk but do not replace the required live browser pass.
+
 ---
 
 ## Cross-phase rules
