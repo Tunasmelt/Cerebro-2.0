@@ -285,7 +285,11 @@ POST   /chunks/{id}/link           Stage 5.3. Body: { target_chunk_id }.
                                     never decayed, reads as meaningfully
                                     stronger on the graph than any
                                     number of coincidental co-retrievals.
-POST   /chat/sessions/{id}/stream  Body: { query }. SSE. Emits, in order:
+POST   /chat/sessions/{id}/stream  Body: { query, unlocked?: [{
+                                    document_id, claim_id, key }] }. Unlock
+                                    credentials live in browser memory only
+                                    and are revalidated server-side. SSE
+                                    emits, in order:
                                       event: retrieval
                                         data: { chunk_ids, document_ids }
                                       event: token          (repeated)

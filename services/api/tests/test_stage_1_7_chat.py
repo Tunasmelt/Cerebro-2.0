@@ -212,6 +212,34 @@ async def test_long_detailed_query_is_passed_to_retrieve_with_hyde_disabled(monk
     assert calls[0]["use_hyde"] is False
 
 
+@pytest.mark.asyncio
+async def test_unlocked_documents_are_forwarded_to_retrieval(monkeypatch):
+    calls: list[dict] = []
+
+    async def fake_retrieve(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(stream_module, "retrieve", fake_retrieve)
+    set_generate_client(_FakeGenerateClient(["ok"]))
+    chat_storage_module.set_chat_storage(_FakeChatStorage())
+
+    await _collect_events(
+        stream_module.stream_chat(
+            user_jwt="t",
+            user_id="u1",
+            session_id="session-1",
+            query="find the secret",
+            unlocked=[{"document_id": "d1", "claim_id": "c1", "key": "a2V5"}],
+        )
+    )
+
+    assert calls[0]["user_id"] == "u1"
+    assert calls[0]["unlocked"][0].document_id == "d1"
+    assert calls[0]["unlocked"][0].claim_id == "c1"
+    assert calls[0]["unlocked"][0].key_b64 == "a2V5"
+
+
 # --- Stage 7.11: heartbeat events during a slow retrieval/HyDE gap -----------
 
 

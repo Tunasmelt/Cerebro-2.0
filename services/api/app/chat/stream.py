@@ -60,6 +60,7 @@ from app.core.tracing import get_tracer
 from app.graph.edges import get_chunk_edges_storage
 from app.retrieve.hyde import should_use_hyde
 from app.retrieve.retrieve import retrieve
+from app.retrieve.retrieve import UnlockedDocument
 from app.retrieve.rewrite import HISTORY_MESSAGE_LIMIT
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,12 @@ def _sse(event: str, data: dict) -> str:
 
 
 async def stream_chat(
-    *, user_jwt: str, user_id: str, session_id: str, query: str
+    *,
+    user_jwt: str,
+    user_id: str,
+    session_id: str,
+    query: str,
+    unlocked: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     storage = get_chat_storage()
     generate_client = get_generate_client()
@@ -139,6 +145,15 @@ async def stream_chat(
                 retrieve(
                     user_jwt=user_jwt,
                     query=query,
+                    user_id=user_id,
+                    unlocked=[
+                        UnlockedDocument(
+                            document_id=item["document_id"],
+                            claim_id=item["claim_id"],
+                            key_b64=item["key"],
+                        )
+                        for item in (unlocked or [])
+                    ],
                     recent_messages=recent_messages,
                     use_hyde=should_use_hyde(query),
                 )

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.chat.agent_tools import run_agent_turn
 from app.chat.playground import get_chat_playground_storage
@@ -110,8 +110,15 @@ async def run_playground_prompt(request: Request, session_id: str, body: Playgro
     return JSONResponse(result)
 
 
+class UnlockedDocumentBody(BaseModel):
+    document_id: str
+    claim_id: str
+    key: str
+
+
 class StreamBody(BaseModel):
     query: str
+    unlocked: list[UnlockedDocumentBody] = Field(default_factory=list)
 
 
 @router.post("/api/v1/chat/sessions/{session_id}/stream")
@@ -132,6 +139,7 @@ async def stream(request: Request, session_id: str, body: StreamBody):
             user_id=request.state.user["sub"],
             session_id=session_id,
             query=body.query,
+            unlocked=[item.model_dump() for item in body.unlocked],
         ),
         media_type="text/event-stream",
     )
