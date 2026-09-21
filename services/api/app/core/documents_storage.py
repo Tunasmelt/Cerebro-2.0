@@ -116,6 +116,10 @@ class DocumentsStorage(Protocol):
 
     async def sweep_stalled_uploads(self, *, user_jwt: str, user_id: str) -> None: ...
 
+    async def claim_recoverable_jobs(
+        self, *, user_jwt: str
+    ) -> list[dict[str, str]]: ...
+
     async def get_document(
         self, *, user_jwt: str, document_id: str
     ) -> dict[str, Any] | None: ...
@@ -333,6 +337,26 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
         )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="documents_list_failed")
+        return response.json()
+
+    async def claim_recoverable_jobs(self, *, user_jwt: str) -> list[dict[str, str]]:
+        """Atomically lease pipeline jobs abandoned by a dead process.
+
+        Recovery is driven by the owner's authenticated Documents request,
+        so it needs no service-role key and remains RLS-scoped.
+        """
+        now = datetime.now(timezone.utc)
+        client = self._client()
+        response = await client.post(
+            f"{self._supabase_url}/rest/v1/rpc/claim_recoverable_ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            json={
+                "stale_before": (now - timedelta(minutes=5)).isoformat(),
+                "lease_until": (now + timedelta(minutes=10)).isoformat(),
+            },
+        )
+        if response.status_code >= 400:
+            return []
         return response.json()
 
     async def get_document(

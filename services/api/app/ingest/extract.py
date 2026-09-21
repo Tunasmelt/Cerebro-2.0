@@ -304,7 +304,12 @@ class SupabaseExtractStorage(CachedHttpClientMixin):
         client = self._client()
         response = await client.post(
             f"{self._supabase_url}/rest/v1/chunks",
-            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            headers={
+                **self._headers(user_jwt),
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates",
+            },
+            params={"on_conflict": "document_id,ordinal"},
             json=body,
         )
         if response.status_code >= 400:

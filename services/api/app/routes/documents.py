@@ -189,8 +189,22 @@ async def capture(request: Request, body: CaptureBody, background_tasks: Backgro
 
 
 @router.get("/api/v1/documents")
-async def list_documents(request: Request):
+async def list_documents(request: Request, background_tasks: BackgroundTasks):
     storage = get_documents_storage()
+    claim_jobs = getattr(storage, "claim_recoverable_jobs", None)
+    if claim_jobs is not None:
+        for job in await claim_jobs(user_jwt=request.state.user_jwt):
+            task = _embed_then_place if job["state"] == "embedding" else (
+                _run_capture_pipeline
+                if job["state"] == "extracting" and job.get("source") == "capture"
+                else _run_ingest_pipeline
+            )
+            background_tasks.add_task(
+                task,
+                user_jwt=request.state.user_jwt,
+                user_id=request.state.user["sub"],
+                document_id=job["document_id"],
+            )
     documents = await storage.list_documents(
         user_jwt=request.state.user_jwt, user_id=request.state.user["sub"]
     )
