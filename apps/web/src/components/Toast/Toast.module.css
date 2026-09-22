@@ -1,0 +1,19 @@
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: min(380px, calc(100vw - 32px));
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border-default));
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+}
+.error { border-color: color-mix(in srgb, var(--danger) 55%, var(--border-default)); }
+.toast button { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 18px; }

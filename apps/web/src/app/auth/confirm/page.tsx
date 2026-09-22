@@ -3,6 +3,8 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
+import Logo from "@/components/Logo";
+import RouteLoading from "@/components/RouteLoading";
 import { createClient } from "@/lib/supabase/client";
 import styles from "../../auth.module.css";
 
@@ -12,7 +14,7 @@ import styles from "../../auth.module.css";
 // no custom email template needed, unlike the token_hash/verifyOtp flow.
 export default function ConfirmPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<RouteLoading />}>
       <ConfirmInner />
     </Suspense>
   );
@@ -42,6 +44,7 @@ function ConfirmInner() {
 
   return (
     <div className={styles.page}>
+      <div className={styles.logoRow}><Logo size={26} /></div>
       <div className={styles.card}>
         <h1 className={styles.title}>
           {error ? "Confirmation failed" : "Confirming…"}

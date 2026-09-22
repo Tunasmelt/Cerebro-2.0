@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import Logo from "@/components/Logo";
 import Reveal from "@/components/Reveal";
+import RouteLoading from "@/components/RouteLoading";
 import { createClient } from "@/lib/supabase/client";
 import styles from "./page.module.css";
 
@@ -49,7 +50,7 @@ export default function LandingPage() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  if (checkingSession) return null;
+  if (checkingSession) return <RouteLoading />;
 
   return (
     <div className={styles.page}>
@@ -61,9 +62,7 @@ export default function LandingPage() {
           <div className={styles.navbarLinks}>
             <Link href="/features">Features</Link>
             <Link href="/signin">Sign in</Link>
-            <Link href="/signup" className={styles.btnPrimary}>
-              Try it
-            </Link>
+            <Link href="/signup" className={styles.btnPrimary}>Try it</Link>
           </div>
         </div>
       </nav>
@@ -84,12 +83,13 @@ export default function LandingPage() {
               nodes it used to answer — not a black box, not a decorative
               animation.
             </p>
-            <Link href="/signup" className={styles.btnPrimary}>
-              Try it
-            </Link>
+            <div className={styles.heroActions}>
+              <Link href="/signup" className={styles.btnPrimary}>Try it free</Link>
+              <Link href="/signin" className={styles.btnSecondary}>Sign in</Link>
+            </div>
           </Reveal>
           <Reveal delayMs={120}>
-            <HeroGraph />
+            <div className={styles.graphFrame}><HeroGraph /></div>
           </Reveal>
         </div>
       </section>
@@ -114,59 +114,46 @@ export default function LandingPage() {
               your own notes flag Raft as easier to reason about for small
               clusters<span className={styles.cite}> [3]</span>.
             </div>
-            <div className={styles.chips}>
-              <span className={styles.chip}>[1] raft-paper.pdf</span>
-              <span className={styles.chip}>[2] paxos-made-simple.pdf</span>
-              <span className={styles.chip}>[3] note_2025-03-12.md</span>
-            </div>
           </Reveal>
         </div>
       </section>
 
       <section className={styles.section}>
         <div className={styles.container}>
-          <Reveal>
-            <div className={styles.eyebrow}>02</div>
-            <h2 className={styles.sectionTitle}>Lock what matters</h2>
-            <p className={styles.sectionSub}>
-              Seal a note behind a passphrase. It stays sealed — even from
-              Cerebro&apos;s own retrieval — until you unlock it again.
-            </p>
+          <Reveal className={styles.featureIntro}>
+            <div className={styles.featureIndex}>FEATURES</div>
+            <h2 className={styles.sectionTitle}>How Cerebro actually works.</h2>
           </Reveal>
-          <div className={styles.lockGrid}>
-            <Reveal delayMs={80} className={styles.lockCard}>
-              <span className={styles.lockBadge}>Sealed</span>
-              <div className={styles.lockFilename}>distributed-systems-notes.pdf</div>
-              <div className={styles.lockMeta}>sealed · passphrase required</div>
+          <div className={styles.featureRows}>
+            <Reveal className={styles.featureRow}>
+              <div className={styles.featureVisual}>
+                <svg className={styles.miniGraph} viewBox="0 0 170 100" aria-hidden="true">
+                  <line x1="35" y1="55" x2="100" y2="30" stroke="var(--border-strong)" />
+                  <line x1="100" y1="30" x2="138" y2="68" stroke="var(--border-strong)" />
+                  <circle cx="35" cy="55" r="9" fill="var(--accent-primary)" />
+                  <circle cx="100" cy="30" r="7" fill="var(--accent-secondary)" />
+                  <circle cx="138" cy="68" r="8" fill="var(--accent-primary)" opacity=".75" />
+                </svg>
+              </div>
+              <div className={styles.featureCopy}>
+                <div className={styles.featureIndex}>01 · INGEST</div>
+                <h3>One index for documents and images</h3>
+                <p>Drop in PDFs, notes, and photos of whiteboards or printed pages — they all land in the same graph. Cerebro reads text and images alike, so a scanned diagram and a typed note can end up in the same retrieved cluster.</p>
+              </div>
             </Reveal>
-            <Reveal delayMs={160}>
-              <p className={styles.sectionSub} style={{ maxWidth: 460 }}>
-                Sealed files are excluded from search and retrieval until
-                unlocked with your passphrase. The passphrase itself is never
-                stored, and no answer will ever cite a sealed node.
-              </p>
-            </Reveal>
-          </div>
-        </div>
-      </section>
-
-      <section className={styles.section}>
-        <div className={styles.container}>
-          <div className={styles.features}>
-            <Reveal delayMs={0} className={styles.feature}>
-              <div className={styles.featureDot} style={{ background: "var(--accent-primary)", color: "var(--accent-primary)" }} />
-              <h3>Multimodal search</h3>
-              <p>Query across PDFs, images, and scans with the same plain-language search.</p>
-            </Reveal>
-            <Reveal delayMs={90} className={styles.feature}>
-              <div className={styles.featureDot} style={{ background: "var(--accent-secondary)", color: "var(--accent-secondary)" }} />
-              <h3>Real retrieval visualization</h3>
-              <p>See the actual nodes and edges behind every answer, rendered live — not simulated for effect.</p>
-            </Reveal>
-            <Reveal delayMs={180} className={styles.feature}>
-              <div className={styles.featureDot} style={{ background: "var(--accent-locked)", color: "var(--accent-locked)" }} />
-              <h3>Passphrase-sealed files</h3>
-              <p>Seal anything behind a passphrase. It stays sealed, even from retrieval, until you unlock it.</p>
+            <Reveal className={`${styles.featureRow} ${styles.featureRowReverse}`}>
+              <div className={styles.featureVisual}>
+                <div className={styles.ranker}>
+                  {[["vector","72%","var(--accent-primary)"],["full-text","55%","var(--accent-secondary)"],["ranked","86%","var(--text-primary)"]].map(([label,width,color]) => (
+                    <div className={styles.rankRow} key={label}><span>{label}</span><div className={styles.rankTrack}><div className={styles.rankFill} style={{ width, background: color }} /></div></div>
+                  ))}
+                </div>
+              </div>
+              <div className={styles.featureCopy}>
+                <div className={styles.featureIndex}>02 · RETRIEVAL</div>
+                <h3>Search finds it two ways, then merges</h3>
+                <p>Every query runs as both a meaning-based vector search and a plain keyword search. The two result lists get merged into a single ranking, so exact terms and conceptually related notes can both surface.</p>
+              </div>
             </Reveal>
           </div>
         </div>
@@ -175,9 +162,10 @@ export default function LandingPage() {
       <section className={`${styles.section} ${styles.ctaBand}`}>
         <div className={styles.container}>
           <Reveal>
-            <h2>Start building your vault.</h2>
+            <h2>Your knowledge, finally queryable.</h2>
+            <p>Connect your documents, notes, and images. Start asking questions in seconds.</p>
             <Link href="/signup" className={styles.btnPrimary}>
-              Try it
+              Get started free
             </Link>
           </Reveal>
         </div>
@@ -187,12 +175,8 @@ export default function LandingPage() {
         <div className={styles.container}>
           <div className={styles.footerRow}>
             <Logo size={18} className={styles.footerBrand} />
-            <div className={styles.footerLinks}>
-              <Link href="/features">Features</Link>
-              <Link href="/signin">Sign in</Link>
-            </div>
+            <span>© 2026 Cerebro. Personal Knowledge Vault.</span>
           </div>
-          <div className={styles.footerNote}>passphrase-gated locking, session-scoped.</div>
         </div>
       </footer>
     </div>

@@ -1,44 +1,46 @@
 :root {
   /* base palette */
-  --color-black: #0A0A0F;
-  --color-surface: #13131A;
-  --color-surface-hover: #1B1B24;
+  --color-black: #080b12;
+  --color-surface: #0e1320;
+  --color-surface-hover: #141b2d;
+  --color-surface-raised: #1a2238;
 
-  --color-violet: #8B5CF6;
-  --color-violet-hover: #A78BFA;
-  --color-violet-active: #7C3AED;
+  --color-violet: #7c5af6;
+  --color-violet-hover: #9277f8;
+  --color-violet-active: #6946e6;
 
-  --color-teal: #2DD4BF;
-  --color-teal-hover: #5EEAD4;
-  --color-teal-active: #14B8A6;
+  --color-teal: #22d3ee;
+  --color-teal-hover: #67e8f9;
+  --color-teal-active: #06b6d4;
 
   --color-amber: #F59E0B;
   --color-amber-hover: #FBBF24;
   --color-amber-active: #D97706;
 
-  --color-red: #EF4444;
+  --color-red: #f43f5e;
   --color-red-hover: #F87171;
   --color-red-active: #DC2626;
 
-  --color-white: #F4F4F5;
-  --color-gray: #A1A1AA;
-  --color-gray-dim: #71717A;
+  --color-white: #e8ecf5;
+  --color-gray: #91a0bd;
+  --color-gray-dim: #6b7a99;
 
   /* surfaces */
   --bg-base: var(--color-black);
   --bg-elevated: var(--color-surface);
   --bg-elevated-hover: var(--color-surface-hover);
+  --bg-raised: var(--color-surface-raised);
 
   /* borders — always low-opacity white, never harsh black lines */
-  --border-subtle: rgba(244, 244, 245, 0.08);
-  --border-default: rgba(244, 244, 245, 0.12);
-  --border-strong: rgba(244, 244, 245, 0.18);
+  --border-subtle: #182136;
+  --border-default: #25304a;
+  --border-strong: #34415f;
 
   /* text */
   --text-primary: var(--color-white);
   --text-secondary: var(--color-gray);
   --text-disabled: var(--color-gray-dim);
-  --text-on-accent: #0A0A0F;
+  --text-on-accent: #080b12;
 
   /* primary accent — violet. Sparingly: active/live states, retrieval pulses, primary CTAs */
   --accent-primary: var(--color-violet);

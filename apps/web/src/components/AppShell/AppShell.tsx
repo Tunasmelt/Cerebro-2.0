@@ -115,13 +115,8 @@ export default function AppShell({
   const router = useRouter();
   // Collapsed state persists across reloads via localStorage. Every
   // page mounts its own <AppShell> (there's no shared layout), so a
-  // client-side nav between pages unmounts and remounts this component
-  // — reading the stored value lazily in useState (rather than in a
-  // post-mount useEffect) means that remount picks up the right state
-  // on its very first render instead of flashing expanded-then-collapsed
-  // each time. Safe against hydration mismatches because every caller
-  // gates AppShell behind `if (checking) return null`, so this only
-  // ever mounts client-side, never during SSR.
+  // client-side nav between pages unmounts and remounts this component.
+  // Reading the stored value lazily avoids flashing the expanded state.
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -143,6 +138,8 @@ export default function AppShell({
   }
   const [menuOpen, setMenuOpen] = useState(false);
   const avatarRef = useRef<HTMLDivElement | null>(null);
+  const avatarButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mobileToggleRef = useRef<HTMLButtonElement | null>(null);
   // Every other dropdown-style overlay in this app (the graph page's
   // sessions panel, both ConfirmModal-based prompts) closes on Escape
   // and an outside click — the avatar menu is the one place that
@@ -150,7 +147,10 @@ export default function AppShell({
   useEffect(() => {
     if (!menuOpen) return;
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setMenuOpen(false);
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        avatarButtonRef.current?.focus();
+      }
     }
     function handlePointerDown(e: MouseEvent) {
       if (!avatarRef.current?.contains(e.target as Node)) setMenuOpen(false);
@@ -169,6 +169,17 @@ export default function AppShell({
   // which only makes sense as a desktop-width affordance.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useEffect(() => setMobileNavOpen(false), [pathname]);
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    function closeMobileNav(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMobileNavOpen(false);
+        mobileToggleRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", closeMobileNav);
+    return () => window.removeEventListener("keydown", closeMobileNav);
+  }, [mobileNavOpen]);
   // Profile pass — AppShell reads its own displayName/avatarUrl rather
   // than threading two more props through every page that mounts it
   // (every page already independently calls useAuthedUser for its own
@@ -237,6 +248,7 @@ export default function AppShell({
       <div className={styles.main}>
         <div className={styles.topbar}>
           <button
+            ref={mobileToggleRef}
             className={styles.menuToggle}
             onClick={() => setMobileNavOpen((o) => !o)}
             aria-label={mobileNavOpen ? "Close menu" : "Open menu"}
@@ -252,7 +264,8 @@ export default function AppShell({
           </button>
           <div className={styles.topbarRight}>
             <QuickCapture />
-            <div className={styles.avatar} ref={avatarRef} onClick={() => setMenuOpen((o) => !o)}>
+            <div className={styles.accountControl} ref={avatarRef}>
+            <button className={styles.avatar} ref={avatarButtonRef} onClick={() => setMenuOpen((o) => !o)} aria-label="Open account menu" aria-expanded={menuOpen}>
               {avatarUrl && !avatarImgFailed ? (
                 // eslint-disable-next-line @next/next/no-img-element -- user-pasted external URL, not a local/optimizable asset.
                 <img
@@ -264,7 +277,8 @@ export default function AppShell({
               ) : (
                 <span className={styles.avatarInner}>{initials(avatarLabel)}</span>
               )}
-              {menuOpen && (
+            </button>
+              {menuOpen ? (
                 <div className={styles.avatarMenu}>
                   <button
                     className={styles.avatarMenuItem}
@@ -276,7 +290,7 @@ export default function AppShell({
                     Sign out
                   </button>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
