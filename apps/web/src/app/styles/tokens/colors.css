@@ -21,6 +21,10 @@
   --color-red-hover: #F87171;
   --color-red-active: #DC2626;
 
+  --color-green: #10b981;
+  --color-green-hover: #34d399;
+  --color-green-active: #059669;
+
   --color-white: #e8ecf5;
   --color-gray: #91a0bd;
   --color-gray-dim: #6b7a99;
@@ -49,11 +53,19 @@
   --accent-primary-subtle: rgba(139, 92, 246, 0.12);
   --accent-primary-border: rgba(139, 92, 246, 0.4);
 
-  /* secondary accent — teal. Secondary actions, success states */
+  /* secondary accent — teal. Secondary actions, informational states */
   --accent-secondary: var(--color-teal);
   --accent-secondary-hover: var(--color-teal-hover);
   --accent-secondary-active: var(--color-teal-active);
   --accent-secondary-subtle: rgba(45, 212, 191, 0.12);
+
+  /* success accent — green. The Figma reference consistently uses this
+     for "done"/"ready"/"completed" states, distinct from teal's
+     informational/secondary role — don't blur the two back together. */
+  --accent-success: var(--color-green);
+  --accent-success-hover: var(--color-green-hover);
+  --accent-success-active: var(--color-green-active);
+  --accent-success-subtle: rgba(16, 185, 129, 0.12);
 
   /* locked accent — amber. Reserved EXCLUSIVELY for encryption/lock-related UI. */
   --accent-locked: var(--color-amber);

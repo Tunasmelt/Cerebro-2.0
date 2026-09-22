@@ -8,7 +8,7 @@
   gap: 16px;
   max-width: min(380px, calc(100vw - 32px));
   padding: 11px 14px;
-  border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border-default));
+  border: 1px solid color-mix(in srgb, var(--accent-success) 45%, var(--border-default));
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--text-primary);

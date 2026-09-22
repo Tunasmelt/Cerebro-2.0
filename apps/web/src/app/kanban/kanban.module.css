@@ -206,6 +206,14 @@
   padding: 0;
   line-height: 1;
   align-self: flex-end;
+  /* Figma reference reveals card controls on hover instead of showing
+     them at rest on every card at once — restored here. */
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-soft), color var(--duration-fast) var(--ease-soft);
+}
+.card:hover .deleteButton,
+.card:focus-within .deleteButton {
+  opacity: 1;
 }
 .deleteButton:hover {
   color: var(--danger);

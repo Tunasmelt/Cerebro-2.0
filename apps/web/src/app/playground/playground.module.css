@@ -147,7 +147,11 @@
 }
 
 .statCost {
-  color: var(--accent-secondary);
+  color: var(--accent-success);
+}
+
+.statLatency {
+  color: var(--accent-locked);
 }
 
 .statDivider {

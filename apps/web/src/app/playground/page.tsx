@@ -275,7 +275,7 @@ export default function PlaygroundPage() {
               <div className={styles.statDivider} />
               <div className={styles.statBlock}>
                 <span className={styles.statLabel}>Est. latency</span>
-                <span className={styles.statValue}>~{estLatencyMs}ms</span>
+                <span className={`${styles.statValue} ${styles.statLatency}`}>~{estLatencyMs}ms</span>
               </div>
               <div className={styles.statDivider} />
 
