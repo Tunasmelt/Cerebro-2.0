@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import type * as THREE_NS from "three";
 
 import type { AssociativeEdge, ChunkSatellite, GraphEdge, GraphNode } from "@/lib/graph/types";
+import { graphNodeIsDimmed } from "@/lib/graph/search";
 
 // 3D brain graph rendering upgrade. Was a flat Canvas2D scene driven by
 // d3-force; this is a real three.js WebGL scene, same dynamic-import +
@@ -86,8 +87,8 @@ const COLLIDE_DISTANCE = NODE_RADIUS * 2.4;
 // stays the existing brand violet; image gets a distinct teal so the
 // two read apart from across the room, not just on hover.
 const SEALED_COLOR = "#f59e0b";
-const IMAGE_COLOR = "#2dd4bf";
-const DOCUMENT_COLOR = "#8b5cf6";
+const IMAGE_COLOR = "#22d3ee";
+const DOCUMENT_COLOR = "#7c5af6";
 
 function nodeBaseColor(status: string | null | undefined, mime: string | null | undefined): string {
   if (status === "sealed") return SEALED_COLOR;
@@ -97,6 +98,7 @@ function nodeBaseColor(status: string | null | undefined, mime: string | null | 
 
 type SimNode = {
   id: string;
+  title: string;
   cluster_id: string | null;
   mime: string | null | undefined;
   status: string | null | undefined;
@@ -128,6 +130,9 @@ export type GraphCanvasProps = {
    * or a past message's resolved retrieved_document_ids (replay). Null
    * when nothing is currently pulsing. */
   pulse?: GraphPulse | null;
+  /** Presentation-only graph search. Nodes remain in the simulation so
+   * typing never causes a layout restart; nonmatches are visually dimmed. */
+  searchQuery?: string;
   /** Test hook (Stage 2.3's "frame rate measured, not eyeballed" — see
    * graph/perf-test/page.tsx): called every second with the actual
    * measured frames-per-second, not an assumed/estimated number. */
@@ -152,6 +157,7 @@ export default function GraphCanvas({
   satellites,
   onNodeClick,
   pulse,
+  searchQuery = "",
   onFpsSample,
   onPositionsSample,
 }: GraphCanvasProps) {
@@ -167,6 +173,7 @@ export default function GraphCanvas({
   const onFpsSampleRef = useRef(onFpsSample);
   const onPositionsSampleRef = useRef(onPositionsSample);
   const pulseRef = useRef<GraphPulse | null | undefined>(pulse);
+  const searchQueryRef = useRef(searchQuery);
   const pulseStartRef = useRef<number>(0);
   const lastPulseKeyRef = useRef<number | null>(null);
   const pointerNdcRef = useRef({ x: -10, y: -10 }); // off-canvas until first move
@@ -207,6 +214,9 @@ export default function GraphCanvas({
       lastPulseKeyRef.current = pulse.key;
     }
   }, [pulse]);
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
 
   // Rebuild the sim node set whenever the node set itself changes — not
   // on every selection/satellite/edge change, which would otherwise
@@ -214,6 +224,7 @@ export default function GraphCanvas({
   useEffect(() => {
     simNodesRef.current = nodes.map((n) => ({
       id: n.id,
+      title: n.title,
       cluster_id: n.cluster_id,
       mime: n.mime,
       status: n.status,
@@ -255,7 +266,7 @@ export default function GraphCanvas({
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(width, height);
-      renderer.setClearColor(0x0a0a0f, 1);
+      renderer.setClearColor(0x080b12, 1);
       container.appendChild(renderer.domElement);
 
       // Real data the user is trying to read, not decoration — orbit
@@ -490,6 +501,9 @@ export default function GraphCanvas({
         for (let i = 0; i < simNodes.length; i++) {
           const sn = simNodes[i];
           const isFocus = sn.id === selectedIdRef.current || sn.id === hoveredIdRef.current;
+          const normalizedQuery = searchQueryRef.current.trim().toLowerCase();
+          const isMatch = normalizedQuery.length > 0 && sn.title.toLowerCase().includes(normalizedQuery);
+          const isDimmed = graphNodeIsDimmed(sn, normalizedQuery, selectedIdRef.current);
           const isPulsing = pulsingIds?.has(sn.id) ?? false;
           const scale = isPulsing
             ? 1.4 + 0.9 * pulseIntensity
@@ -507,6 +521,10 @@ export default function GraphCanvas({
             tmpColor.lerp(new THREE.Color(0xffffff), 0.5 + 0.5 * pulseIntensity);
           } else if (isFocus) {
             tmpColor.lerp(new THREE.Color(0xffffff), 0.35);
+          } else if (isMatch) {
+            tmpColor.lerp(new THREE.Color(0xffffff), 0.45);
+          } else if (isDimmed) {
+            tmpColor.multiplyScalar(0.18);
           }
           nodeMesh.setColorAt(i, tmpColor);
         }
@@ -524,7 +542,8 @@ export default function GraphCanvas({
       // last frame — resumed instantly the moment either does.
       let lastEdgeFocusKey = "";
       function updateEdges() {
-        const focusKey = `${selectedIdRef.current}|${hoveredIdRef.current}`;
+        const normalizedQuery = searchQueryRef.current.trim().toLowerCase();
+        const focusKey = `${selectedIdRef.current}|${hoveredIdRef.current}|${normalizedQuery}`;
         const settled = alphaRef.current <= ALPHA_MIN;
         if (settled && focusKey === lastEdgeFocusKey) return;
         lastEdgeFocusKey = focusKey;
@@ -542,10 +561,11 @@ export default function GraphCanvas({
             e.neighbor_document_id === selectedIdRef.current ||
             e.document_id === hoveredIdRef.current ||
             e.neighbor_document_id === hoveredIdRef.current;
+          const matchesSearch = !normalizedQuery || a.title.toLowerCase().includes(normalizedQuery) || b.title.toLowerCase().includes(normalizedQuery);
           positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
           const c = touchesFocus
-            ? hexToThreeColor(THREE, "#8b5cf6")
-            : hexToThreeColor(THREE, "#3f3f4a");
+            ? hexToThreeColor(THREE, "#7c5af6")
+            : hexToThreeColor(THREE, matchesSearch ? "#3f3f4a" : "#151923");
           colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
         }
         edgeGeometry.setAttribute(
@@ -572,7 +592,7 @@ export default function GraphCanvas({
         const positions: number[] = [];
         const colors: number[] = [];
         const maxWeight = Math.max(1, ...currentEdges.map((e) => e.weight));
-        const baseColor = hexToThreeColor(THREE, "#2dd4bf"); // teal —
+        const baseColor = hexToThreeColor(THREE, "#22d3ee"); // teal —
         // distinct from the violet kNN edges above.
         for (const e of currentEdges) {
           const a = idToNode.get(e.document_id);

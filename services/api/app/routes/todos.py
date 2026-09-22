@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import Literal
 
 from app.core.todo_storage import get_todo_storage
 
@@ -14,6 +15,7 @@ def _error(code: str, message: str, status_code: int) -> JSONResponse:
 class CreateTodoBody(BaseModel):
     title: str
     document_id: str | None = None
+    priority: Literal["low", "medium", "high"] = "medium"
 
 
 @router.post("/api/v1/todos")
@@ -24,6 +26,7 @@ async def create_todo(request: Request, body: CreateTodoBody):
         user_id=request.state.user["sub"],
         title=body.title,
         document_id=body.document_id,
+        priority=body.priority,
     )
     return JSONResponse(todo, status_code=201)
 
@@ -40,6 +43,7 @@ async def list_todos(request: Request):
 class UpdateTodoBody(BaseModel):
     completed: bool | None = None
     title: str | None = None
+    priority: Literal["low", "medium", "high"] | None = None
 
 
 @router.patch("/api/v1/todos/{todo_id}")

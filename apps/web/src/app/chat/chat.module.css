@@ -1,12 +1,10 @@
 .shell {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 270px 1fr;
   height: 100%;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  background:
-    radial-gradient(ellipse 700px 400px at 100% 0%, rgba(139, 92, 246, 0.04), transparent 60%),
-    var(--bg-base);
+  background: var(--bg-base);
 }
 
 .sessionList {
@@ -23,6 +21,8 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.sessionListHeader { display: flex; align-items: center; justify-content: space-between; }
+.sessionListHeader button { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--border-default); border-radius: 50%; background: transparent; color: var(--text-primary); cursor: pointer; }
 
 .modalError {
   font-size: var(--text-xs);
@@ -245,6 +245,10 @@
 .emptyStateCta:hover {
   background: var(--accent-primary-hover);
 }
+.composer { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-subtle); background: var(--bg-base); }
+.composer input { flex: 1; min-width: 0; border: 1px solid var(--border-default); border-radius: 7px; background: var(--bg-elevated); color: var(--text-primary); padding: 9px 11px; }
+.composer button { border: 0; border-radius: 7px; background: var(--accent-primary); color: #fff; padding: 9px 14px; font-weight: 650; cursor: pointer; }
+.composer button:disabled { opacity: .5; cursor: default; }
 
 /* Grid never collapsed below desktop width at all — a fixed 300px
    session rail plus transcript squeezed into whatever was left made

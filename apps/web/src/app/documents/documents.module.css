@@ -5,9 +5,9 @@
 }
 
 .container {
-  max-width: 1120px;
+  max-width: 984px;
   margin: 0 auto;
-  padding: 48px 40px 100px;
+  padding: 40px 28px 96px;
 }
 
 .header {
@@ -18,7 +18,10 @@
 }
 
 .header h1 {
-  font-size: var(--text-2xl);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.2;
   font-weight: var(--weight-semibold);
   margin: 0;
 }
@@ -41,7 +44,7 @@
   align-items: center;
   gap: var(--space-3);
   cursor: pointer;
-  background: radial-gradient(ellipse 400px 160px at 50% 0%, rgba(139, 92, 246, 0.05), transparent 70%);
+  background: transparent;
   transition: border-color var(--duration-base) var(--ease-soft),
     background var(--duration-base) var(--ease-soft),
     box-shadow var(--duration-base) var(--ease-soft);
@@ -378,6 +381,20 @@
   padding: var(--space-6) var(--space-3);
 }
 
+.toolbar { display: flex; gap: 8px; margin-left: auto; }
+.searchInput, .statusFilter {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  padding: 9px 11px;
+  font: inherit;
+}
+.searchInput { width: 220px; min-width: 0; }
+.statusFilter { width: 132px; }
+.searchInput:focus, .statusFilter:focus { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+.documentCount { margin-top: 10px; color: var(--text-disabled); font: 11px var(--font-mono); }
+
 .actionsCell {
   display: flex;
   flex-wrap: nowrap;
@@ -431,6 +448,7 @@
   .header h1 {
     font-size: var(--text-xl);
   }
+  .header { align-items: stretch; flex-direction: column; gap: 14px; }
   .dropzone {
     padding: var(--space-6) var(--space-4);
   }
@@ -446,23 +464,18 @@
     align-items: flex-start;
   }
 
-  /* Size/Uploaded columns are the least essential on a narrow screen —
-     dropping them (rather than squeezing every column) keeps Title and
-     Actions, the two columns actually worked with on mobile, legible.
-     The table still scrolls horizontally as a fallback if a title +
-     the action buttons still don't fit. */
-  .table th:nth-child(2),
-  .table td:nth-child(2),
-  .table th:nth-child(3),
-  .table td:nth-child(3) {
-    display: none;
-  }
-  .tableCard {
-    overflow-x: auto;
-  }
-  .table {
-    min-width: 280px;
-  }
+  .toolbar { margin-left: 0; flex-direction: column; }
+  .searchInput, .statusFilter { width: 100%; }
+  .tableCard { overflow: visible; background: transparent; border: 0; }
+  .table, .table tbody { display: block; min-width: 0; }
+  .table thead { display: none; }
+  .table tr { display: block; margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-surface); }
+  .table td { display: flex !important; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 7px 0; border: 0; }
+  .table td::before { content: attr(data-label); color: var(--text-tertiary); font-size: var(--text-xs); flex: 0 0 64px; }
+  .table td[data-label="Title"] { display: block !important; }
+  .table td[data-label="Title"]::before { display: none; }
+  .table td[colspan] { display: block !important; }
+  .table td[colspan]::before { display: none; }
   .actionsCell {
     gap: 4px;
   }

@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import AppShell from "@/components/AppShell";
+import RouteLoading from "@/components/RouteLoading";
+import Toast from "@/components/Toast";
 import { authedFetch } from "@/lib/api";
 import type { DocumentRow } from "@/lib/graph/types";
 import { createClient } from "@/lib/supabase/client";
@@ -20,7 +22,7 @@ import styles from "./settings.module.css";
 // claims; "Unseal" links to /documents rather than a new inline flow,
 // since Documents doesn't have one either yet).
 
-type Pane = "account" | "security" | "storage";
+type Pane = "profile" | "security" | "storage";
 
 // CLAUDE.md's documented Supabase free-tier ceiling — static context,
 // not a live-queried project-usage number (not exposed by this app's
@@ -41,7 +43,14 @@ function formatBytes(bytes: number): string {
 export default function SettingsPage() {
   const { checking, email, displayName, avatarUrl } = useAuthedUser();
   const router = useRouter();
-  const [pane, setPane] = useState<Pane>("account");
+  const [pane, setPane] = useState<Pane>(() =>
+    typeof window !== "undefined" && window.location.hash === "#security" ? "security" : "profile"
+  );
+
+  function selectPane(nextPane: Pane) {
+    setPane(nextPane);
+    window.history.replaceState(null, "", nextPane === "profile" ? window.location.pathname : `#${nextPane}`);
+  }
 
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -174,7 +183,7 @@ export default function SettingsPage() {
     }
   }
 
-  if (checking) return null;
+  if (checking) return <RouteLoading />;
 
   const sealedDocuments = documents.filter((d) => d.status === "sealed");
   const totalIndexedBytes = documents.reduce((sum, d) => sum + (d.size_bytes ?? 0), 0);
@@ -184,33 +193,31 @@ export default function SettingsPage() {
     <AppShell userEmail={email}>
       <div className={styles.shell}>
         <div className={styles.subnav}>
-          <div
-            className={`${styles.subnavItem} ${pane === "account" ? styles.subnavItemActive : ""}`}
-            onClick={() => setPane("account")}
+          <button
+            className={`${styles.subnavItem} ${pane === "profile" ? styles.subnavItemActive : ""}`}
+            onClick={() => selectPane("profile")}
           >
-            Account
-          </div>
-          <div
+            Profile
+          </button>
+          <button
             className={`${styles.subnavItem} ${pane === "security" ? styles.subnavItemActive : ""}`}
-            onClick={() => setPane("security")}
+            onClick={() => selectPane("security")}
           >
             Security
-          </div>
-          <div
+          </button>
+          <button
             className={`${styles.subnavItem} ${pane === "storage" ? styles.subnavItemActive : ""}`}
-            onClick={() => setPane("storage")}
+            onClick={() => selectPane("storage")}
           >
             Data &amp; Storage
-          </div>
+          </button>
         </div>
 
         <div className={styles.content}>
-          {pane === "account" && (
+          {pane === "profile" && (
             <div className={styles.pane}>
-              <h1>Account</h1>
-
-              {accountMessage && <p className={styles.statusMessage}>{accountMessage}</p>}
-              {accountError && <p className={styles.errorMessage}>{accountError}</p>}
+              {accountMessage && <Toast message={accountMessage} onDismiss={() => setAccountMessage(null)} />}
+              {accountError && <Toast message={accountError} tone="error" onDismiss={() => setAccountError(null)} />}
 
               <div className={styles.card}>
                 <h2>Profile</h2>
@@ -265,59 +272,23 @@ export default function SettingsPage() {
                 </button>
               </div>
 
-              <div className={styles.card}>
-                <h2>Password</h2>
-                <div className={styles.field}>
-                  <label>New password</label>
-                  <input
-                    type="password"
-                    placeholder="At least 8 characters"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                  />
-                </div>
-                <button
-                  className={`${styles.btn} ${styles.btnPrimary}`}
-                  disabled={passwordSaving}
-                  onClick={handlePasswordUpdate}
-                >
-                  {passwordSaving ? "Updating…" : "Update password"}
-                </button>
-              </div>
-
-              <div className={`${styles.card} ${styles.dangerZone}`}>
-                <h2>Delete account</h2>
-                <p className={styles.desc}>
-                  Permanently deletes every document, chat, kanban board, and
-                  task in your vault, including sealed documents. This
-                  cannot be undone. Your account will remain able to sign
-                  in, empty.
-                </p>
-                <div className={styles.confirmRow}>
-                  <div className={styles.field}>
-                    <label>Type DELETE to confirm</label>
-                    <input
-                      type="text"
-                      value={deleteConfirmText}
-                      onChange={(e) => setDeleteConfirmText(e.target.value)}
-                    />
-                  </div>
-                  <button
-                    className={`${styles.btn} ${styles.btnDanger}`}
-                    disabled={deleteConfirmText !== "DELETE" || deleting}
-                    onClick={handleDeleteAccount}
-                  >
-                    {deleting ? "Deleting…" : "Delete account"}
-                  </button>
-                </div>
-                {deleteError && <p className={styles.errorMessage}>{deleteError}</p>}
-              </div>
             </div>
           )}
 
           {pane === "security" && (
             <div className={styles.pane}>
-              <h1>Security</h1>
+              {accountMessage && <Toast message={accountMessage} onDismiss={() => setAccountMessage(null)} />}
+              {accountError && <Toast message={accountError} tone="error" onDismiss={() => setAccountError(null)} />}
+              <div className={styles.card}>
+                <h2>Password</h2>
+                <div className={styles.field}>
+                  <label>New password</label>
+                  <input type="password" placeholder="At least 8 characters" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                </div>
+                <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={passwordSaving || newPassword.length < 8} onClick={handlePasswordUpdate}>
+                  {passwordSaving ? "Updating…" : "Update password"}
+                </button>
+              </div>
               <div className={styles.card}>
                 <h2>Sealed documents</h2>
                 <p className={styles.desc}>
@@ -343,12 +314,25 @@ export default function SettingsPage() {
                   ))}
                 </div>
               </div>
+              <div className={`${styles.card} ${styles.dangerZone}`}>
+                <h2>Delete account</h2>
+                <p className={styles.desc}>Permanently deletes every document, chat, kanban board, and task in your vault, including sealed documents. This cannot be undone. Your account will remain able to sign in, empty.</p>
+                <div className={styles.confirmRow}>
+                  <div className={styles.field}>
+                    <label>Type DELETE to confirm</label>
+                    <input type="text" placeholder="DELETE" value={deleteConfirmText} onChange={(e) => setDeleteConfirmText(e.target.value)} />
+                  </div>
+                  <button className={`${styles.btn} ${styles.btnDanger}`} disabled={deleteConfirmText !== "DELETE" || deleting} onClick={handleDeleteAccount}>
+                    {deleting ? "Deleting…" : "Delete account"}
+                  </button>
+                </div>
+                {deleteError && <p className={styles.errorMessage}>{deleteError}</p>}
+              </div>
             </div>
           )}
 
           {pane === "storage" && (
             <div className={styles.pane}>
-              <h1>Data &amp; Storage</h1>
               <div className={styles.card}>
                 <h2>Usage</h2>
                 <div className={styles.storageBlock}>

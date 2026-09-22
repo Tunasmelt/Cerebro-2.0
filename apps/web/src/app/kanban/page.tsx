@@ -43,6 +43,9 @@ export default function KanbanPage() {
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
   const [deletePromptFor, setDeletePromptFor] = useState<Card | null>(null);
   const [deletingCard, setDeletingCard] = useState(false);
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
 
   // Stage 4.5 (stretch) — a tool-calling agent turn, separate from
   // /playground's plain generation and from the normal chat page. Lazily
@@ -171,6 +174,36 @@ export default function KanbanPage() {
     });
   }
 
+  function startEditing(card: Card) {
+    setEditingCardId(card.id);
+    setEditTitle(card.title);
+    setEditDescription(card.description ?? "");
+  }
+
+  async function saveCard(card: Card) {
+    const title = editTitle.trim();
+    if (!title) return;
+    const res = await authedFetch(`/api/cards/${card.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title, description: editDescription.trim() }),
+    });
+    if (!res.ok) return;
+    const updated: Card = await res.json();
+    setBoard((prev) => prev ? { ...prev, cards: prev.cards.map((item) => item.id === card.id ? updated : item) } : prev);
+    setEditingCardId(null);
+  }
+
+  async function moveCardWithKeyboard(card: Card, direction: -1 | 1) {
+    if (!board) return;
+    const currentColumn = board.columns.indexOf(card.column_name);
+    const targetColumn = board.columns[currentColumn + direction];
+    if (!targetColumn) return;
+    draggedCardId.current = card.id;
+    await handleDrop(targetColumn, cardsInColumn(targetColumn).length);
+    draggedCardId.current = null;
+  }
+
   async function handleAskAgent() {
     const message = agentMessage.trim();
     if (!message || agentRunning) return;
@@ -279,9 +312,23 @@ export default function KanbanPage() {
                 <div
                   key={card.id}
                   className={styles.card}
-                  draggable
+                  draggable={editingCardId !== card.id}
+                  tabIndex={0}
+                  role="group"
+                  aria-label={`${card.title}, ${columnName}. Press Alt and an arrow key to move.`}
                   onDragStart={() => handleDragStart(card.id)}
                   onDragEnd={handleDragEnd}
+                  onKeyDown={(e) => {
+                    if (!e.altKey) return;
+                    if (e.key === "ArrowLeft") {
+                      e.preventDefault();
+                      void moveCardWithKeyboard(card, -1);
+                    }
+                    if (e.key === "ArrowRight") {
+                      e.preventDefault();
+                      void moveCardWithKeyboard(card, 1);
+                    }
+                  }}
                   onDragOver={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -293,16 +340,26 @@ export default function KanbanPage() {
                     handleDrop(columnName, index);
                   }}
                 >
-                  <div className={styles.cardTitle}>{card.title}</div>
-                  {card.description && (
-                    <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                      {card.description}
+                  {editingCardId === card.id ? (
+                    <div className={styles.cardEditor} onClick={(event) => event.stopPropagation()}>
+                      <input autoFocus value={editTitle} onChange={(event) => setEditTitle(event.target.value)} aria-label="Card title" />
+                      <textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} placeholder="Description" aria-label="Card description" />
+                      <div className={styles.cardEditorActions}>
+                        <button onClick={() => void saveCard(card)} disabled={!editTitle.trim()}>Save</button>
+                        <button onClick={() => setEditingCardId(null)}>Cancel</button>
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      <button className={styles.cardTitle} onClick={() => startEditing(card)}>{card.title}</button>
+                      {card.description && <div className={styles.cardDescription}>{card.description}</div>}
+                    </>
                   )}
                   <button
                     className={styles.deleteButton}
                     onClick={() => setDeletePromptFor(card)}
                     aria-label="Delete card"
+                    disabled={editingCardId === card.id}
                   >
                     ×
                   </button>
