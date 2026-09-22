@@ -78,6 +78,20 @@ function typeLabel(mime: string): string {
   return ALLOWED_MIME_TYPES[mime] ?? mime.split("/")[1]?.toUpperCase() ?? "FILE";
 }
 
+// Figma reference color-codes the type badge per file type (PDF/JPG/
+// PNG/MD each their own tint) so a document's kind reads at a glance
+// down the whole list — the migration had flattened every type to one
+// uniform gray badge. Restored via the same styles[key] dynamic-class
+// pattern the status badge already uses just below.
+function typeClass(mime: string): string {
+  const label = typeLabel(mime);
+  if (label === "PDF") return "typePdf";
+  if (label === "JPG" || label === "WEBP") return "typeImage";
+  if (label === "PNG") return "typePng";
+  if (label === "MD") return "typeMd";
+  return "typeText";
+}
+
 // Compact icon buttons for the actions column — text-label buttons
 // ("Extract action items", "Retry", …) wrapped unpredictably across two
 // ragged rows once a document had more than two available actions (see
@@ -709,7 +723,7 @@ export default function DocumentsPage() {
                 <tr style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}>
                   <td data-label="Title">
                     <div className={styles.titleCell}>
-                      <div className={styles.typeIcon}>{typeLabel(doc.mime)}</div>
+                      <div className={`${styles.typeIcon} ${styles[typeClass(doc.mime)]}`}>{typeLabel(doc.mime)}</div>
                       {renamingId === doc.id ? (
                         <>
                           <input

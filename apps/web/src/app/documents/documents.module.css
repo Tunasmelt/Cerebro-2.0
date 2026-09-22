@@ -199,6 +199,14 @@
   font-size: 10px;
   color: var(--text-secondary);
 }
+/* Per-type tint, matching the Figma reference's TYPE_COLORS exactly —
+   a document's kind should read at a glance down the whole list, not
+   require reading the three-letter label on every uniform gray box. */
+.typePdf { background: var(--danger-subtle); border-color: transparent; color: var(--danger-hover); }
+.typeImage { background: var(--accent-secondary-subtle); border-color: transparent; color: var(--accent-secondary); }
+.typePng { background: var(--accent-success-subtle); border-color: transparent; color: var(--accent-success); }
+.typeMd { background: var(--accent-locked-subtle); border-color: transparent; color: var(--accent-locked); }
+.typeText { background: var(--bg-elevated-hover); border-color: var(--border-default); color: var(--text-secondary); }
 .monoCell {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -220,11 +228,11 @@
   border-radius: 50%;
 }
 .badge.processing {
-  background: var(--accent-primary-subtle);
-  color: var(--accent-primary-hover);
+  background: var(--accent-locked-subtle);
+  color: var(--accent-locked);
 }
 .badge.processing .badgeDot {
-  background: var(--accent-primary);
+  background: var(--accent-locked);
   animation: dotpulse var(--duration-pulse) var(--ease-pulse) infinite;
 }
 @keyframes dotpulse {
@@ -232,11 +240,11 @@
   50% { opacity: 0.4; }
 }
 .badge.ready {
-  background: var(--accent-secondary-subtle);
-  color: var(--accent-secondary);
+  background: var(--accent-success-subtle);
+  color: var(--accent-success);
 }
 .badge.ready .badgeDot {
-  background: var(--accent-secondary);
+  background: var(--accent-success);
 }
 .badge.failed {
   background: var(--danger-subtle);
@@ -401,6 +409,14 @@
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
+  /* Figma reference reveals row actions on hover instead of showing
+     them at rest on every row at once — restored here. */
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-soft);
+}
+.table tbody tr:hover .actionsCell,
+.table tbody tr:focus-within .actionsCell {
+  opacity: 1;
 }
 
 .iconActionBtn {

@@ -119,7 +119,7 @@ export default function TasksPage() {
         <header className={styles.pageHeader}>
           <h1>Tasks</h1>
           <div className={styles.filters} aria-label="Filter tasks by priority">
-            {(["all", "high", "medium", "low"] as Filter[]).map((value) => <button key={value} className={`${styles.filterButton} ${filter === value ? styles.filterActive : ""}`} onClick={() => setFilter(value)}>{value}</button>)}
+            {(["all", "high", "medium", "low"] as Filter[]).map((value) => <button key={value} className={`${styles.filterButton} ${filter === value ? `${styles.filterActive} ${styles[`filterActive${value[0].toUpperCase()}${value.slice(1)}`]}` : ""}`} onClick={() => setFilter(value)}>{value}</button>)}
           </div>
         </header>
         <div className={styles.addRow}>

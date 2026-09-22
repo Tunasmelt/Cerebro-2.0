@@ -135,8 +135,8 @@
   }
 }
 .checkboxChecked {
-  background: var(--accent-secondary);
-  border-color: var(--accent-secondary);
+  background: var(--accent-success);
+  border-color: var(--accent-success);
   animation: checkPop var(--duration-fast) var(--ease-soft);
 }
 
@@ -159,6 +159,14 @@
   padding: 0;
   line-height: 1;
   flex-shrink: 0;
+  /* Figma reference reveals the delete control on row hover instead of
+     showing it at rest on every row at once — restored here. */
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-soft), color var(--duration-fast) var(--ease-soft);
+}
+.row:hover .deleteButton,
+.row:focus-within .deleteButton {
+  opacity: 1;
 }
 .deleteButton:hover {
   color: var(--danger);
@@ -202,14 +210,21 @@
 }
 
 .filters { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-elevated); }
-.filterButton { border: 0; border-radius: 5px; padding: 5px 8px; background: transparent; color: var(--text-disabled); cursor: pointer; font-size: 11px; text-transform: capitalize; }
-.filterActive { background: var(--bg-raised); color: var(--text-primary); }
+.filterButton { border: 1px solid transparent; border-radius: 5px; padding: 5px 8px; background: transparent; color: var(--text-disabled); cursor: pointer; font-size: 11px; text-transform: capitalize; }
+/* Each filter tints with its own priority color when active, matching
+   the Figma reference — not one generic "selected" treatment for all
+   four, which loses the at-a-glance color coding the tabs are for. */
+.filterActive { color: var(--text-primary); }
+.filterActiveAll { background: var(--accent-primary-subtle); color: var(--accent-primary-hover); border-color: var(--accent-primary-border); }
+.filterActiveHigh { background: var(--danger-subtle); color: var(--danger-hover); border-color: rgba(244, 63, 94, 0.3); }
+.filterActiveMedium { background: var(--accent-locked-subtle); color: var(--accent-locked); border-color: rgba(245, 158, 11, 0.3); }
+.filterActiveLow { background: rgba(107, 122, 153, 0.15); color: var(--text-secondary); border-color: rgba(107, 122, 153, 0.3); }
 .prioritySelect, .rowPriority { border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-base); color: var(--text-secondary); font-size: 11px; padding: 5px 7px; }
 .rowPriority { opacity: .8; }
 .priorityDot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
 .priorityHigh { background: var(--danger); box-shadow: 0 0 8px rgba(244,63,94,.35); }
 .priorityMedium { background: var(--accent-locked); }
-.priorityLow { background: var(--accent-secondary); }
+.priorityLow { background: var(--text-disabled); }
 .editInput { flex: 1; min-width: 0; border: 1px solid var(--accent-primary); border-radius: 5px; background: var(--bg-base); color: var(--text-primary); padding: 5px 7px; }
 .taskText { border: 0; background: transparent; text-align: left; cursor: text; }
 
