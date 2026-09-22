@@ -5,8 +5,10 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import AnswerMarkdown from "@/components/AnswerMarkdown";
 import AppShell from "@/components/AppShell";
+import RouteLoading from "@/components/RouteLoading";
 import { authedFetch } from "@/lib/api";
 import { getActiveUnlocks } from "@/lib/crypto/unlockSession";
+import { graphMatches } from "@/lib/graph/search";
 import { parseSSEStream } from "@/lib/graph/sse";
 import type {
   AssociativeEdge,
@@ -43,6 +45,7 @@ function GraphPageInner() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [satellites, setSatellites] = useState<ChunkSatellite[]>([]);
   const [legendOpen, setLegendOpen] = useState(true);
+  const [graphSearch, setGraphSearch] = useState("");
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -77,6 +80,7 @@ function GraphPageInner() {
   const sessionsPanelRef = useRef<HTMLDivElement | null>(null);
   const sessionsButtonRef = useRef<HTMLButtonElement | null>(null);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const graphSearchRef = useRef<HTMLInputElement | null>(null);
 
   // Refs, not state, for the last-seen payloads — comparing here avoids
   // handing GraphCanvas a new array reference (which restarts its
@@ -139,7 +143,7 @@ function GraphPageInner() {
           target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
         if (isTyping) return;
         e.preventDefault();
-        chatInputRef.current?.focus();
+        graphSearchRef.current?.focus();
       }
     }
     window.addEventListener("keydown", handleKeyDown);
@@ -308,9 +312,10 @@ function GraphPageInner() {
     }
   }
 
-  if (checking) return null;
+  if (checking) return <RouteLoading />;
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
+  const matchCount = graphMatches(nodes, graphSearch).length;
 
   // Stage 7.10 — real markdown via AnswerMarkdown, not a plain-text
   // <span>. While streaming, citation events (the only source of truth
@@ -356,12 +361,16 @@ function GraphPageInner() {
           satellites={satellites}
           onNodeClick={handleNodeClick}
           pulse={pulse}
+          searchQuery={graphSearch}
         />
       </div>
 
-      <span className={styles.docsLink} onClick={() => router.push("/documents")}>
-        Documents
-      </span>
+      <div className={styles.graphToolbar}>
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><circle cx="5.5" cy="5.5" r="4" stroke="currentColor" strokeWidth="1.4"/><path d="m8.5 8.5 3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+        <input ref={graphSearchRef} type="search" value={graphSearch} onChange={(event) => setGraphSearch(event.target.value)} placeholder="Search nodes… (press /)" aria-label="Search graph" />
+        {graphSearch ? <button className={styles.searchClear} onClick={() => setGraphSearch("")} aria-label="Clear graph search">×</button> : <kbd>/</kbd>}
+      </div>
+      {graphSearch && <div className={styles.matchCount}>{matchCount} match{matchCount === 1 ? "" : "es"}</div>}
 
       {loadingGraph ? (
         <div className={styles.emptyState}>
@@ -440,9 +449,9 @@ function GraphPageInner() {
         <div className={styles.legend}>
           <div>node color = type</div>
           <div style={{ marginTop: 4 }}>
-            <span style={{ color: "#8b5cf6" }}>●</span> document
+            <span style={{ color: "var(--accent-primary)" }}>●</span> document
             {"  "}
-            <span style={{ color: "#2dd4bf" }}>●</span> image
+            <span style={{ color: "var(--accent-secondary)" }}>●</span> image
             {"  "}
             <span style={{ color: "#f59e0b" }}>●</span> sealed
           </div>
@@ -496,7 +505,7 @@ function GraphPageInner() {
             className={styles.chatInput}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Ask about your documents… (/ to focus)"
+            placeholder="Ask about your documents…"
             disabled={streaming}
           />
           <button type="submit" className={styles.chatSend} disabled={streaming}>
@@ -535,7 +544,7 @@ function GraphPageInner() {
 
 export default function GraphPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<RouteLoading />}>
       <GraphPageInner />
     </Suspense>
   );

@@ -1,0 +1,20 @@
+.control { font: inherit; border-radius: var(--radius-md); transition: border-color var(--duration-fast) var(--ease-soft), background var(--duration-fast) var(--ease-soft), color var(--duration-fast) var(--ease-soft), opacity var(--duration-fast) var(--ease-soft); }
+.control:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.control:disabled { cursor: not-allowed; opacity: .5; }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; padding: 7px 14px; border: 1px solid transparent; background: var(--accent-primary); color: var(--text-on-accent); font-weight: var(--weight-medium); cursor: pointer; }
+.secondary { border-color: var(--border-default); background: var(--bg-elevated); color: var(--text-primary); }
+.ghost { border-color: transparent; background: transparent; color: var(--text-secondary); }
+.danger { border-color: color-mix(in srgb, var(--danger) 38%, transparent); background: var(--danger-subtle); color: var(--danger-hover); }
+.iconButton { width: 34px; padding: 0; }
+.field { width: 100%; min-height: 36px; padding: 8px 11px; border: 1px solid var(--border-default); background: var(--bg-base); color: var(--text-primary); }
+.panel { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-elevated); padding: var(--space-5); }
+.badge { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 2px 8px; border-radius: var(--radius-pill); background: var(--bg-elevated-hover); color: var(--text-secondary); font-size: var(--text-xs); }
+.badgeSuccess { background: var(--accent-secondary-subtle); color: var(--accent-secondary); }
+.badgeWarning { background: var(--accent-locked-subtle); color: var(--accent-locked); }
+.badgeDanger { background: var(--danger-subtle); color: var(--danger-hover); }
+.empty { display: grid; place-items: center; gap: 10px; min-height: 140px; padding: var(--space-6); color: var(--text-secondary); text-align: center; }
+.table { width: 100%; border-collapse: collapse; }
+.table th { color: var(--text-disabled); font: 11px var(--font-mono); letter-spacing: .05em; text-align: left; text-transform: uppercase; }
+.table th, .table td { padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); }
+@media (pointer: coarse) { .button, .iconButton { min-height: 44px; } .iconButton { width: 44px; } .field { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .control { transition: none; } }

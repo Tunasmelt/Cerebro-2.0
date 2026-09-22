@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import AppShell from "@/components/AppShell";
+import RouteLoading from "@/components/RouteLoading";
 import { authedFetch } from "@/lib/api";
 import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./playground.module.css";
@@ -114,7 +115,7 @@ export default function PlaygroundPage() {
       .finally(() => setLoadingBreakdown(false));
   }, [selectedSessionId, selectedMessageId]);
 
-  if (checking) return null;
+  if (checking) return <RouteLoading />;
 
   const assistantMessages = messages.filter((m) => m.role === "assistant");
 

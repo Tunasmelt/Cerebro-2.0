@@ -16,7 +16,8 @@ from app.core.http_client import CachedHttpClientMixin
 
 class TodoStorage(Protocol):
     async def create_todo(
-        self, *, user_jwt: str, user_id: str, title: str, document_id: str | None
+        self, *, user_jwt: str, user_id: str, title: str, document_id: str | None,
+        priority: str = "medium"
     ) -> dict[str, Any]: ...
 
     async def list_todos(self, *, user_jwt: str, user_id: str) -> list[dict[str, Any]]: ...
@@ -41,13 +42,14 @@ class SupabaseTodoStorage(CachedHttpClientMixin):
         }
 
     async def create_todo(
-        self, *, user_jwt: str, user_id: str, title: str, document_id: str | None
+        self, *, user_jwt: str, user_id: str, title: str, document_id: str | None,
+        priority: str = "medium"
     ) -> dict[str, Any]:
         client = self._client()
         response = await client.post(
             f"{self._supabase_url}/rest/v1/todos",
             headers={**self._headers(user_jwt), "Prefer": "return=representation"},
-            json={"user_id": user_id, "title": title, "document_id": document_id},
+            json={"user_id": user_id, "title": title, "document_id": document_id, "priority": priority},
         )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="todo_create_failed")
@@ -60,7 +62,7 @@ class SupabaseTodoStorage(CachedHttpClientMixin):
             headers=self._headers(user_jwt),
             params={
                 "user_id": f"eq.{user_id}",
-                "select": "id,title,completed,completed_at,document_id,created_at",
+                "select": "id,title,priority,completed,completed_at,document_id,created_at",
                 "order": "created_at.desc",
             },
         )

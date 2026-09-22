@@ -38,7 +38,7 @@ class _FakeTodoStorage:
         self.delete_result = True
         self.update_calls: list[tuple[str, dict]] = []
 
-    async def create_todo(self, *, user_jwt, user_id, title, document_id):
+    async def create_todo(self, *, user_jwt, user_id, title, document_id, priority="medium"):
         return self.todo_to_create
 
     async def list_todos(self, *, user_jwt, user_id):
@@ -99,6 +99,20 @@ def test_create_todo(client, keypair):
     assert response.status_code == 201
     assert response.json()["id"] == "todo-1"
     assert response.json()["completed"] is False
+
+
+def test_create_todo_accepts_priority(client, keypair):
+    private_key, _ = keypair
+    fake = _FakeTodoStorage()
+    fake.todo_to_create = {"id": "todo-2", "title": "Urgent", "priority": "high"}
+    storage_module.set_todo_storage(fake)
+
+    response = client.post(
+        "/api/v1/todos", headers=auth_headers(private_key),
+        json={"title": "Urgent", "priority": "high"},
+    )
+    assert response.status_code == 201
+    assert response.json()["priority"] == "high"
 
 
 def test_create_todo_with_document_reference_chip(client, keypair):

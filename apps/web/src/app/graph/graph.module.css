@@ -2,7 +2,7 @@
   position: relative;
   width: 100%;
   height: 100%;
-  background: radial-gradient(ellipse at 50% 35%, rgba(139, 92, 246, 0.05), transparent 60%), #0a0a0f;
+  background: #080b12;
   overflow: hidden;
 }
 
@@ -13,16 +13,16 @@
 
 .sidePanel {
   position: absolute;
-  top: 24px;
-  right: 24px;
-  width: 320px;
+  top: 22px;
+  right: 20px;
+  width: 288px;
   max-height: calc(100% - 48px);
   overflow-y: auto;
-  background: #13131a;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   padding: 20px;
-  color: #f4f4f5;
+  color: var(--text-primary);
 }
 
 .sidePanelTitle {
@@ -38,7 +38,7 @@
   right: 16px;
   background: none;
   border: none;
-  color: #a1a1aa;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
@@ -142,18 +142,29 @@
   background: var(--accent-primary-hover);
 }
 
-.docsLink {
+.graphToolbar {
   position: absolute;
-  top: 20px;
-  left: 24px;
-  font-size: 13px;
-  color: #a1a1aa;
-  cursor: pointer;
-  z-index: 3;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-md);
 }
-.docsLink:hover {
-  color: #f4f4f5;
-}
+.graphToolbar:focus-within { border-color: color-mix(in srgb, var(--accent-secondary) 35%, var(--border-default)); }
+.graphToolbar svg { color: var(--text-disabled); flex: 0 0 auto; }
+.graphToolbar input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); padding: 0; font: inherit; font-size: var(--text-sm); }
+.graphToolbar kbd { border-radius: 4px; background: var(--bg-elevated-hover); color: var(--text-disabled); padding: 2px 6px; font: 10px var(--font-mono); }
+.graphToolbar .searchClear { border: 0; background: transparent; color: var(--text-disabled); padding: 0 2px; cursor: pointer; font-size: 16px; }
+.matchCount { position: absolute; top: 62px; left: 50%; z-index: 4; transform: translateX(-50%); border-radius: var(--radius-pill); background: var(--accent-secondary-subtle); color: var(--accent-secondary); padding: 3px 9px; font-size: var(--text-xs); }
 
 /* A persistent but unobtrusive chat input docks at the bottom center,
    pill-shaped, floating over the canvas — see the chat dock in
@@ -348,6 +359,8 @@
    docs link + chat dock all fight for the same bottom/top strip once
    the panel is full-width. */
 @media (max-width: 640px) {
+  .graphToolbar { top: 10px; width: min(260px, calc(100% - 24px)); }
+  .matchCount { top: 56px; }
   .sidePanel {
     top: auto;
     bottom: 96px;
@@ -358,11 +371,6 @@
   }
   .legend {
     display: none;
-  }
-  .docsLink {
-    top: 12px;
-    left: 12px;
-    font-size: 12px;
   }
   .chatDock {
     bottom: 12px;

@@ -7,9 +7,12 @@ import Link from "next/link";
 
 import AnswerMarkdown from "@/components/AnswerMarkdown";
 import AppShell from "@/components/AppShell";
+import RouteLoading from "@/components/RouteLoading";
 import ConfirmModal from "@/components/ConfirmModal";
 import { authedFetch } from "@/lib/api";
+import { getActiveUnlocks } from "@/lib/crypto/unlockSession";
 import { parseAnswerSegments } from "@/lib/graph/citations";
+import { parseSSEStream } from "@/lib/graph/sse";
 import type { ChatMessage, ChatSession, Citation } from "@/lib/graph/types";
 import { useAuthedUser } from "@/lib/useAuthedUser";
 import styles from "./chat.module.css";
@@ -98,6 +101,10 @@ function ChatPageInner() {
   // — without this the empty-state CTA flashed before the first fetch
   // resolved, even for accounts with plenty of chat history.
   const [loadingSessions, setLoadingSessions] = useState(true);
+  const [query, setQuery] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [draftAnswer, setDraftAnswer] = useState("");
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -195,7 +202,52 @@ function ChatPageInner() {
     );
   }
 
-  if (checking) return null;
+  async function startNewChat() {
+    setSelectedId(null);
+    setMessages([]);
+    setDraftAnswer("");
+    setQuery("");
+  }
+
+  async function sendMessage(event: React.FormEvent) {
+    event.preventDefault();
+    const text = query.trim();
+    if (!text || streaming) return;
+    setStreaming(true);
+    setSendError(null);
+    setDraftAnswer("");
+    setQuery("");
+    try {
+      let activeId = selectedId;
+      if (!activeId) {
+        const sessionRes = await authedFetch("/api/chat/sessions", { method: "POST" });
+        if (!sessionRes.ok) throw new Error("session");
+        activeId = (await sessionRes.json()).id;
+        setSelectedId(activeId);
+      }
+      const response = await authedFetch(`/api/chat/sessions/${activeId}/stream`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: text, unlocked: getActiveUnlocks() }),
+      });
+      if (!response.body) throw new Error("stream");
+      for await (const event of parseSSEStream(response.body)) {
+        if (event.event === "token") setDraftAnswer((current) => current + (event.data as { text: string }).text);
+        if (event.event === "error") throw new Error((event.data as { message?: string }).message);
+      }
+      const messagesRes = await authedFetch(`/api/chat/sessions/${activeId}/messages`);
+      const body = await messagesRes.json();
+      setMessages(body.messages ?? []);
+      await fetchSessions();
+      setDraftAnswer("");
+    } catch {
+      setSendError("Couldn't send that message. Try again.");
+    } finally {
+      setStreaming(false);
+    }
+  }
+
+  if (checking) return <RouteLoading />;
 
   const selectedSession = sessions.find((s) => s.id === selectedId) ?? null;
 
@@ -205,7 +257,7 @@ function ChatPageInner() {
         <div
           className={`${styles.sessionList} ${selectedSession ? styles.hiddenOnMobile : ""}`}
         >
-          <div className={styles.sessionListHeader}>Chats</div>
+          <div className={styles.sessionListHeader}><span>Chats</span><button onClick={() => void startNewChat()} aria-label="New chat">+</button></div>
           {exportError && <div className={styles.modalError}>{exportError}</div>}
           {loadingSessions && (
             <div className={styles.emptyState}>
@@ -315,9 +367,15 @@ function ChatPageInner() {
                     <div className={styles.messageBubble}>{renderMessageText(m)}</div>
                   </div>
                 ))}
+                {draftAnswer && <div className={`${styles.messageRow} ${styles.messageAssistant}`}><div className={styles.messageBubble}>{draftAnswer}</div></div>}
               </div>
             </>
           )}
+          <form className={styles.composer} onSubmit={sendMessage}>
+            {sendError && <div className={styles.modalError}>{sendError}</div>}
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={selectedSession ? "Ask a follow-up…" : "Start a new conversation…"} disabled={streaming} aria-label="Chat message" />
+            <button type="submit" disabled={streaming || !query.trim()}>{streaming ? "…" : "Ask"}</button>
+          </form>
         </div>
       </div>
 
@@ -348,7 +406,7 @@ function ChatPageInner() {
 
 export default function ChatPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<RouteLoading />}>
       <ChatPageInner />
     </Suspense>
   );

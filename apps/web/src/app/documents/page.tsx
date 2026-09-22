@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/components/AppShell";
 import ConfirmModal from "@/components/ConfirmModal";
+import RouteLoading from "@/components/RouteLoading";
 import { authedFetch } from "@/lib/api";
 import { deriveKey, deriveKeyBytes, generateSalt, sealChunkWithKey } from "@/lib/crypto/seal";
 import { forgetUnlock, rememberUnlock } from "@/lib/crypto/unlockSession";
@@ -134,6 +135,8 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | DocumentRow["status"]>("all");
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -587,7 +590,13 @@ export default function DocumentsPage() {
     }));
   }
 
-  if (checking) return null;
+  if (checking) return <RouteLoading />;
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredDocuments = documents.filter((document) =>
+    (statusFilter === "all" || document.status === statusFilter) &&
+    (!normalizedSearch || document.title.toLowerCase().includes(normalizedSearch))
+  );
 
   return (
     <AppShell userEmail={email}>
@@ -595,6 +604,12 @@ export default function DocumentsPage() {
       <div className={styles.container}>
         <div className={styles.header}>
           <h1>Documents</h1>
+          <div className={styles.toolbar}>
+            <input className={styles.searchInput} type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter documents…" aria-label="Search documents" />
+            <select className={styles.statusFilter} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} aria-label="Filter by status">
+              <option value="all">All statuses</option><option value="processing">Processing</option><option value="ready">Ready</option><option value="failed">Failed</option><option value="sealed">Sealed</option>
+            </select>
+          </div>
         </div>
 
         <div
@@ -681,18 +696,18 @@ export default function DocumentsPage() {
                 </td>
               </tr>
             ) : (
-              documents.length === 0 && (
+              filteredDocuments.length === 0 && (
                 <tr>
                   <td colSpan={5} className={styles.emptyRow}>
-                    No documents yet — drag one in above.
+                    {documents.length === 0 ? "No documents yet — drag one in above." : "No documents match those filters."}
                   </td>
                 </tr>
               )
             )}
-            {documents.map((doc, i) => (
+            {filteredDocuments.map((doc, i) => (
               <Fragment key={doc.id}>
                 <tr style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}>
-                  <td>
+                  <td data-label="Title">
                     <div className={styles.titleCell}>
                       <div className={styles.typeIcon}>{typeLabel(doc.mime)}</div>
                       {renamingId === doc.id ? (
@@ -739,9 +754,9 @@ export default function DocumentsPage() {
                       )}
                     </div>
                   </td>
-                  <td className={styles.monoCell}>{formatSize(doc.size_bytes)}</td>
-                  <td className={styles.monoCell}>{new Date(doc.created_at).toLocaleDateString()}</td>
-                  <td>
+                  <td className={styles.monoCell} data-label="Size">{formatSize(doc.size_bytes)}</td>
+                  <td className={styles.monoCell} data-label="Uploaded">{new Date(doc.created_at).toLocaleDateString()}</td>
+                  <td data-label="Status">
                     <span className={`${styles.badge} ${styles[doc.status]}`}>
                       {(doc.status === "processing" || doc.status === "ready") && (
                         <span className={styles.badgeDot} />
@@ -749,7 +764,7 @@ export default function DocumentsPage() {
                       {doc.status[0].toUpperCase() + doc.status.slice(1)}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Actions">
                     <div className={styles.actionsCell}>
                       {doc.status === "failed" && (
                         <button
@@ -971,6 +986,9 @@ export default function DocumentsPage() {
           </tbody>
         </table>
         </div>
+        {!loadingDocuments && !documentsLoadError && documents.length > 0 && (
+          <div className={styles.documentCount}>{filteredDocuments.length} of {documents.length} documents</div>
+        )}
       </div>
 
       {deletePromptFor && (
