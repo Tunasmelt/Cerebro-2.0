@@ -1,0 +1,102 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500;600&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --color-bg: #080b12;
+  --color-surface: #0e1320;
+  --color-surface-2: #141b2d;
+  --color-surface-3: #1a2238;
+  --color-border: rgba(255,255,255,0.06);
+  --color-border-strong: rgba(255,255,255,0.12);
+  --color-text: #e8ecf5;
+  --color-muted: #6b7a99;
+  --color-faint: #2d3a54;
+  --color-violet: #7c5af6;
+  --color-violet-dim: rgba(124,90,246,0.15);
+  --color-cyan: #22d3ee;
+  --color-cyan-dim: rgba(34,211,238,0.12);
+  --color-amber: #f59e0b;
+  --color-green: #10b981;
+  --color-red: #f43f5e;
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-display: 'Outfit', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #080b12;
+  color: #e8ecf5;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+::selection {
+  background: rgba(124,90,246,0.35);
+  color: #fff;
+}
+
+/* Utility: hairline border */
+.border-hair { border: 1px solid rgba(255,255,255,0.06); }
+.border-hair-strong { border: 1px solid rgba(255,255,255,0.12); }
+
+/* Glow helpers */
+.glow-violet {
+  box-shadow: 0 0 24px rgba(124,90,246,0.25), 0 0 8px rgba(124,90,246,0.1);
+}
+.glow-cyan {
+  box-shadow: 0 0 24px rgba(34,211,238,0.2), 0 0 8px rgba(34,211,238,0.08);
+}
+
+/* Graph canvas starfield */
+@keyframes twinkle {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.8; }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fade-up {
+  from { transform: translateY(16px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+.animate-slide-in { animation: slide-in-right 0.3s ease forwards; }
+.animate-fade-up { animation: fade-up 0.4s ease forwards; }
+.animate-float { animation: float 6s ease-in-out infinite; }
