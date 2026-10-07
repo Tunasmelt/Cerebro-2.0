@@ -183,6 +183,39 @@ create policy evidence_delete_own on storage.objects for delete using (
   bucket_id = 'evidence' and (storage.foldername(name))[1] = auth.uid()::text
 );
 
+create or replace function expand_region_context(target_region_ids uuid[])
+returns table (region_id uuid, heading_path text[], nearby jsonb, related jsonb)
+language sql stable set search_path = public as $$
+  select r.id,
+    case when parent.content is null then array[]::text[] else array[parent.content] end,
+    coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'region_id', adjacent.id, 'region_type', adjacent.region_type,
+        'content', adjacent.content, 'reading_order', adjacent.reading_order
+      ) order by adjacent.reading_order)
+      from document_regions adjacent
+      where adjacent.generation_id = r.generation_id
+        and adjacent.surface_id = r.surface_id
+        and adjacent.id <> r.id
+        and adjacent.reading_order between r.reading_order - 1 and r.reading_order + 1
+    ), '[]'::jsonb),
+    coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'region_id', target.id, 'region_type', target.region_type,
+        'content', coalesce(nullif(target.content, ''), target.semantic_summary, '')
+      ))
+      from region_relations relation
+      join document_regions target on target.id = relation.target_region_id
+      where relation.source_region_id = r.id
+    ), '[]'::jsonb)
+  from document_regions r
+  left join document_regions parent on parent.id = r.parent_region_id
+  join documents d on d.id = r.document_id
+  where r.id = any(target_region_ids)
+    and r.user_id = auth.uid()
+    and r.generation_id = d.active_layout_generation;
+$$;
+
 drop function if exists match_chunks_vector(halfvec(1024), int, text);
 create or replace function match_chunks_vector(
   query_embedding halfvec(1024), match_count int, primary_provider text default 'jina'

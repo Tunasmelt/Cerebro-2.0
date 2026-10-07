@@ -111,7 +111,9 @@ class GenerateError(Exception):
 class GenerateClient(Protocol):
     model: str  # for the Langfuse "generation" span's model field
 
-    def stream_text(self, *, system_instruction: str, input_text: str) -> AsyncIterator[str]:
+    def stream_text(
+        self, *, system_instruction: str, input_text: str | list[dict]
+    ) -> AsyncIterator[str]:
         """Yields text deltas as they arrive, in order."""
         ...
 
@@ -153,7 +155,7 @@ class GeminiGenerateClient(CachedHttpClientMixin):
         self._api_key = os.environ.get("GEMINI_API_KEY", "")
 
     async def stream_text(
-        self, *, system_instruction: str, input_text: str
+        self, *, system_instruction: str, input_text: str | list[dict]
     ) -> AsyncIterator[str]:
         client = self._client()
         attempt = 0

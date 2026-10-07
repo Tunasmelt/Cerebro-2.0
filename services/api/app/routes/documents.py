@@ -10,6 +10,7 @@ from app.core.documents_storage import (
     DocumentsStorageError,
     get_documents_storage,
 )
+from app.core.evidence_storage import EvidenceError, get_evidence_storage
 from app.graph.cluster import place_new_document
 from app.ingest.embed import RetryError, check_retry_eligible, run_embed_job
 from app.ingest.extract import run_extract_job
@@ -63,6 +64,13 @@ async def _run_capture_pipeline(*, user_jwt: str, user_id: str, document_id: str
     if not extracted:
         return
     await _embed_then_place(user_jwt=user_jwt, user_id=user_id, document_id=document_id)
+
+
+async def _run_layout_reindex(*, user_jwt: str, user_id: str, document_id: str) -> None:
+    with track_rss(stage="layout_reindex", document_id=document_id):
+        extracted = await run_extract_job(user_jwt=user_jwt, document_id=document_id)
+    if extracted:
+        await _embed_then_place(user_jwt=user_jwt, user_id=user_id, document_id=document_id)
 
 
 def _error(code: str, message: str, status_code: int) -> JSONResponse:
@@ -251,7 +259,9 @@ async def retry_ingest(request: Request, document_id: str, background_tasks: Bac
 
 
 @router.get("/api/v1/documents/{document_id}")
-async def get_document(request: Request, document_id: str):
+async def get_document(
+    request: Request, document_id: str, background_tasks: BackgroundTasks
+):
     """Stage 3.6 — ingest_state/last_error are folded in directly rather
     than a separate GET /ingest-jobs/{id}: the frontend only ever has a
     document_id to poll with, never a raw ingest_jobs.id, so a second
@@ -263,7 +273,62 @@ async def get_document(request: Request, document_id: str):
     )
     if document is None:
         return _error("not_found", "Document not found", 404)
+    if (
+        "layout_version" in document
+        and document.get("layout_version", 1) < 2
+        and document.get("status") == "ready"
+        and document.get("layout_status", "legacy") != "building"
+    ):
+        try:
+            state = await get_evidence_storage().queue_reindex(
+                user_jwt=request.state.user_jwt,
+                user_id=request.state.user["sub"],
+                document_id=document_id,
+            )
+            if state == "queued":
+                background_tasks.add_task(
+                    _run_layout_reindex,
+                    user_jwt=request.state.user_jwt,
+                    user_id=request.state.user["sub"],
+                    document_id=document_id,
+                )
+                document["layout_status"] = "building"
+        except Exception:
+            pass
     return JSONResponse(document, status_code=200)
+
+
+@router.get("/api/v1/chunks/{chunk_id}/evidence")
+async def get_chunk_evidence(request: Request, chunk_id: str):
+    try:
+        evidence = await get_evidence_storage().get_evidence(
+            user_jwt=request.state.user_jwt, chunk_id=chunk_id
+        )
+    except EvidenceError as exc:
+        return _error(exc.code, exc.message, 423 if exc.code == "document_sealed" else 404)
+    return JSONResponse(evidence, status_code=200)
+
+
+@router.post("/api/v1/documents/{document_id}/layout/reindex")
+async def reindex_layout(
+    request: Request, document_id: str, background_tasks: BackgroundTasks
+):
+    try:
+        state = await get_evidence_storage().queue_reindex(
+            user_jwt=request.state.user_jwt,
+            user_id=request.state.user["sub"],
+            document_id=document_id,
+        )
+    except EvidenceError as exc:
+        return _error(exc.code, exc.message, 423 if exc.code == "document_sealed" else 404)
+    if state == "queued":
+        background_tasks.add_task(
+            _run_layout_reindex,
+            user_jwt=request.state.user_jwt,
+            user_id=request.state.user["sub"],
+            document_id=document_id,
+        )
+    return JSONResponse({"id": document_id, "layout_status": state}, status_code=202)
 
 
 async def _signed_url_response(request: Request, document_id: str, variant: str) -> JSONResponse:

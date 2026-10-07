@@ -465,9 +465,11 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
         # removing the row the user actually asked to delete; an
         # orphaned Storage object with no documents row pointing to
         # it is inert (unreachable, never surfaced by any route).
+        owner_id = document.get("user_id")
         for bucket, path in (
             ("indexed", document.get("storage_path")),
             ("originals", document.get("original_storage_path")),
+            ("evidence", f"{owner_id}/{document_id}" if owner_id else None),
         ):
             if not path:
                 continue

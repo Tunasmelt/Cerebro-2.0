@@ -66,11 +66,13 @@ a real pool to choose from instead of a pool Cohere already truncated
 to the dominant document.
 """
 import asyncio
+import io
 import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from PIL import Image
 
 from app.core.http_client import CachedHttpClientMixin
 from app.core.sealed_storage import SealedStorageError, get_sealed_storage
@@ -79,6 +81,12 @@ from app.ingest.embed import EmbedError, get_embed_client, get_embed_clients_by_
 from app.retrieve.hyde import generate_hypothetical_answer
 from app.retrieve.image_caption import caption_image
 from app.retrieve.rewrite import rewrite_query
+from app.retrieve.region_context import (
+    deduplicate_by_region,
+    explicit_page_number,
+    page_boost,
+    serialize_evidence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +267,12 @@ class RetrieveStorage(Protocol):
     async def fts_search(
         self, *, user_jwt: str, query_text: str, match_count: int
     ) -> list[dict[str, Any]]: ...
+    async def expand_region_context(
+        self, *, user_jwt: str, region_ids: list[str]
+    ) -> list[dict[str, Any]]: ...
+    async def load_region_render(
+        self, *, user_jwt: str, region_id: str
+    ) -> tuple[bytes, str] | None: ...
 
 
 class SupabaseRetrieveStorage(CachedHttpClientMixin):
@@ -318,6 +332,53 @@ class SupabaseRetrieveStorage(CachedHttpClientMixin):
         if response.status_code >= 400:
             raise RetrieveError("fts_search_failed", response.text)
         return response.json()
+
+    async def expand_region_context(
+        self, *, user_jwt: str, region_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        if not region_ids:
+            return []
+        response = await self._client().post(
+            f"{self._supabase_url}/rest/v1/rpc/expand_region_context",
+            headers=self._headers(user_jwt),
+            json={"target_region_ids": region_ids},
+        )
+        if response.status_code >= 400:
+            return []
+        return response.json()
+
+    async def load_region_render(
+        self, *, user_jwt: str, region_id: str
+    ) -> tuple[bytes, str] | None:
+        response = await self._client().get(
+            f"{self._supabase_url}/rest/v1/document_regions",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{region_id}", "select": "bbox,document_surfaces!inner(render_path)"},
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        path = rows[0]["document_surfaces"].get("render_path")
+        if not path:
+            return None
+        render = await self._client().get(
+            f"{self._supabase_url}/storage/v1/object/evidence/{path}",
+            headers=self._headers(user_jwt),
+        )
+        if render.status_code >= 400:
+            return None
+        bbox = rows[0].get("bbox")
+        if not bbox:
+            return render.content, "image/webp"
+        with Image.open(io.BytesIO(render.content)) as image:
+            width, height = image.size
+            crop = image.crop((
+                int(bbox[0] * width), int(bbox[1] * height),
+                max(1, int(bbox[2] * width)), max(1, int(bbox[3] * height)),
+            )).convert("RGB")
+            output = io.BytesIO()
+            crop.save(output, "WEBP", quality=82, method=4)
+            return output.getvalue(), "image/webp"
 
 
 _storage: RetrieveStorage = SupabaseRetrieveStorage()
@@ -436,6 +497,7 @@ async def retrieve(
         if recent_messages
         else query
     )
+    requested_page = explicit_page_number(effective_query)
 
     hyde_text = await generate_hypothetical_answer(query=effective_query) if use_hyde else None
 
@@ -495,6 +557,7 @@ async def retrieve(
                 )
             except RetrieveError:
                 logger.exception("vector_search failed for provider %s", provider)
+        vector_rankings = [page_boost(ranking, requested_page) for ranking in vector_rankings]
         vector_results = [row for ranking in vector_rankings for row in ranking]
         span.update(output={"result_count": len(vector_results), "providers": list(query_embeddings)})
 
@@ -502,9 +565,9 @@ async def retrieve(
         as_type="span", name="fts_search", input={"match_count": FTS_CANDIDATES}
     ) as span:
         try:
-            fts_results = await storage.fts_search(
+            fts_results = page_boost(await storage.fts_search(
                 user_jwt=user_jwt, query_text=effective_query, match_count=FTS_CANDIDATES
-            )
+            ), requested_page)
         except RetrieveError:
             logger.exception("fts_search failed, degrading to vector-only results")
             fts_results = []
@@ -514,10 +577,12 @@ async def retrieve(
     by_id.update({r["id"]: r for r in fts_results})
 
     with tracer.start_as_current_observation(as_type="span", name="rrf_fuse") as span:
-        fused_ids = rrf_fuse(
+        all_fused_ids = rrf_fuse(
             *[[r["id"] for r in ranking] for ranking in vector_rankings],
             [r["id"] for r in fts_results],
-        )[:RERANK_TOP_N]
+        )
+        fused_rows = deduplicate_by_region([by_id[chunk_id] for chunk_id in all_fused_ids])
+        fused_ids = [row["id"] for row in fused_rows[:RERANK_TOP_N]]
         span.update(output={"fused_ids": fused_ids})
     if not fused_ids:
         if unlocked:
@@ -532,6 +597,29 @@ async def retrieve(
     # by_id/vector_results/fts_results in place would be a surprising
     # side effect for no reason.
     candidates = [dict(by_id[chunk_id]) for chunk_id in fused_ids]
+
+    expand_context = getattr(storage, "expand_region_context", None)
+    if expand_context:
+        region_ids = [
+            candidate.get("meta", {}).get("region_id") or candidate.get("region_id")
+            for candidate in candidates
+        ]
+        try:
+            expanded_rows = await expand_context(
+                user_jwt=user_jwt, region_ids=[region_id for region_id in region_ids if region_id]
+            )
+            expanded_by_region = {row["region_id"]: row for row in expanded_rows}
+            for candidate, region_id in zip(candidates, region_ids):
+                expanded = expanded_by_region.get(region_id)
+                if not expanded:
+                    continue
+                candidate.setdefault("meta", {})["heading_path"] = expanded.get("heading_path", [])
+                nearby = [item.get("content", "") for item in expanded.get("nearby", [])]
+                related = [item.get("content", "") for item in expanded.get("related", [])]
+                context = [candidate.get("content", ""), *nearby, *related]
+                candidate["content"] = "\n\n".join(dict.fromkeys(part for part in context if part))
+        except Exception:
+            logger.exception("region context expansion failed")
 
     # Cohere's reranker is text-only — scored against an empty string,
     # an image chunk vector_search legitimately found reads as "not
@@ -578,7 +666,12 @@ async def retrieve(
             # fewer of them thrown away on the way back.
             rerank_results = await rerank_client.rerank(
                 query=effective_query,
-                documents=[c["content"] for c in candidates],
+                documents=[
+                    serialize_evidence(c)
+                    if (c.get("meta", {}).get("region_id") or c.get("region_id"))
+                    else c["content"]
+                    for c in candidates
+                ],
                 top_n=len(candidates),
             )
             span.update(output={"result_count": len(rerank_results)})
