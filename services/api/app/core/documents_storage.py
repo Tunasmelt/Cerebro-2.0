@@ -331,13 +331,23 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
             headers=self._headers(user_jwt),
             params={
                 "user_id": f"eq.{user_id}",
-                "select": "id,title,mime,size_bytes,original_size_bytes,status,created_at",
+                "select": (
+                    "id,title,mime,size_bytes,original_size_bytes,status,created_at,"
+                    "layout_version,layout_status,"
+                    "active_generation:layout_generations!documents_active_layout_generation_fkey(completeness)"
+                ),
                 "order": "created_at.desc",
             },
         )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="documents_list_failed")
-        return response.json()
+        documents = response.json()
+        for document in documents:
+            generation = document.pop("active_generation", None)
+            document["layout_completeness"] = (
+                generation.get("completeness") if generation else None
+            )
+        return documents
 
     async def claim_recoverable_jobs(self, *, user_jwt: str) -> list[dict[str, str]]:
         """Atomically lease pipeline jobs abandoned by a dead process.
@@ -368,7 +378,10 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
             headers=self._headers(user_jwt),
             params={
                 "id": f"eq.{document_id}",
-                "select": "id,title,mime,size_bytes,status,created_at",
+                "select": (
+                    "id,title,mime,size_bytes,status,created_at,layout_version,layout_status,"
+                    "active_generation:layout_generations!documents_active_layout_generation_fkey(completeness)"
+                ),
             },
         )
         if doc_resp.status_code >= 400:
@@ -377,6 +390,8 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
         if not doc_rows:
             return None
         document = doc_rows[0]
+        generation = document.pop("active_generation", None)
+        document["layout_completeness"] = generation.get("completeness") if generation else None
 
         job_resp = await client.get(
             f"{self._supabase_url}/rest/v1/ingest_jobs",

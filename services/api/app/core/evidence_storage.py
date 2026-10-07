@@ -23,7 +23,9 @@ class SupabaseEvidenceStorage(CachedHttpClientMixin):
         return {"apikey": self._key, "Authorization": f"Bearer {jwt}",
                 "Content-Type": "application/json"}
 
-    async def get_evidence(self, *, user_jwt: str, chunk_id: str) -> dict[str, Any]:
+    async def get_evidence(
+        self, *, user_jwt: str, chunk_id: str, page_number: int | None = None
+    ) -> dict[str, Any]:
         client = self._client()
         response = await client.get(
             f"{self._url}/rest/v1/chunks", headers=self._headers(user_jwt),
@@ -37,6 +39,15 @@ class SupabaseEvidenceStorage(CachedHttpClientMixin):
         )
         rows = response.json()
         if not rows:
+            tombstone_response = await client.get(
+                f"{self._url}/rest/v1/sealed_evidence_tombstones",
+                headers=self._headers(user_jwt),
+                params={"chunk_id": f"eq.{chunk_id}", "select": "chunk_id", "limit": "1"},
+            )
+            if tombstone_response.status_code < 400 and tombstone_response.json():
+                raise EvidenceError(
+                    "document_sealed", "Exact evidence is unavailable while sealed"
+                )
             raise EvidenceError("not_found", "Evidence not found")
         chunk = rows[0]
         document = chunk["documents"]
@@ -55,7 +66,19 @@ class SupabaseEvidenceStorage(CachedHttpClientMixin):
         context = context_rows[0] if context_rows else {
             "heading_path": [], "nearby": [], "related": []
         }
-        surface = region.pop("document_surfaces")
+        source_surface = region.pop("document_surfaces")
+        surfaces_response = await client.get(
+            f"{self._url}/rest/v1/document_surfaces", headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{chunk['document_id']}",
+                    "select": "id,surface_index,page_number,kind,width,height,render_path",
+                    "order": "surface_index.asc"},
+        )
+        surfaces = surfaces_response.json() if surfaces_response.status_code < 400 else [source_surface]
+        surface = next(
+            (item for item in surfaces if page_number is not None and item.get("page_number") == page_number),
+            source_surface,
+        )
+        displayed_region = region if surface["id"] == source_surface["id"] else None
         render_url = None
         if surface.get("render_path"):
             signed = await client.post(
@@ -67,7 +90,9 @@ class SupabaseEvidenceStorage(CachedHttpClientMixin):
                 render_url = f"{self._url}/storage/v1{value}" if value and value.startswith("/") else value
         return {
             "chunk_id": chunk_id, "document": document, "surface": surface,
-            "region": region, "heading_path": context["heading_path"],
+            "region": displayed_region, "source_page_number": source_surface.get("page_number"),
+            "surfaces": [{"page_number": item.get("page_number")} for item in surfaces],
+            "heading_path": context["heading_path"],
             "nearby": context["nearby"], "related": context["related"],
             "render_url": render_url, "legacy": False,
         }

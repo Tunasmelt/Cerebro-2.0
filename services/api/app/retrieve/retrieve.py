@@ -79,7 +79,7 @@ from app.core.sealed_storage import SealedStorageError, get_sealed_storage
 from app.core.tracing import get_tracer
 from app.ingest.embed import EmbedError, get_embed_client, get_embed_clients_by_provider
 from app.retrieve.hyde import generate_hypothetical_answer
-from app.retrieve.image_caption import caption_image
+from app.retrieve.image_caption import caption_image, caption_image_bytes
 from app.retrieve.rewrite import rewrite_query
 from app.retrieve.region_context import (
     deduplicate_by_region,
@@ -273,6 +273,9 @@ class RetrieveStorage(Protocol):
     async def load_region_render(
         self, *, user_jwt: str, region_id: str
     ) -> tuple[bytes, str] | None: ...
+    async def save_region_caption(
+        self, *, user_jwt: str, region_id: str, caption: str
+    ) -> None: ...
 
 
 class SupabaseRetrieveStorage(CachedHttpClientMixin):
@@ -379,6 +382,17 @@ class SupabaseRetrieveStorage(CachedHttpClientMixin):
             output = io.BytesIO()
             crop.save(output, "WEBP", quality=82, method=4)
             return output.getvalue(), "image/webp"
+
+    async def save_region_caption(
+        self, *, user_jwt: str, region_id: str, caption: str
+    ) -> None:
+        response = await self._client().post(
+            f"{self._supabase_url}/rest/v1/rpc/complete_region_enrichment",
+            headers=self._headers(user_jwt),
+            json={"target_region": region_id, "generated_summary": caption},
+        )
+        if response.status_code >= 400:
+            raise RetrieveError("progressive_enrichment_failed", response.text)
 
 
 _storage: RetrieveStorage = SupabaseRetrieveStorage()
@@ -597,6 +611,35 @@ async def retrieve(
     # by_id/vector_results/fts_results in place would be a surprising
     # side effect for no reason.
     candidates = [dict(by_id[chunk_id]) for chunk_id in fused_ids]
+
+    # A query that surfaces incomplete visual evidence gets a bounded,
+    # sequential enrichment pass. The visual embedding already found the
+    # region; this adds durable text for reranking and later FTS queries.
+    load_region = getattr(storage, "load_region_render", None)
+    save_caption = getattr(storage, "save_region_caption", None)
+    if load_region and save_caption:
+        incomplete_visuals = [
+            candidate for candidate in candidates
+            if not candidate.get("content")
+            and candidate.get("meta", {}).get("region_type") in {"chart", "image", "table"}
+            and candidate.get("meta", {}).get("region_id")
+        ][:4]
+        for candidate in incomplete_visuals:
+            region_id = candidate["meta"]["region_id"]
+            try:
+                loaded = await load_region(user_jwt=user_jwt, region_id=region_id)
+                if not loaded:
+                    continue
+                image_bytes, mime_type = loaded
+                caption = await caption_image_bytes(image_bytes, mime_type=mime_type)
+                if caption:
+                    await save_caption(
+                        user_jwt=user_jwt, region_id=region_id, caption=caption
+                    )
+                    candidate["content"] = caption
+                    candidate["meta"]["caption"] = caption
+            except Exception:
+                logger.exception("progressive enrichment failed for region %s", region_id)
 
     expand_context = getattr(storage, "expand_region_context", None)
     if expand_context:

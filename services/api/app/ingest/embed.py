@@ -384,7 +384,7 @@ class SupabaseEmbedStorage(CachedHttpClientMixin):
             f"{self._supabase_url}/rest/v1/document_regions",
             headers=self._headers(user_jwt),
             params={"id": f"eq.{region_id}",
-                    "select": "document_surfaces!inner(render_path)"},
+                    "select": "bbox,document_surfaces!inner(render_path)"},
         )
         rows = response.json()
         if not rows or not rows[0]["document_surfaces"].get("render_path"):
@@ -396,7 +396,18 @@ class SupabaseEmbedStorage(CachedHttpClientMixin):
         )
         if evidence.status_code >= 400:
             raise EmbedError("evidence_download_failed", region_id)
-        return evidence.content
+        bbox = rows[0].get("bbox")
+        if not bbox:
+            return evidence.content
+        with Image.open(io.BytesIO(evidence.content)) as image:
+            width, height = image.size
+            crop = image.crop((
+                int(bbox[0] * width), int(bbox[1] * height),
+                max(1, int(bbox[2] * width)), max(1, int(bbox[3] * height)),
+            )).convert("RGB")
+            output = io.BytesIO()
+            crop.save(output, "WEBP", quality=82, method=4)
+            return output.getvalue()
 
     async def get_checkpoint(self, *, user_jwt: str, document_id: str) -> dict[str, Any]:
         client = self._client()
@@ -461,7 +472,7 @@ class SupabaseEmbedStorage(CachedHttpClientMixin):
             activation = await client.post(
                 f"{self._supabase_url}/rest/v1/rpc/activate_layout_generation",
                 headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-                json={"target_generation": generation["id"]},
+                json={"generation_to_activate": generation["id"]},
             )
             if activation.status_code >= 400:
                 raise EmbedError("layout_activation_failed", activation.text)

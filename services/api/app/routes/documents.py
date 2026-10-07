@@ -299,10 +299,10 @@ async def get_document(
 
 
 @router.get("/api/v1/chunks/{chunk_id}/evidence")
-async def get_chunk_evidence(request: Request, chunk_id: str):
+async def get_chunk_evidence(request: Request, chunk_id: str, page: int | None = None):
     try:
         evidence = await get_evidence_storage().get_evidence(
-            user_jwt=request.state.user_jwt, chunk_id=chunk_id
+            user_jwt=request.state.user_jwt, chunk_id=chunk_id, page_number=page
         )
     except EvidenceError as exc:
         return _error(exc.code, exc.message, 423 if exc.code == "document_sealed" else 404)

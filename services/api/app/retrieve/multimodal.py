@@ -35,7 +35,8 @@ async def build_multimodal_input(
         if not loaded:
             continue
         image_bytes, mime_type = loaded
-        if loaded_bytes + len(image_bytes) > MAX_VISUAL_BYTES:
+        encoded_size = 4 * ((len(image_bytes) + 2) // 3)
+        if loaded_bytes + encoded_size > MAX_VISUAL_BYTES:
             break
         blocks.append({
             "type": "text",
@@ -50,5 +51,5 @@ async def build_multimodal_input(
             "mime_type": mime_type,
         })
         loaded_count += 1
-        loaded_bytes += len(image_bytes)
+        loaded_bytes += encoded_size
     return blocks

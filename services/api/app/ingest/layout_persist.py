@@ -89,28 +89,49 @@ class SupabaseLayoutStorage(CachedHttpClientMixin):
             "layout_generations",
             {"document_id": document_id, "user_id": user_id, "version": 2,
              "state": "building", "completeness": completeness,
-             "checkpoint": {"enriched_surfaces": sorted(enriched_surfaces)}},
+             "checkpoint": {
+                 "enriched_surfaces": sorted(enriched_surfaces),
+                 "complex_surfaces": layout.complex_surface_indices,
+             }},
             user_jwt=user_jwt,
         )
         generation_id = generations[0]["id"]
+        existing_response = await self._client().get(
+            f"{self._supabase_url}/rest/v1/document_surfaces",
+            headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{document_id}", "select": "id,surface_index,render_path"},
+        )
+        if existing_response.status_code >= 400:
+            raise LayoutPersistError(f"document_surfaces: {existing_response.text}")
+        existing_surfaces = {row["surface_index"]: row for row in existing_response.json()}
         surface_ids: dict[int, str] = {}
         for surface in layout.surfaces:
-            surface_id = str(uuid.uuid4())
+            existing = existing_surfaces.get(surface.index)
+            surface_id = existing["id"] if existing else str(uuid.uuid4())
             render_path = (
                 f"{user_id}/{document_id}/{surface_id}.webp"
                 if surface.index in layout.renders else None
             )
-            rows = await self._post_rows(
-                "document_surfaces",
-                {"id": surface_id, "document_id": document_id, "user_id": user_id,
-                 "surface_index": surface.index, "kind": surface.kind.value,
-                 "page_number": surface.page_number, "width": surface.width,
-                 "height": surface.height, "render_path": render_path},
-                user_jwt=user_jwt,
-                prefer="resolution=merge-duplicates,return=representation",
-                params={"on_conflict": "document_id,surface_index"},
-            )
-            surface_ids[surface.index] = rows[0]["id"]
+            surface_body = {
+                "document_id": document_id, "user_id": user_id,
+                "surface_index": surface.index, "kind": surface.kind.value,
+                "page_number": surface.page_number, "width": surface.width,
+                "height": surface.height, "render_path": render_path,
+            }
+            if existing:
+                response = await self._client().patch(
+                    f"{self._supabase_url}/rest/v1/document_surfaces",
+                    headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                    params={"id": f"eq.{surface_id}"}, json=surface_body,
+                )
+                if response.status_code >= 400:
+                    raise LayoutPersistError(f"document_surfaces: {response.text}")
+            else:
+                await self._post_rows(
+                    "document_surfaces", {"id": surface_id, **surface_body},
+                    user_jwt=user_jwt, prefer="return=minimal",
+                )
+            surface_ids[surface.index] = surface_id
             if render_path:
                 response = await self._client().post(
                     f"{self._supabase_url}/storage/v1/object/evidence/{render_path}",
@@ -165,6 +186,28 @@ class SupabaseLayoutStorage(CachedHttpClientMixin):
         if response.status_code >= 400:
             raise LayoutPersistError(f"documents: {response.text}")
         return generation_id
+
+    async def mark_failed(
+        self, *, user_jwt: str, document_id: str, error_code: str
+    ) -> None:
+        client = self._client()
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/layout_generations",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}", "state": "eq.building"},
+            json={"state": "failed", "error_code": error_code},
+        )
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"id": f"eq.{document_id}"}, json={"layout_status": "failed"},
+        )
+        await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+            params={"document_id": f"eq.{document_id}"},
+            json={"state": "ready", "last_error": error_code},
+        )
 
 
 _storage = SupabaseLayoutStorage()

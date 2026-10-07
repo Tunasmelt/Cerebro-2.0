@@ -91,6 +91,7 @@ def test_pdf_returns_page_surfaces_text_regions_and_webp_renders():
     assert all(r.bbox is not None for r in layout.regions)
     assert all(0 <= coordinate <= 1 for r in layout.regions for coordinate in r.bbox)
     assert set(layout.renders) == {0, 1}
+    assert getattr(layout.renders, "in_memory_bytes", 1) == 0
     for render in layout.renders.values():
         image = Image.open(io.BytesIO(render))
         assert image.format == "WEBP"
@@ -116,3 +117,14 @@ def test_caption_is_related_to_nearest_preceding_visual_region():
         (1, 0, RelationType.CAPTION_OF),
         (2, 0, RelationType.REFERENCES),
     ]
+
+
+def test_tables_crossing_consecutive_pages_are_linked_as_continuations():
+    regions = [
+        Region(0, 0, RegionType.TABLE, 0, content="Name | Total", bbox=(.1, .75, .9, .98)),
+        Region(1, 1, RegionType.TABLE, 0, content="Name | Total", bbox=(.1, .02, .9, .4)),
+    ]
+    relations = infer_region_relations(regions)
+    assert relations[0].source_ordinal == 1
+    assert relations[0].target_ordinal == 0
+    assert relations[0].relation_type is RelationType.CONTINUATION_OF

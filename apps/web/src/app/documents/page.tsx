@@ -105,6 +105,12 @@ const ACTION_ICONS: Record<string, React.ReactNode> = {
       <path d="M9.2 2.2L9.8 3.9L8 4.3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  layout: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect x="2" y="2" width="10" height="10" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M4 4.5h6M4 7h3.5M4 9.5h6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  ),
   extract: (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <path d="M2.5 4.3L3.3 5.1L5 3.3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
@@ -152,6 +158,7 @@ export default function DocumentsPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | DocumentRow["status"]>("all");
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [reindexingId, setReindexingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [extractingId, setExtractingId] = useState<string | null>(null);
@@ -303,6 +310,22 @@ export default function DocumentsPage() {
       await fetchDocuments();
     } finally {
       setRetryingId(null);
+    }
+  }
+
+  async function handleLayoutReindex(documentId: string) {
+    setReindexingId(documentId);
+    try {
+      const response = await authedFetch(`/api/documents/${documentId}/layout/reindex`, {
+        method: "POST",
+      });
+      if (response.ok) {
+        setDocuments((current) => current.map((document) =>
+          document.id === documentId ? { ...document, layout_status: "building" } : document
+        ));
+      }
+    } finally {
+      setReindexingId(null);
     }
   }
 
@@ -795,6 +818,17 @@ export default function DocumentsPage() {
                       )}
                       {doc.status === "ready" && (
                         <>
+                          {(doc.layout_status === "legacy" || doc.layout_status === "failed") && (
+                            <button
+                              className={styles.iconActionBtn}
+                              disabled={reindexingId === doc.id}
+                              onClick={() => handleLayoutReindex(doc.id)}
+                              title={reindexingId === doc.id ? "Queuing layout…" : "Build exact visual evidence"}
+                              aria-label="Build exact visual evidence"
+                            >
+                              {ACTION_ICONS.layout}
+                            </button>
+                          )}
                           <button
                             className={styles.iconActionBtn}
                             disabled={extractingId === doc.id}

@@ -54,7 +54,10 @@ export type ChatSession = {
 export type Citation = {
   chunk_id: string;
   document_id: string;
-  document_title: string;
+  document_title?: string;
+  page_number?: number;
+  region_type?: string;
+  bbox?: [number, number, number, number];
 };
 
 export type ChatMessage = {
@@ -77,4 +80,7 @@ export type DocumentRow = {
   original_size_bytes: number | null;
   status: DocumentStatus;
   created_at: string;
+  layout_version?: number;
+  layout_status?: "legacy" | "building" | "partial" | "ready" | "failed";
+  layout_completeness?: number;
 };

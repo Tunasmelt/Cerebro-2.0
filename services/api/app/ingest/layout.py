@@ -7,8 +7,11 @@ enrichment are separate stages so local extraction remains deterministic.
 from __future__ import annotations
 
 import io
+import os
 import re
 import statistics
+import tempfile
+from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -22,6 +25,43 @@ PDF_RENDER_DPI = 144
 PDF_RENDER_SCALE = PDF_RENDER_DPI / 72
 MAX_RENDER_DIMENSION = 2000
 RENDER_WEBP_QUALITY = 82
+
+
+class RenderStore(MutableMapping[int, bytes]):
+    """Disk-backed renders keep many-page PDFs from accumulating in RAM."""
+    def __init__(self) -> None:
+        self._directory = tempfile.TemporaryDirectory(prefix="cerebro-evidence-")
+        self._keys: set[int] = set()
+
+    @property
+    def in_memory_bytes(self) -> int:
+        return 0
+
+    def _path(self, key: int) -> str:
+        return os.path.join(self._directory.name, f"{key}.webp")
+
+    def __getitem__(self, key: int) -> bytes:
+        with open(self._path(key), "rb") as handle:
+            return handle.read()
+
+    def __setitem__(self, key: int, value: bytes) -> None:
+        with open(self._path(key), "wb") as handle:
+            handle.write(value)
+        self._keys.add(key)
+
+    def __delitem__(self, key: int) -> None:
+        os.remove(self._path(key))
+        self._keys.remove(key)
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(sorted(self._keys))
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+    def close(self) -> None:
+        self._directory.cleanup()
+        self._keys.clear()
 
 
 class LayoutError(Exception):
@@ -94,7 +134,7 @@ class RegionRelation:
 class LayoutResult:
     surfaces: list[Surface]
     regions: list[Region]
-    renders: dict[int, bytes] = field(default_factory=dict)
+    renders: MutableMapping[int, bytes] = field(default_factory=dict)
     complex_surface_indices: list[int] = field(default_factory=list)
     relations: list[RegionRelation] = field(default_factory=list)
 
@@ -132,6 +172,21 @@ def infer_region_relations(regions: list[Region]) -> list[RegionRelation]:
                 relations.append(RegionRelation(
                     region.ordinal, target, RelationType.REFERENCES, 0.85
                 ))
+    tables = [region for region in regions if region.region_type is RegionType.TABLE]
+    for table in tables:
+        previous = next(
+            (candidate for candidate in reversed(tables)
+             if candidate.surface_index == table.surface_index - 1
+             and candidate.ordinal < table.ordinal),
+            None,
+        )
+        if (
+            previous and previous.bbox and table.bbox
+            and previous.bbox[3] >= 0.75 and table.bbox[1] <= 0.25
+        ):
+            relations.append(RegionRelation(
+                table.ordinal, previous.ordinal, RelationType.CONTINUATION_OF, 0.9
+            ))
     return relations
 
 
@@ -193,6 +248,10 @@ def extract_image_layout(image_bytes: bytes) -> LayoutResult:
     try:
         with Image.open(io.BytesIO(image_bytes)) as image:
             width, height = image.size
+            render = image.convert("RGB")
+            render.thumbnail((MAX_RENDER_DIMENSION, MAX_RENDER_DIMENSION), Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            render.save(output, "WEBP", quality=RENDER_WEBP_QUALITY, method=4)
     except (Image.UnidentifiedImageError, OSError, SyntaxError) as exc:
         raise LayoutError("corrupt_image", str(exc)) from exc
     return LayoutResult(
@@ -207,7 +266,7 @@ def extract_image_layout(image_bytes: bytes) -> LayoutResult:
                 requires_vision=True,
             )
         ],
-        renders={0: image_bytes},
+        renders={0: output.getvalue()},
         complex_surface_indices=[0],
     )
 
@@ -267,7 +326,43 @@ def _group_words(words: list[dict[str, Any]], page_width: float, page_height: fl
                 "heading_level": 1 if is_heading else None,
             }
         )
-    return blocks
+    merged: list[dict] = []
+    for block in blocks:
+        if (
+            merged
+            and block["region_type"] is RegionType.PARAGRAPH
+            and merged[-1]["region_type"] is RegionType.PARAGRAPH
+            and abs(block["bbox"][0] - merged[-1]["bbox"][0]) < 0.035
+            and block["bbox"][1] - merged[-1]["bbox"][3] < 0.025
+        ):
+            merged[-1]["content"] += " " + block["content"]
+            prior = merged[-1]["bbox"]
+            current = block["bbox"]
+            merged[-1]["bbox"] = (
+                min(prior[0], current[0]), prior[1], max(prior[2], current[2]), current[3]
+            )
+        else:
+            merged.append(block)
+    return merged
+
+
+def _spatial_reading_order(blocks: list[dict]) -> list[dict]:
+    """Prefer complete left-column flow before right-column flow."""
+    if len(blocks) < 2:
+        return blocks
+    narrow = [block for block in blocks if block["bbox"][2] - block["bbox"][0] < 0.55]
+    has_left = any(block["bbox"][2] <= 0.58 for block in narrow)
+    has_right = any(block["bbox"][0] >= 0.42 for block in narrow)
+    if not (has_left and has_right):
+        return sorted(blocks, key=lambda block: (block["bbox"][1], block["bbox"][0]))
+    full_width = [block for block in blocks if block not in narrow]
+    left = [block for block in narrow if (block["bbox"][0] + block["bbox"][2]) / 2 < 0.5]
+    right = [block for block in narrow if block not in left]
+    return (
+        sorted(full_width, key=lambda block: block["bbox"][1])
+        + sorted(left, key=lambda block: block["bbox"][1])
+        + sorted(right, key=lambda block: block["bbox"][1])
+    )
 
 
 def _render_pdf_page(document: pdfium.PdfDocument, index: int) -> bytes:
@@ -289,7 +384,7 @@ def _render_pdf_page(document: pdfium.PdfDocument, index: int) -> bytes:
 def extract_pdf_layout(pdf_bytes: bytes) -> LayoutResult:
     surfaces: list[Surface] = []
     regions: list[Region] = []
-    renders: dict[int, bytes] = {}
+    renders: MutableMapping[int, bytes] = RenderStore()
     complex_surfaces: list[int] = []
     try:
         render_document = pdfium.PdfDocument(pdf_bytes)
@@ -302,9 +397,46 @@ def extract_pdf_layout(pdf_bytes: bytes) -> LayoutResult:
                     )
                     renders[index] = _render_pdf_page(render_document, index)
                     words = page.extract_words(extra_attrs=["size", "fontname"])
-                    blocks = _group_words(words, width, height)
+                    table_blocks: list[dict] = []
+                    try:
+                        for table in page.find_tables():
+                            rows = table.extract() or []
+                            content = "\n".join(
+                                " | ".join((cell or "").strip() for cell in row) for row in rows
+                            ).strip()
+                            x0, top, x1, bottom = map(float, table.bbox)
+                            table_blocks.append({
+                                "content": content,
+                                "bbox": _normalized_bbox(x0, top, x1, bottom, width, height),
+                                "region_type": RegionType.TABLE,
+                                "heading_level": None,
+                            })
+                    except Exception:
+                        table_blocks = []
+                    image_blocks = [{
+                        "content": "",
+                        "bbox": _normalized_bbox(
+                            float(image["x0"]), float(image["top"]),
+                            float(image["x1"]), float(image["bottom"]), width, height,
+                        ),
+                        "region_type": RegionType.IMAGE,
+                        "heading_level": None,
+                    } for image in page.images]
+                    blocks = _spatial_reading_order([
+                        *_group_words(words, width, height), *table_blocks, *image_blocks
+                    ])
                     drawing_count = len(page.images) + len(page.lines) + len(page.rects) + len(page.curves)
-                    is_complex = not blocks or bool(page.images) or drawing_count > 20
+                    narrow_text_blocks = [
+                        block for block in blocks
+                        if block["region_type"] in {RegionType.PARAGRAPH, RegionType.LIST}
+                        and block["bbox"][2] - block["bbox"][0] < 0.45
+                    ]
+                    has_left_column = any(block["bbox"][2] <= 0.58 for block in narrow_text_blocks)
+                    has_right_column = any(block["bbox"][0] >= 0.42 for block in narrow_text_blocks)
+                    is_complex = (
+                        not blocks or bool(page.images) or bool(table_blocks)
+                        or drawing_count > 20 or (has_left_column and has_right_column)
+                    )
                     if is_complex:
                         complex_surfaces.append(index)
                     if not blocks:
@@ -335,13 +467,18 @@ def extract_pdf_layout(pdf_bytes: bytes) -> LayoutResult:
                                     if block["region_type"] is RegionType.HEADING
                                     else parent_heading
                                 ),
-                                requires_vision=(not block["content"]),
+                                requires_vision=(
+                                    not block["content"]
+                                    or block["region_type"] in {RegionType.IMAGE, RegionType.CHART}
+                                ),
                             )
                         )
                     page.flush_cache()
         finally:
             render_document.close()
     except Exception as exc:
+        if isinstance(renders, RenderStore):
+            renders.close()
         raise LayoutError("corrupt_pdf", str(exc)) from exc
     return LayoutResult(
         surfaces, regions, renders, complex_surfaces, infer_region_relations(regions)

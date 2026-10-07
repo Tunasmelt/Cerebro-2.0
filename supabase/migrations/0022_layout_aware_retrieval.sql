@@ -78,6 +78,15 @@ create table region_relations (
   check (source_region_id <> target_region_id)
 );
 
+-- Non-content tombstones let historical citation ids return a locked response
+-- after sealing has removed every plaintext layout and chunk row.
+create table sealed_evidence_tombstones (
+  chunk_id uuid primary key,
+  document_id uuid not null references documents (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
 alter table documents add column layout_version integer not null default 1;
 alter table documents add column layout_status text not null default 'legacy'
   check (layout_status in ('legacy', 'building', 'partial', 'ready', 'failed'));
@@ -127,6 +136,7 @@ alter table layout_generations enable row level security;
 alter table document_surfaces enable row level security;
 alter table document_regions enable row level security;
 alter table region_relations enable row level security;
+alter table sealed_evidence_tombstones enable row level security;
 
 create policy layout_generations_select_own on layout_generations for select
   using (auth.uid() = user_id);
@@ -163,6 +173,10 @@ create policy region_relations_update_own on region_relations for update
   using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy region_relations_delete_own on region_relations for delete
   using (auth.uid() = user_id);
+create policy sealed_evidence_tombstones_select_own on sealed_evidence_tombstones for select
+  using (auth.uid() = user_id);
+create policy sealed_evidence_tombstones_insert_own on sealed_evidence_tombstones for insert
+  with check (auth.uid() = user_id);
 
 insert into storage.buckets (id, name, public)
 values ('evidence', 'evidence', false)
@@ -312,5 +326,52 @@ begin
         else 'ready'
       end
   where id = selected_generation.document_id and user_id = auth.uid();
+end;
+$$;
+
+create or replace function complete_region_enrichment(
+  target_region uuid, generated_summary text
+)
+returns double precision
+language plpgsql security invoker set search_path = public as $$
+declare
+  target_generation uuid;
+  target_surface_index integer;
+  enriched_indices integer[];
+  complex_count integer;
+  new_completeness double precision;
+begin
+  select r.generation_id, s.surface_index
+  into target_generation, target_surface_index
+  from document_regions r
+  join document_surfaces s on s.id = r.surface_id
+  where r.id = target_region and r.user_id = auth.uid();
+  if not found then raise exception 'region_not_found'; end if;
+
+  update document_regions set semantic_summary = generated_summary,
+    extraction_source = case when content = '' then 'vision' else 'merged' end
+  where id = target_region and user_id = auth.uid();
+  update chunks set content = generated_summary
+  where region_id = target_region and user_id = auth.uid()
+    and representation_type = 'visual' and content = '';
+
+  select array(
+    select distinct value::integer from (
+      select jsonb_array_elements_text(coalesce(checkpoint->'enriched_surfaces', '[]')) value
+      from layout_generations where id = target_generation
+      union all select target_surface_index::text
+    ) values_to_merge order by value::integer
+  ) into enriched_indices;
+  select jsonb_array_length(coalesce(checkpoint->'complex_surfaces', '[]'))
+    into complex_count from layout_generations where id = target_generation;
+  new_completeness := case when complex_count = 0 then 1
+    else least(1, cardinality(enriched_indices)::double precision / complex_count) end;
+  update layout_generations set
+    checkpoint = jsonb_set(checkpoint, '{enriched_surfaces}', to_jsonb(enriched_indices)),
+    completeness = new_completeness, updated_at = now()
+  where id = target_generation;
+  update documents set layout_status = case when new_completeness >= 1 then 'ready' else 'partial' end
+  where active_layout_generation = target_generation and user_id = auth.uid();
+  return new_completeness;
 end;
 $$;

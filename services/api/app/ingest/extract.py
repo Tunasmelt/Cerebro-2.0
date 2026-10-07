@@ -394,14 +394,19 @@ async def run_extract_job(*, user_jwt: str, document_id: str) -> bool:
                         user_jwt=user_jwt, path=document["original_storage_path"]
                     )
                     layout = extract_image_layout(original)
-                layout, enriched = await enrich_layout(layout)
-                await get_layout_storage().persist(
-                    user_jwt=user_jwt,
-                    document_id=document_id,
-                    user_id=user_id,
-                    layout=layout,
-                    enriched_surfaces=enriched,
-                )
+                try:
+                    layout, enriched = await enrich_layout(layout)
+                    await get_layout_storage().persist(
+                        user_jwt=user_jwt,
+                        document_id=document_id,
+                        user_id=user_id,
+                        layout=layout,
+                        enriched_surfaces=enriched,
+                    )
+                finally:
+                    close_renders = getattr(layout.renders, "close", None)
+                    if close_renders:
+                        close_renders()
                 chunks = None
             elif document.get("source") == "capture":
                 # Stage 5.5 — the whole point: no Storage object exists
@@ -425,11 +430,15 @@ async def run_extract_job(*, user_jwt: str, document_id: str) -> bool:
                 )
                 chunks = extract_image_chunks(original)
     except (ExtractError, LayoutError, LayoutPersistError) as exc:
-        await storage.mark_failed(
-            user_jwt=user_jwt,
-            document_id=document_id,
-            error_code=getattr(exc, "code", "layout_persist_failed"),
-        )
+        error_code = getattr(exc, "code", "layout_persist_failed")
+        if document.get("active_layout_generation"):
+            await get_layout_storage().mark_failed(
+                user_jwt=user_jwt, document_id=document_id, error_code=error_code
+            )
+        else:
+            await storage.mark_failed(
+                user_jwt=user_jwt, document_id=document_id, error_code=error_code,
+            )
         return False
 
     if chunks is not None:

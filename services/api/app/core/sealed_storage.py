@@ -206,6 +206,24 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
         # failure here, best-effort revert status back to 'ready' so
         # the caller can simply retry sealing.
         try:
+            if purge_layout:
+                anchors_resp = await client.get(
+                    f"{self._supabase_url}/rest/v1/chunks",
+                    headers=self._headers(user_jwt),
+                    params={"document_id": f"eq.{document_id}", "select": "id"},
+                )
+                if anchors_resp.status_code >= 400:
+                    raise HTTPException(status_code=502, detail="seal_anchor_lookup_failed")
+                anchors = [{"chunk_id": row["id"], "document_id": document_id,
+                            "user_id": user_id} for row in anchors_resp.json()]
+                if anchors:
+                    anchor_insert = await client.post(
+                        f"{self._supabase_url}/rest/v1/sealed_evidence_tombstones",
+                        headers={**self._headers(user_jwt), "Prefer": "resolution=ignore-duplicates"},
+                        json=anchors,
+                    )
+                    if anchor_insert.status_code >= 400:
+                        raise HTTPException(status_code=502, detail="seal_anchor_insert_failed")
             insert_resp = await client.post(
                 f"{self._supabase_url}/rest/v1/sealed_chunks",
                 headers=self._headers(user_jwt),

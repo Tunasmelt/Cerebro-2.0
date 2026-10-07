@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 
 import Link from "next/link";
@@ -9,6 +9,7 @@ import AnswerMarkdown from "@/components/AnswerMarkdown";
 import AppShell from "@/components/AppShell";
 import RouteLoading from "@/components/RouteLoading";
 import ConfirmModal from "@/components/ConfirmModal";
+import EvidenceDrawer from "@/components/EvidenceDrawer";
 import { authedFetch } from "@/lib/api";
 import { getActiveUnlocks } from "@/lib/crypto/unlockSession";
 import { parseAnswerSegments } from "@/lib/graph/citations";
@@ -44,7 +45,7 @@ function exportMarkdown(session: ChatSession, messages: ChatMessage[]): string {
     lines.push(m.role === "user" ? "## You" : "## Cerebro");
     let text = m.content;
     for (const c of m.citations ?? []) {
-      allCitations.set(c.chunk_id, c.document_title);
+      allCitations.set(c.chunk_id, c.document_title ?? "Untitled document");
     }
     // Resolve [[chunk:id]] markers to a plain [n] footnote style, in
     // whatever order they appear in this message specifically.
@@ -85,7 +86,6 @@ function downloadFile(filename: string, content: string) {
 
 function ChatPageInner() {
   const { checking, email } = useAuthedUser();
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -105,6 +105,7 @@ function ChatPageInner() {
   const [streaming, setStreaming] = useState(false);
   const [draftAnswer, setDraftAnswer] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
+  const [activeCitation, setActiveCitation] = useState<Citation | null>(null);
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -196,8 +197,8 @@ function ChatPageInner() {
         text={m.content}
         citations={m.citations ?? []}
         citeChipClassName={styles.citeChip}
-        citeChipTitle={(citation: Citation) => citation.document_title}
-        onCiteClick={(citation: Citation) => router.push(`/graph?focus=${citation.document_id}`)}
+        citeChipTitle={(citation: Citation) => citation.document_title ?? "View exact evidence"}
+        onCiteClick={(citation: Citation) => setActiveCitation(citation)}
       />
     );
   }
@@ -400,6 +401,7 @@ function ChatPageInner() {
           }}
         />
       )}
+      <EvidenceDrawer citation={activeCitation} onClose={() => setActiveCitation(null)} />
     </AppShell>
   );
 }
