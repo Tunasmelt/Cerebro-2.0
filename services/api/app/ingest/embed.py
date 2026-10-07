@@ -301,6 +301,9 @@ class EmbedStorage(Protocol):
         self, *, user_jwt: str, document_id: str
     ) -> list[dict[str, Any]]: ...
     async def download_original(self, *, user_jwt: str, path: str) -> bytes: ...
+    async def download_region_evidence(
+        self, *, user_jwt: str, region_id: str
+    ) -> bytes: ...
     async def get_checkpoint(self, *, user_jwt: str, document_id: str) -> dict[str, Any]: ...
     async def save_checkpoint(
         self, *, user_jwt: str, document_id: str, checkpoint: dict[str, Any]
@@ -344,14 +347,24 @@ class SupabaseEmbedStorage(CachedHttpClientMixin):
 
     async def get_chunks(self, *, user_jwt: str, document_id: str) -> list[dict[str, Any]]:
         client = self._client()
+        generation_response = await client.get(
+            f"{self._supabase_url}/rest/v1/layout_generations",
+            headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{document_id}", "state": "eq.building",
+                    "select": "id", "order": "created_at.desc", "limit": "1"},
+        )
+        generation_rows = generation_response.json()
+        params = {
+            "document_id": f"eq.{document_id}",
+            "select": "id,ordinal,content,meta,generation_id,region_id,representation_type",
+            "order": "ordinal",
+        }
+        if generation_rows:
+            params["generation_id"] = f"eq.{generation_rows[0]['id']}"
         response = await client.get(
             f"{self._supabase_url}/rest/v1/chunks",
             headers=self._headers(user_jwt),
-            params={
-                "document_id": f"eq.{document_id}",
-                "select": "id,ordinal,content,meta",
-                "order": "ordinal",
-            },
+            params=params,
         )
         return response.json()
 
@@ -364,6 +377,26 @@ class SupabaseEmbedStorage(CachedHttpClientMixin):
         if response.status_code >= 400:
             raise EmbedError("original_download_failed", path)
         return response.content
+
+    async def download_region_evidence(self, *, user_jwt: str, region_id: str) -> bytes:
+        client = self._client()
+        response = await client.get(
+            f"{self._supabase_url}/rest/v1/document_regions",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{region_id}",
+                    "select": "document_surfaces!inner(render_path)"},
+        )
+        rows = response.json()
+        if not rows or not rows[0]["document_surfaces"].get("render_path"):
+            raise EmbedError("evidence_not_found", region_id)
+        path = rows[0]["document_surfaces"]["render_path"]
+        evidence = await client.get(
+            f"{self._supabase_url}/storage/v1/object/evidence/{path}",
+            headers=self._headers(user_jwt),
+        )
+        if evidence.status_code >= 400:
+            raise EmbedError("evidence_download_failed", region_id)
+        return evidence.content
 
     async def get_checkpoint(self, *, user_jwt: str, document_id: str) -> dict[str, Any]:
         client = self._client()
@@ -416,6 +449,30 @@ class SupabaseEmbedStorage(CachedHttpClientMixin):
 
     async def mark_ready(self, *, user_jwt: str, document_id: str) -> None:
         client = self._client()
+        generations = await client.get(
+            f"{self._supabase_url}/rest/v1/layout_generations",
+            headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{document_id}", "state": "eq.building",
+                    "select": "id,completeness", "order": "created_at.desc", "limit": "1"},
+        )
+        generation_rows = generations.json()
+        if generation_rows:
+            generation = generation_rows[0]
+            activation = await client.post(
+                f"{self._supabase_url}/rest/v1/rpc/activate_layout_generation",
+                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                json={"target_generation": generation["id"]},
+            )
+            if activation.status_code >= 400:
+                raise EmbedError("layout_activation_failed", activation.text)
+            await client.patch(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                params={"id": f"eq.{document_id}"},
+                json={"layout_status": (
+                    "ready" if generation["completeness"] >= 1 else "partial"
+                )},
+            )
         await client.patch(
             f"{self._supabase_url}/rest/v1/ingest_jobs",
             headers={**self._headers(user_jwt), "Content-Type": "application/json"},
@@ -492,12 +549,22 @@ def _is_image_document(mime: str) -> bool:
     return mime not in ("application/pdf", "text/plain", "text/markdown")
 
 
-async def _embed_one(client: EmbedClient, *, is_image: bool, chunk: dict, original_bytes: bytes | None) -> list[float]:
+async def _embed_one(
+    client: EmbedClient, *, is_image: bool, chunk: dict,
+    original_bytes: bytes | None, visual_bytes: bytes | None = None,
+) -> list[float]:
     # Indexed content always embeds as "retrieval.passage" (both methods'
     # default) — the asymmetric "retrieval.query" adapter is only ever
     # for a live query (see retrieve.py), never for what gets stored.
+    if chunk.get("representation_type") == "visual" and visual_bytes is not None:
+        return await client.embed_image(visual_bytes)
     if is_image:
-        tile = crop_tile(original_bytes, chunk["meta"]["bbox"])
+        bbox = chunk["meta"]["bbox"]
+        if bbox and max(bbox) <= 1:
+            with Image.open(io.BytesIO(original_bytes)) as image:
+                width, height = image.size
+            bbox = [bbox[0] * width, bbox[1] * height, bbox[2] * width, bbox[3] * height]
+        tile = crop_tile(original_bytes, bbox)
         return await client.embed_image(tile)
     return await client.embed_text(chunk["content"])
 
@@ -546,6 +613,12 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
             if chunk["ordinal"] <= last_done_ordinal:
                 continue  # already embedded before a prior crash
 
+            visual_bytes = None
+            if chunk.get("representation_type") == "visual" and not is_image:
+                visual_bytes = await storage.download_region_evidence(
+                    user_jwt=user_jwt, region_id=chunk["region_id"]
+                )
+
             if locked_provider is not None:
                 # Stage 7.6: locked_provider comes from documents.
                 # embedding_provider — a prior run's own committed
@@ -571,6 +644,7 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
                         is_image=is_image,
                         chunk=chunk,
                         original_bytes=original_bytes,
+                        visual_bytes=visual_bytes,
                     )
                 except EmbedError as exc:
                     await storage.mark_failed(
@@ -587,6 +661,7 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
                             is_image=is_image,
                             chunk=chunk,
                             original_bytes=original_bytes,
+                            visual_bytes=visual_bytes,
                         )
                         locked_provider = candidate.provider
                         await storage.set_document_embedding_provider(

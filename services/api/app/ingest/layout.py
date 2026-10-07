@@ -49,6 +49,12 @@ class RegionType(StrEnum):
     FOOTNOTE = "footnote"
 
 
+class RelationType(StrEnum):
+    CAPTION_OF = "caption_of"
+    REFERENCES = "references"
+    CONTINUATION_OF = "continuation_of"
+
+
 @dataclass(slots=True)
 class Surface:
     index: int
@@ -77,15 +83,56 @@ class Region:
 
 
 @dataclass(slots=True)
+class RegionRelation:
+    source_ordinal: int
+    target_ordinal: int
+    relation_type: RelationType
+    confidence: float | None = None
+
+
+@dataclass(slots=True)
 class LayoutResult:
     surfaces: list[Surface]
     regions: list[Region]
     renders: dict[int, bytes] = field(default_factory=dict)
     complex_surface_indices: list[int] = field(default_factory=list)
+    relations: list[RegionRelation] = field(default_factory=list)
 
 
 _MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _MARKDOWN_LIST = re.compile(r"^\s*(?:[-*+] |\d+[.)] )")
+_FIGURE_REFERENCE = re.compile(r"\b(?:figure|fig\.)\s*(\d+)\b", re.I)
+
+
+def infer_region_relations(regions: list[Region]) -> list[RegionRelation]:
+    relations: list[RegionRelation] = []
+    figure_targets: dict[str, int] = {}
+    visual_types = {RegionType.CHART, RegionType.IMAGE, RegionType.TABLE}
+    for index, region in enumerate(regions):
+        if region.region_type is not RegionType.CAPTION:
+            continue
+        target = next(
+            (prior for prior in reversed(regions[:index])
+             if prior.surface_index == region.surface_index and prior.region_type in visual_types),
+            None,
+        )
+        if target:
+            relations.append(RegionRelation(
+                region.ordinal, target.ordinal, RelationType.CAPTION_OF, 0.9
+            ))
+            match = _FIGURE_REFERENCE.search(region.content)
+            if match:
+                figure_targets[match.group(1)] = target.ordinal
+    for region in regions:
+        if region.region_type is RegionType.CAPTION:
+            continue
+        for figure_number in set(_FIGURE_REFERENCE.findall(region.content)):
+            target = figure_targets.get(figure_number)
+            if target is not None and target != region.ordinal:
+                relations.append(RegionRelation(
+                    region.ordinal, target, RelationType.REFERENCES, 0.85
+                ))
+    return relations
 
 
 def _iter_text_blocks(source: str) -> list[tuple[int, int, str]]:
@@ -296,4 +343,6 @@ def extract_pdf_layout(pdf_bytes: bytes) -> LayoutResult:
             render_document.close()
     except Exception as exc:
         raise LayoutError("corrupt_pdf", str(exc)) from exc
-    return LayoutResult(surfaces, regions, renders, complex_surfaces)
+    return LayoutResult(
+        surfaces, regions, renders, complex_surfaces, infer_region_relations(regions)
+    )

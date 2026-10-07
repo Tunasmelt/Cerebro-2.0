@@ -4,12 +4,15 @@ import pikepdf
 from PIL import Image
 
 from app.ingest.layout import (
+    Region,
     RegionType,
+    RelationType,
     SurfaceKind,
     extract_image_layout,
     extract_pdf_layout,
     extract_structured_text,
 )
+from app.ingest.layout import infer_region_relations
 
 
 def _pdf_with_text(texts: list[str]) -> bytes:
@@ -100,3 +103,16 @@ def test_blank_pdf_page_is_visual_and_marked_for_enrichment():
     assert layout.regions[0].region_type is RegionType.IMAGE
     assert layout.regions[0].requires_vision is True
     assert layout.complex_surface_indices == [0]
+
+
+def test_caption_is_related_to_nearest_preceding_visual_region():
+    regions = [
+        Region(0, 0, RegionType.CHART, 0, bbox=(0, 0, 1, .7)),
+        Region(1, 0, RegionType.CAPTION, 1, content="Figure 3: Growth", bbox=(0, .7, 1, .8)),
+        Region(2, 0, RegionType.PARAGRAPH, 2, content="Figure 3 shows growth."),
+    ]
+    relations = infer_region_relations(regions)
+    assert [(r.source_ordinal, r.target_ordinal, r.relation_type) for r in relations] == [
+        (1, 0, RelationType.CAPTION_OF),
+        (2, 0, RelationType.REFERENCES),
+    ]
