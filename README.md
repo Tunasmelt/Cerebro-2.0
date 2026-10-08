@@ -147,3 +147,15 @@ merge to `main`.
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
+# Layout-aware multimodal retrieval
+
+Cerebro now indexes documents as versioned surfaces and typed regions rather
+than only flat text chunks. PDF pages and image regions retain geometry and
+private evidence renders; Markdown, text, and captures retain hierarchy and
+source offsets. Retrieval fuses text, caption, and visual representations,
+expands structural context, and can pass bounded visual crops to Gemini.
+
+Apply Supabase migration `0022_layout_aware_retrieval.sql` before deploying the
+matching API/web builds. Install API dependencies again to add `pypdfium2`.
+Existing documents remain searchable during lazy reindexing, and failed
+upgrades leave the prior generation active.

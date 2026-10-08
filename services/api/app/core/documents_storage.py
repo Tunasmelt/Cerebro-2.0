@@ -33,6 +33,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.core.http_client import CachedHttpClientMixin
+from app.core.evidence_assets import delete_evidence_objects
 
 UPLOAD_STALL_EXPIRY_SECONDS = 60 * 60  # 1 hour — Stage 7.5. A job stuck
 # at ingest_jobs.state='uploading' this long means authorize() issued a
@@ -484,7 +485,6 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
         for bucket, path in (
             ("indexed", document.get("storage_path")),
             ("originals", document.get("original_storage_path")),
-            ("evidence", f"{owner_id}/{document_id}" if owner_id else None),
         ):
             if not path:
                 continue
@@ -493,6 +493,13 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
                 f"{self._supabase_url}/storage/v1/object/{bucket}",
                 headers={**self._headers(user_jwt), "Content-Type": "application/json"},
                 json={"prefixes": [path]},
+            )
+        if owner_id:
+            await delete_evidence_objects(
+                client,
+                supabase_url=self._supabase_url,
+                headers=self._headers(user_jwt),
+                prefix=f"{owner_id}/{document_id}",
             )
 
         delete_resp = await client.delete(

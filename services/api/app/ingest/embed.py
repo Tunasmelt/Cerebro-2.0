@@ -89,6 +89,7 @@ from PIL import Image
 
 from app.core.http_client import CachedHttpClientMixin
 from app.ingest.concurrency import INGEST_LOCK
+from app.ingest.layout_persist import get_layout_storage
 from app.retrieve.image_caption import caption_image_bytes
 
 TEXT_MODEL = "jina-embeddings-v5-text-small"
@@ -567,9 +568,10 @@ async def _embed_one(
     # Indexed content always embeds as "retrieval.passage" (both methods'
     # default) — the asymmetric "retrieval.query" adapter is only ever
     # for a live query (see retrieve.py), never for what gets stored.
-    if chunk.get("representation_type") == "visual" and visual_bytes is not None:
+    representation_type = chunk.get("representation_type")
+    if representation_type == "visual" and visual_bytes is not None:
         return await client.embed_image(visual_bytes)
-    if is_image:
+    if is_image and representation_type in (None, "visual"):
         bbox = chunk["meta"]["bbox"]
         if bbox and max(bbox) <= 1:
             with Image.open(io.BytesIO(original_bytes)) as image:
@@ -626,9 +628,20 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
 
             visual_bytes = None
             if chunk.get("representation_type") == "visual" and not is_image:
-                visual_bytes = await storage.download_region_evidence(
-                    user_jwt=user_jwt, region_id=chunk["region_id"]
-                )
+                try:
+                    visual_bytes = await storage.download_region_evidence(
+                        user_jwt=user_jwt, region_id=chunk["region_id"]
+                    )
+                except EmbedError as exc:
+                    if document.get("active_layout_generation"):
+                        await get_layout_storage().mark_failed(
+                            user_jwt=user_jwt, document_id=document_id, error_code=exc.code
+                        )
+                    else:
+                        await storage.mark_failed(
+                            user_jwt=user_jwt, document_id=document_id, error_code=exc.code
+                        )
+                    return False
 
             if locked_provider is not None:
                 # Stage 7.6: locked_provider comes from documents.
@@ -703,7 +716,18 @@ async def run_embed_job(*, user_jwt: str, document_id: str) -> bool:
                 checkpoint={"last_embedded_ordinal": chunk["ordinal"]},
             )
 
-    await storage.mark_ready(user_jwt=user_jwt, document_id=document_id)
+    try:
+        await storage.mark_ready(user_jwt=user_jwt, document_id=document_id)
+    except EmbedError as exc:
+        if document.get("active_layout_generation"):
+            await get_layout_storage().mark_failed(
+                user_jwt=user_jwt, document_id=document_id, error_code=exc.code
+            )
+        else:
+            await storage.mark_failed(
+                user_jwt=user_jwt, document_id=document_id, error_code=exc.code
+            )
+        return False
     return True
 
 

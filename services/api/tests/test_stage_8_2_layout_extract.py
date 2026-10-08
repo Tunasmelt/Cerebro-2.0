@@ -1,6 +1,7 @@
 import io
 
 import pikepdf
+import pytest
 from PIL import Image
 
 from app.ingest.layout import (
@@ -81,6 +82,14 @@ def test_standalone_image_is_one_spatial_surface_with_normalized_bbox():
     assert layout.regions[0].requires_vision is True
 
 
+def test_large_standalone_image_retains_normalized_tile_regions():
+    layout = extract_image_layout(_image_bytes((2500, 1200)))
+    assert len(layout.surfaces) == 1
+    assert len(layout.regions) == 6
+    assert all(region.region_type is RegionType.IMAGE for region in layout.regions)
+    assert layout.regions[-1].bbox == pytest.approx((2048 / 2500, 1024 / 1200, 1, 1))
+
+
 def test_pdf_returns_page_surfaces_text_regions_and_webp_renders():
     layout = extract_pdf_layout(_pdf_with_text(["First page", "Second page"]))
 
@@ -128,3 +137,11 @@ def test_tables_crossing_consecutive_pages_are_linked_as_continuations():
     assert relations[0].source_ordinal == 1
     assert relations[0].target_ordinal == 0
     assert relations[0].relation_type is RelationType.CONTINUATION_OF
+
+
+def test_many_page_pdf_spools_every_render_off_heap():
+    layout = extract_pdf_layout(_pdf_with_text([f"Page {index}" for index in range(25)]))
+    assert len(layout.renders) == 25
+    assert layout.renders.in_memory_bytes == 0
+    assert all(render.startswith(b"RIFF") for render in layout.renders.values())
+    layout.renders.close()

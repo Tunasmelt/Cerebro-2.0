@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException
 
 from app.core.http_client import CachedHttpClientMixin
+from app.core.evidence_assets import delete_evidence_objects
 
 UNLOCK_CLAIM_TTL = timedelta(minutes=15)
 
@@ -155,13 +156,13 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
         # before changing document state; a failed cleanup aborts sealing
         # while the document is still ready and retryable.
         if purge_layout:
-            evidence_resp = await client.request(
-                "DELETE",
-                f"{self._supabase_url}/storage/v1/object/evidence",
+            evidence_deleted = await delete_evidence_objects(
+                client,
+                supabase_url=self._supabase_url,
                 headers=self._headers(user_jwt),
-                json={"prefixes": [f"{user_id}/{document_id}"]},
+                prefix=f"{user_id}/{document_id}",
             )
-            if evidence_resp.status_code >= 400:
+            if not evidence_deleted:
                 raise SealedStorageError(
                     "evidence_cleanup_failed", "Could not remove derived page renders"
                 )

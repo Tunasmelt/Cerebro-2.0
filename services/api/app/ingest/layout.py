@@ -25,6 +25,8 @@ PDF_RENDER_DPI = 144
 PDF_RENDER_SCALE = PDF_RENDER_DPI / 72
 MAX_RENDER_DIMENSION = 2000
 RENDER_WEBP_QUALITY = 82
+IMAGE_TILE_THRESHOLD = 2048
+IMAGE_TILE_SIZE = 1024
 
 
 class RenderStore(MutableMapping[int, bytes]):
@@ -254,18 +256,25 @@ def extract_image_layout(image_bytes: bytes) -> LayoutResult:
             render.save(output, "WEBP", quality=RENDER_WEBP_QUALITY, method=4)
     except (Image.UnidentifiedImageError, OSError, SyntaxError) as exc:
         raise LayoutError("corrupt_image", str(exc)) from exc
+    if max(width, height) <= IMAGE_TILE_THRESHOLD:
+        regions = [Region(
+            ordinal=0, surface_index=0, region_type=RegionType.IMAGE,
+            reading_order=0, bbox=(0.0, 0.0, 1.0, 1.0), requires_vision=True,
+        )]
+    else:
+        regions = []
+        for y0 in range(0, height, IMAGE_TILE_SIZE):
+            for x0 in range(0, width, IMAGE_TILE_SIZE):
+                x1, y1 = min(x0 + IMAGE_TILE_SIZE, width), min(y0 + IMAGE_TILE_SIZE, height)
+                regions.append(Region(
+                    ordinal=len(regions), surface_index=0, region_type=RegionType.IMAGE,
+                    reading_order=len(regions),
+                    bbox=(x0 / width, y0 / height, x1 / width, y1 / height),
+                    requires_vision=True,
+                ))
     return LayoutResult(
         surfaces=[Surface(0, SurfaceKind.IMAGE, page_number=1, width=width, height=height)],
-        regions=[
-            Region(
-                ordinal=0,
-                surface_index=0,
-                region_type=RegionType.IMAGE,
-                reading_order=0,
-                bbox=(0.0, 0.0, 1.0, 1.0),
-                requires_vision=True,
-            )
-        ],
+        regions=regions,
         renders={0: output.getvalue()},
         complex_surface_indices=[0],
     )
@@ -422,10 +431,24 @@ def extract_pdf_layout(pdf_bytes: bytes) -> LayoutResult:
                         "region_type": RegionType.IMAGE,
                         "heading_level": None,
                     } for image in page.images]
-                    blocks = _spatial_reading_order([
-                        *_group_words(words, width, height), *table_blocks, *image_blocks
-                    ])
                     drawing_count = len(page.images) + len(page.lines) + len(page.rects) + len(page.curves)
+                    drawing_blocks: list[dict] = []
+                    drawing_objects = [*page.lines, *page.rects, *page.curves]
+                    if drawing_count > 20 and not table_blocks and drawing_objects:
+                        x0 = min(float(item.get("x0", 0)) for item in drawing_objects)
+                        x1 = max(float(item.get("x1", width)) for item in drawing_objects)
+                        top = min(float(item.get("top", 0)) for item in drawing_objects)
+                        bottom = max(float(item.get("bottom", height)) for item in drawing_objects)
+                        drawing_blocks.append({
+                            "content": "",
+                            "bbox": _normalized_bbox(x0, top, x1, bottom, width, height),
+                            "region_type": RegionType.CHART,
+                            "heading_level": None,
+                        })
+                    blocks = _spatial_reading_order([
+                        *_group_words(words, width, height), *table_blocks,
+                        *image_blocks, *drawing_blocks,
+                    ])
                     narrow_text_blocks = [
                         block for block in blocks
                         if block["region_type"] in {RegionType.PARAGRAPH, RegionType.LIST}

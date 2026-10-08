@@ -123,12 +123,22 @@ alter table chunks drop constraint if exists chunks_document_ordinal_unique;
 alter table chunks add constraint chunks_generation_ordinal_unique
   unique (document_id, generation_id, ordinal);
 
-create index layout_generations_document_idx on layout_generations (document_id, state);
+create index layout_generations_document_idx
+  on layout_generations (document_id, state, created_at desc);
+create index layout_generations_user_idx on layout_generations (user_id);
 create index document_surfaces_document_idx on document_surfaces (document_id, surface_index);
+create index document_surfaces_user_idx on document_surfaces (user_id);
 create index document_regions_generation_idx on document_regions (generation_id, reading_order);
 create index document_regions_surface_idx on document_regions (surface_id, reading_order);
+create index document_regions_document_idx on document_regions (document_id);
+create index document_regions_user_idx on document_regions (user_id);
+create index document_regions_parent_idx on document_regions (parent_region_id);
 create index region_relations_source_idx on region_relations (source_region_id);
 create index region_relations_target_idx on region_relations (target_region_id);
+create index region_relations_document_idx on region_relations (document_id);
+create index region_relations_user_idx on region_relations (user_id);
+create index sealed_evidence_tombstones_document_idx on sealed_evidence_tombstones (document_id);
+create index sealed_evidence_tombstones_user_idx on sealed_evidence_tombstones (user_id);
 create index chunks_region_idx on chunks (region_id);
 create index chunks_generation_idx on chunks (generation_id);
 
@@ -139,69 +149,69 @@ alter table region_relations enable row level security;
 alter table sealed_evidence_tombstones enable row level security;
 
 create policy layout_generations_select_own on layout_generations for select
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 create policy layout_generations_insert_own on layout_generations for insert
-  with check (auth.uid() = user_id);
+  with check ((select auth.uid()) = user_id);
 create policy layout_generations_update_own on layout_generations for update
-  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 create policy layout_generations_delete_own on layout_generations for delete
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 
 create policy document_surfaces_select_own on document_surfaces for select
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 create policy document_surfaces_insert_own on document_surfaces for insert
-  with check (auth.uid() = user_id);
+  with check ((select auth.uid()) = user_id);
 create policy document_surfaces_update_own on document_surfaces for update
-  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 create policy document_surfaces_delete_own on document_surfaces for delete
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 
 create policy document_regions_select_own on document_regions for select
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 create policy document_regions_insert_own on document_regions for insert
-  with check (auth.uid() = user_id);
+  with check ((select auth.uid()) = user_id);
 create policy document_regions_update_own on document_regions for update
-  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 create policy document_regions_delete_own on document_regions for delete
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 
 create policy region_relations_select_own on region_relations for select
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 create policy region_relations_insert_own on region_relations for insert
-  with check (auth.uid() = user_id);
+  with check ((select auth.uid()) = user_id);
 create policy region_relations_update_own on region_relations for update
-  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 create policy region_relations_delete_own on region_relations for delete
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 create policy sealed_evidence_tombstones_select_own on sealed_evidence_tombstones for select
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 create policy sealed_evidence_tombstones_insert_own on sealed_evidence_tombstones for insert
-  with check (auth.uid() = user_id);
+  with check ((select auth.uid()) = user_id);
 
 insert into storage.buckets (id, name, public)
 values ('evidence', 'evidence', false)
 on conflict (id) do nothing;
 
 create policy evidence_select_own on storage.objects for select using (
-  bucket_id = 'evidence' and (storage.foldername(name))[1] = auth.uid()::text
+  bucket_id = 'evidence' and (storage.foldername(name))[1] = (select auth.uid())::text
 );
 create policy evidence_insert_own on storage.objects for insert with check (
-  bucket_id = 'evidence' and (storage.foldername(name))[1] = auth.uid()::text
+  bucket_id = 'evidence' and (storage.foldername(name))[1] = (select auth.uid())::text
 );
 create policy evidence_update_own on storage.objects for update using (
-  bucket_id = 'evidence' and (storage.foldername(name))[1] = auth.uid()::text
+  bucket_id = 'evidence' and (storage.foldername(name))[1] = (select auth.uid())::text
 ) with check (
-  bucket_id = 'evidence' and (storage.foldername(name))[1] = auth.uid()::text
+  bucket_id = 'evidence' and (storage.foldername(name))[1] = (select auth.uid())::text
 );
 create policy evidence_delete_own on storage.objects for delete using (
-  bucket_id = 'evidence' and (storage.foldername(name))[1] = auth.uid()::text
+  bucket_id = 'evidence' and (storage.foldername(name))[1] = (select auth.uid())::text
 );
 
 create or replace function expand_region_context(target_region_ids uuid[])
 returns table (region_id uuid, heading_path text[], nearby jsonb, related jsonb)
 language sql stable set search_path = public as $$
   select r.id,
-    case when parent.content is null then array[]::text[] else array[parent.content] end,
+    headings.path,
     coalesce((
       select jsonb_agg(jsonb_build_object(
         'region_id', adjacent.id, 'region_type', adjacent.region_type,
@@ -215,18 +225,30 @@ language sql stable set search_path = public as $$
     ), '[]'::jsonb),
     coalesce((
       select jsonb_agg(jsonb_build_object(
-        'region_id', target.id, 'region_type', target.region_type,
-        'content', coalesce(nullif(target.content, ''), target.semantic_summary, '')
+        'region_id', related_region.id, 'region_type', related_region.region_type,
+        'content', coalesce(nullif(related_region.content, ''), related_region.semantic_summary, '')
       ))
       from region_relations relation
-      join document_regions target on target.id = relation.target_region_id
-      where relation.source_region_id = r.id
+      join document_regions related_region on related_region.id = case
+        when relation.source_region_id = r.id then relation.target_region_id
+        else relation.source_region_id end
+      where relation.source_region_id = r.id or relation.target_region_id = r.id
     ), '[]'::jsonb)
   from document_regions r
-  left join document_regions parent on parent.id = r.parent_region_id
+  left join lateral (
+    with recursive ancestors as (
+      select parent.id, parent.parent_region_id, parent.content, 1 as depth
+      from document_regions parent where parent.id = r.parent_region_id
+      union all
+      select parent.id, parent.parent_region_id, parent.content, ancestors.depth + 1
+      from document_regions parent join ancestors on parent.id = ancestors.parent_region_id
+    )
+    select coalesce(array_agg(content order by depth desc), array[]::text[]) as path
+    from ancestors
+  ) headings on true
   join documents d on d.id = r.document_id
   where r.id = any(target_region_ids)
-    and r.user_id = auth.uid()
+    and r.user_id = (select auth.uid())
     and r.generation_id = d.active_layout_generation;
 $$;
 
@@ -242,7 +264,8 @@ language sql stable set search_path = public, extensions as $$
     chunks.meta || jsonb_build_object(
       'generation_id', chunks.generation_id,
       'region_id', chunks.region_id,
-      'representation_type', chunks.representation_type
+      'representation_type', chunks.representation_type,
+      'document_title', documents.title
     ),
     chunks.embedding <=> query_embedding as distance
   from chunks
@@ -268,7 +291,8 @@ language sql stable set search_path = public, extensions as $$
     chunks.meta || jsonb_build_object(
       'generation_id', chunks.generation_id,
       'region_id', chunks.region_id,
-      'representation_type', chunks.representation_type
+      'representation_type', chunks.representation_type,
+      'document_title', documents.title
     ),
     ts_rank(chunks.content_tsv, websearch_to_tsquery('english', query_text)) as rank
   from chunks
@@ -295,7 +319,7 @@ begin
   select target.* into selected_generation
   from layout_generations target
   where target.id = generation_to_activate
-    and target.user_id = auth.uid()
+    and target.user_id = (select auth.uid())
   for update;
 
   if not found then
@@ -325,7 +349,7 @@ begin
         when selected_generation.completeness < 1 then 'partial'
         else 'ready'
       end
-  where id = selected_generation.document_id and user_id = auth.uid();
+  where id = selected_generation.document_id and user_id = (select auth.uid());
 end;
 $$;
 
@@ -345,14 +369,14 @@ begin
   into target_generation, target_surface_index
   from document_regions r
   join document_surfaces s on s.id = r.surface_id
-  where r.id = target_region and r.user_id = auth.uid();
+  where r.id = target_region and r.user_id = (select auth.uid());
   if not found then raise exception 'region_not_found'; end if;
 
   update document_regions set semantic_summary = generated_summary,
     extraction_source = case when content = '' then 'vision' else 'merged' end
-  where id = target_region and user_id = auth.uid();
+  where id = target_region and user_id = (select auth.uid());
   update chunks set content = generated_summary
-  where region_id = target_region and user_id = auth.uid()
+  where region_id = target_region and user_id = (select auth.uid())
     and representation_type = 'visual' and content = '';
 
   select array(
@@ -368,10 +392,12 @@ begin
     else least(1, cardinality(enriched_indices)::double precision / complex_count) end;
   update layout_generations set
     checkpoint = jsonb_set(checkpoint, '{enriched_surfaces}', to_jsonb(enriched_indices)),
-    completeness = new_completeness, updated_at = now()
+    completeness = new_completeness,
+    state = case when new_completeness >= 1 then 'active' else 'partial' end,
+    updated_at = now()
   where id = target_generation;
   update documents set layout_status = case when new_completeness >= 1 then 'ready' else 'partial' end
-  where active_layout_generation = target_generation and user_id = auth.uid();
+  where active_layout_generation = target_generation and user_id = (select auth.uid());
   return new_completeness;
 end;
 $$;

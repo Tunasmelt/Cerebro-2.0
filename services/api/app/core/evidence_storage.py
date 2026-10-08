@@ -113,10 +113,17 @@ class SupabaseEvidenceStorage(CachedHttpClientMixin):
             raise EvidenceError("document_sealed", "Sealed documents cannot be reindexed")
         if document["layout_status"] == "building":
             return "already_queued"
-        await client.patch(
-            f"{self._url}/rest/v1/documents", headers=self._headers(user_jwt),
-            params={"id": f"eq.{document_id}"}, json={"layout_status": "building"},
+        claimed = await client.patch(
+            f"{self._url}/rest/v1/documents",
+            headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+            params={"id": f"eq.{document_id}", "status": "eq.ready",
+                    "layout_status": "neq.building"},
+            json={"layout_status": "building"},
         )
+        if claimed.status_code >= 400:
+            raise EvidenceError("reindex_failed", "Could not queue layout reindex")
+        if not claimed.json():
+            return "already_queued"
         await client.patch(
             f"{self._url}/rest/v1/ingest_jobs", headers=self._headers(user_jwt),
             params={"document_id": f"eq.{document_id}"},

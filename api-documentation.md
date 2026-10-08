@@ -441,3 +441,19 @@ GET    /health                     No auth. Returns 200 + build sha.
   adversarial test suite is written around this specific-code contract
   and verifies the RLS-scoping claim directly, live, against production.
 - Timestamps: ISO 8601 UTC throughout.
+# Layout-aware evidence (v2)
+
+Document responses now include additive `layout_version`, `layout_status`, and
+`layout_completeness` fields. New uploads build version 2 layouts; ready legacy
+documents are upgraded lazily when opened, or explicitly with
+`POST /api/v1/documents/{document_id}/layout/reindex`.
+
+`GET /api/v1/chunks/{chunk_id}/evidence` returns the owned citation anchor,
+document and surface metadata, exact normalized region geometry or structured
+text offsets, heading path, nearby/related regions, and a five-minute signed
+render URL when one exists. An optional `?page=N` selects another rendered page
+without changing the citation anchor. Foreign evidence is indistinguishable
+from missing evidence (`404`); sealed evidence returns `423`.
+
+Chat citation events retain `chunk_id` and `document_id` and may additionally
+include `page_number`, `region_type`, and `bbox`.

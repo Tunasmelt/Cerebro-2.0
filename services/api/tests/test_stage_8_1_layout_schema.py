@@ -38,14 +38,14 @@ def test_layout_tables_are_rls_scoped_to_owner():
         "region_relations",
     ):
         assert f"alter table {table} enable row level security" in sql
-    assert sql.count("auth.uid() = user_id") >= 16
+    assert sql.count("(select auth.uid()) = user_id") >= 16
 
 
 def test_evidence_bucket_is_private_and_owner_scoped():
     sql = _sql()
     assert "('evidence', 'evidence', false)" in sql
     assert "bucket_id = 'evidence'" in sql
-    assert "(storage.foldername(name))[1] = auth.uid()::text" in sql
+    assert "(storage.foldername(name))[1] = (select auth.uid())::text" in sql
 
 
 def test_retrieval_functions_filter_to_active_generation():
@@ -58,7 +58,7 @@ def test_retrieval_functions_filter_to_active_generation():
 def test_activation_is_an_owner_scoped_transactional_rpc():
     sql = _sql()
     assert "create or replace function activate_layout_generation" in sql
-    assert "target.user_id = auth.uid()" in sql
+    assert "target.user_id = (select auth.uid())" in sql
     assert "active_layout_generation = generation_to_activate" in sql
     assert "embedding = null" in sql
 
