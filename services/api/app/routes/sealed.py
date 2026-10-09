@@ -26,7 +26,8 @@ class SealBody(BaseModel):
 async def seal_document(request: Request, document_id: str, body: SealBody):
     storage = get_sealed_storage()
     try:
-        await storage.seal_document(
+        seal = getattr(storage, "seal_layout_aware_document", storage.seal_document)
+        await seal(
             user_jwt=request.state.user_jwt,
             user_id=request.state.user["sub"],
             document_id=document_id,

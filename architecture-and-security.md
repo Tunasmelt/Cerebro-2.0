@@ -710,3 +710,21 @@ passed by inspection alone.
   that could reconstruct a lost passphrase or derived key — this
   guarantee is only real if it's actually impossible, not just absent
   from the UI.
+# Layout-aware retrieval security and lifecycle
+
+Layout generations are built beside the live generation and become searchable
+only through the ownership-checked `activate_layout_generation` RPC. Retrieval
+SQL filters to `documents.active_layout_generation`; retired chunks retain their
+IDs for historical citations but have embeddings cleared.
+
+Page renders live in the private `evidence` bucket under
+`{user_id}/{document_id}/{surface_id}.webp`. Storage and table RLS both enforce
+ownership. Evidence URLs are short-lived and region/model content, image bytes,
+signed URLs, and encryption material are never logged. Sealing removes evidence
+objects before changing state, stores non-content citation tombstones, then
+deletes every plaintext layout generation, region, relationship, surface, and
+chunk. A cleanup failure leaves the document ready and aborts sealing.
+
+PDF extraction holds the source bytes but spools rendered pages to a temporary
+disk-backed mapping. PDFium page objects and pdfplumber caches are released per
+page; enrichment, upload, and crop encoding consume renders sequentially.

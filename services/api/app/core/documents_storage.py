@@ -33,6 +33,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.core.http_client import CachedHttpClientMixin
+from app.core.evidence_assets import delete_evidence_objects
 
 UPLOAD_STALL_EXPIRY_SECONDS = 60 * 60  # 1 hour — Stage 7.5. A job stuck
 # at ingest_jobs.state='uploading' this long means authorize() issued a
@@ -331,13 +332,23 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
             headers=self._headers(user_jwt),
             params={
                 "user_id": f"eq.{user_id}",
-                "select": "id,title,mime,size_bytes,original_size_bytes,status,created_at",
+                "select": (
+                    "id,title,mime,size_bytes,original_size_bytes,status,created_at,"
+                    "layout_version,layout_status,"
+                    "active_generation:layout_generations!documents_active_layout_generation_fkey(completeness)"
+                ),
                 "order": "created_at.desc",
             },
         )
         if response.status_code >= 400:
             raise HTTPException(status_code=502, detail="documents_list_failed")
-        return response.json()
+        documents = response.json()
+        for document in documents:
+            generation = document.pop("active_generation", None)
+            document["layout_completeness"] = (
+                generation.get("completeness") if generation else None
+            )
+        return documents
 
     async def claim_recoverable_jobs(self, *, user_jwt: str) -> list[dict[str, str]]:
         """Atomically lease pipeline jobs abandoned by a dead process.
@@ -368,7 +379,10 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
             headers=self._headers(user_jwt),
             params={
                 "id": f"eq.{document_id}",
-                "select": "id,title,mime,size_bytes,status,created_at",
+                "select": (
+                    "id,title,mime,size_bytes,status,created_at,layout_version,layout_status,"
+                    "active_generation:layout_generations!documents_active_layout_generation_fkey(completeness)"
+                ),
             },
         )
         if doc_resp.status_code >= 400:
@@ -377,6 +391,8 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
         if not doc_rows:
             return None
         document = doc_rows[0]
+        generation = document.pop("active_generation", None)
+        document["layout_completeness"] = generation.get("completeness") if generation else None
 
         job_resp = await client.get(
             f"{self._supabase_url}/rest/v1/ingest_jobs",
@@ -465,6 +481,7 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
         # removing the row the user actually asked to delete; an
         # orphaned Storage object with no documents row pointing to
         # it is inert (unreachable, never surfaced by any route).
+        owner_id = document.get("user_id")
         for bucket, path in (
             ("indexed", document.get("storage_path")),
             ("originals", document.get("original_storage_path")),
@@ -476,6 +493,13 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
                 f"{self._supabase_url}/storage/v1/object/{bucket}",
                 headers={**self._headers(user_jwt), "Content-Type": "application/json"},
                 json={"prefixes": [path]},
+            )
+        if owner_id:
+            await delete_evidence_objects(
+                client,
+                supabase_url=self._supabase_url,
+                headers=self._headers(user_jwt),
+                prefix=f"{owner_id}/{document_id}",
             )
 
         delete_resp = await client.delete(

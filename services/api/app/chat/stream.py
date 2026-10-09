@@ -61,6 +61,8 @@ from app.graph.edges import get_chunk_edges_storage
 from app.retrieve.hyde import should_use_hyde
 from app.retrieve.retrieve import retrieve
 from app.retrieve.retrieve import UnlockedDocument
+from app.retrieve.retrieve import get_retrieve_storage
+from app.retrieve.multimodal import build_multimodal_input
 from app.retrieve.rewrite import HISTORY_MESSAGE_LIMIT
 
 logger = logging.getLogger(__name__)
@@ -219,6 +221,15 @@ async def stream_chat(
             )
 
             system_instruction = build_system_instruction(chunks, document_titles)
+            generation_input: str | list[dict] = query
+            load_region = getattr(get_retrieve_storage(), "load_region_render", None)
+            if load_region:
+                async def _load(region_id: str):
+                    return await load_region(user_jwt=user_jwt, region_id=region_id)
+
+                multimodal_blocks = await build_multimodal_input(query, chunks, _load)
+                if len(multimodal_blocks) > 1:
+                    generation_input = multimodal_blocks
             full_text = ""
             with tracer.start_as_current_observation(
                 as_type="generation",
@@ -227,17 +238,30 @@ async def stream_chat(
                 input={"system_instruction": system_instruction, "query": query},
             ) as gen_span:
                 async for delta in generate_client.stream_text(
-                    system_instruction=system_instruction, input_text=query
+                    system_instruction=system_instruction, input_text=generation_input
                 ):
                     full_text += delta
                     yield _sse("token", {"text": delta})
                 gen_span.update(output=full_text)
 
             citations = extract_citations(full_text, chunks)
+            chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
             for citation in citations:
+                citation_meta = chunks_by_id[citation.chunk_id].meta
+                citation_payload = {
+                    "chunk_id": citation.chunk_id,
+                    "document_id": citation.document_id,
+                }
+                for key, value in (
+                    ("page_number", citation_meta.get("page")),
+                    ("region_type", citation_meta.get("region_type")),
+                    ("bbox", citation_meta.get("bbox")),
+                ):
+                    if value is not None:
+                        citation_payload[key] = value
                 yield _sse(
                     "citation",
-                    {"chunk_id": citation.chunk_id, "document_id": citation.document_id},
+                    citation_payload,
                 )
 
             await storage.save_message(

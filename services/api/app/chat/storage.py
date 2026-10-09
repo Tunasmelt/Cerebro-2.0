@@ -205,11 +205,14 @@ class SupabaseChatStorage(CachedHttpClientMixin):
             chunks_resp = await client.get(
                 f"{self._supabase_url}/rest/v1/chunks",
                 headers=self._headers(user_jwt),
-                params={"id": f"in.({in_list})", "select": "id,document_id"},
+                params={"id": f"in.({in_list})", "select": "id,document_id,meta"},
             )
             if chunks_resp.status_code >= 400:
                 raise ChatStorageError("resolve_chunk_documents_failed", chunks_resp.text)
             chunk_to_document = {c["id"]: c["document_id"] for c in chunks_resp.json()}
+            chunk_meta = {c["id"]: c.get("meta") or {} for c in chunks_resp.json()}
+        else:
+            chunk_meta = {}
 
         # Titles are new here — the original Stage 2.4 read only ever
         # needed document *ids* (to pulse graph nodes), never titles.
@@ -258,6 +261,15 @@ class SupabaseChatStorage(CachedHttpClientMixin):
                     "chunk_id": c.chunk_id,
                     "document_id": c.document_id,
                     "document_title": document_titles.get(c.document_id, "Untitled document"),
+                    **{
+                        key: value
+                        for key, value in {
+                            "page_number": chunk_meta.get(c.chunk_id, {}).get("page"),
+                            "region_type": chunk_meta.get(c.chunk_id, {}).get("region_type"),
+                            "bbox": chunk_meta.get(c.chunk_id, {}).get("bbox"),
+                        }.items()
+                        if value is not None
+                    },
                 }
                 for c in extract_citations(m["content"], retrieved_stand_ins)
             ]

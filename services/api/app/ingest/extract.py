@@ -37,6 +37,14 @@ from PIL import Image
 
 from app.core.http_client import CachedHttpClientMixin
 from app.ingest.concurrency import INGEST_LOCK
+from app.ingest.layout import (
+    LayoutError,
+    extract_image_layout,
+    extract_pdf_layout,
+    extract_structured_text,
+)
+from app.ingest.layout_enrich import enrich_layout
+from app.ingest.layout_persist import LayoutPersistError, get_layout_storage
 
 TEXT_CHUNK_SIZE = 1000  # chars — not specified anywhere in the docs;
 # a plain, reasonable default for a first-pass chunker. Easy to retune,
@@ -251,6 +259,7 @@ class ExtractStorage(Protocol):
 
 
 class SupabaseExtractStorage(CachedHttpClientMixin):
+    supports_layout_v2 = True
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -363,7 +372,43 @@ async def run_extract_job(*, user_jwt: str, document_id: str) -> bool:
 
     try:
         async with INGEST_LOCK:
-            if document.get("source") == "capture":
+            if getattr(storage, "supports_layout_v2", False):
+                if document.get("source") == "capture":
+                    layout = extract_structured_text(
+                        document["captured_text"] or "", mime="text/plain"
+                    )
+                elif mime == "application/pdf":
+                    content = await storage.download_indexed(
+                        user_jwt=user_jwt, path=document["storage_path"]
+                    )
+                    layout = extract_pdf_layout(content)
+                elif mime in ("text/plain", "text/markdown"):
+                    content = await storage.download_indexed(
+                        user_jwt=user_jwt, path=document["storage_path"]
+                    )
+                    layout = extract_structured_text(
+                        content.decode("utf-8", errors="replace"), mime=mime
+                    )
+                else:
+                    original = await storage.download_original(
+                        user_jwt=user_jwt, path=document["original_storage_path"]
+                    )
+                    layout = extract_image_layout(original)
+                try:
+                    layout, enriched = await enrich_layout(layout)
+                    await get_layout_storage().persist(
+                        user_jwt=user_jwt,
+                        document_id=document_id,
+                        user_id=user_id,
+                        layout=layout,
+                        enriched_surfaces=enriched,
+                    )
+                finally:
+                    close_renders = getattr(layout.renders, "close", None)
+                    if close_renders:
+                        close_renders()
+                chunks = None
+            elif document.get("source") == "capture":
                 # Stage 5.5 — the whole point: no Storage object exists
                 # for a captured thought, so there's nothing to
                 # download. The text is chunked directly from the row
@@ -384,14 +429,21 @@ async def run_extract_job(*, user_jwt: str, document_id: str) -> bool:
                     user_jwt=user_jwt, path=document["original_storage_path"]
                 )
                 chunks = extract_image_chunks(original)
-    except ExtractError as exc:
-        await storage.mark_failed(
-            user_jwt=user_jwt, document_id=document_id, error_code=exc.code
-        )
+    except (ExtractError, LayoutError, LayoutPersistError) as exc:
+        error_code = getattr(exc, "code", "layout_persist_failed")
+        if document.get("active_layout_generation"):
+            await get_layout_storage().mark_failed(
+                user_jwt=user_jwt, document_id=document_id, error_code=error_code
+            )
+        else:
+            await storage.mark_failed(
+                user_jwt=user_jwt, document_id=document_id, error_code=error_code,
+            )
         return False
 
-    await storage.insert_chunks(
-        user_jwt=user_jwt, document_id=document_id, user_id=user_id, chunks=chunks
-    )
+    if chunks is not None:
+        await storage.insert_chunks(
+            user_jwt=user_jwt, document_id=document_id, user_id=user_id, chunks=chunks
+        )
     await storage.mark_extracted(user_jwt=user_jwt, document_id=document_id)
     return True

@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import AnswerMarkdown from "@/components/AnswerMarkdown";
 import AppShell from "@/components/AppShell";
 import RouteLoading from "@/components/RouteLoading";
+import EvidenceDrawer from "@/components/EvidenceDrawer";
 import { authedFetch } from "@/lib/api";
 import { getActiveUnlocks } from "@/lib/crypto/unlockSession";
 import { graphMatches } from "@/lib/graph/search";
@@ -17,6 +18,7 @@ import type {
   ChunkSatellite,
   GraphEdge,
   GraphNode,
+  Citation,
 } from "@/lib/graph/types";
 import { useAuthedUser } from "@/lib/useAuthedUser";
 import GraphCanvas, { type GraphPulse } from "./GraphCanvas";
@@ -32,8 +34,6 @@ const REPLAY_PULSE_INTERVAL_MS = 2400;
 // without a full reload" wording. Polling both together stays well
 // under the "graph" rate-limit class (60/min per user; this is 24/min).
 const GRAPH_POLL_INTERVAL_MS = 5000;
-
-type Citation = { chunk_id: string; document_id: string };
 
 function GraphPageInner() {
   const router = useRouter();
@@ -51,6 +51,7 @@ function GraphPageInner() {
   const [query, setQuery] = useState("");
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<Citation[]>([]);
+  const [activeCitation, setActiveCitation] = useState<Citation | null>(null);
   const [streaming, setStreaming] = useState(false);
   // Stage 7.11 — bumped on each `heartbeat` SSE event (services/api's
   // chat/stream.py, fired while retrieval/HyDE is still running and no
@@ -344,7 +345,7 @@ function GraphPageInner() {
         citations={streaming ? [] : citations}
         citeChipClassName={styles.citeChip}
         citeChipTitle={(_citation, index) => `Jump to source ${index + 1}`}
-        onCiteClick={(citation) => handleNodeClick(citation.document_id)}
+        onCiteClick={(citation) => setActiveCitation(citation)}
       />
     );
   }
@@ -538,6 +539,7 @@ function GraphPageInner() {
         )}
       </div>
     </div>
+      <EvidenceDrawer citation={activeCitation} onClose={() => setActiveCitation(null)} />
     </AppShell>
   );
 }

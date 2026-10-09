@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException
 
 from app.core.http_client import CachedHttpClientMixin
+from app.core.evidence_assets import delete_evidence_objects
 
 UNLOCK_CLAIM_TTL = timedelta(minutes=15)
 
@@ -121,6 +122,24 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
         document_id: str,
         chunks: list[ChunkCiphertext],
     ) -> None:
+        await self._seal_document(
+            user_jwt=user_jwt, user_id=user_id, document_id=document_id,
+            chunks=chunks, purge_layout=False,
+        )
+
+    async def seal_layout_aware_document(
+        self, *, user_jwt: str, user_id: str, document_id: str,
+        chunks: list[ChunkCiphertext],
+    ) -> None:
+        await self._seal_document(
+            user_jwt=user_jwt, user_id=user_id, document_id=document_id,
+            chunks=chunks, purge_layout=True,
+        )
+
+    async def _seal_document(
+        self, *, user_jwt: str, user_id: str, document_id: str,
+        chunks: list[ChunkCiphertext], purge_layout: bool,
+    ) -> None:
         rows = [
             {
                 "document_id": document_id,
@@ -133,6 +152,20 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
             for c in chunks
         ]
         client = self._client()
+        # Evidence renders are plaintext derivatives. Remove every one
+        # before changing document state; a failed cleanup aborts sealing
+        # while the document is still ready and retryable.
+        if purge_layout:
+            evidence_deleted = await delete_evidence_objects(
+                client,
+                supabase_url=self._supabase_url,
+                headers=self._headers(user_jwt),
+                prefix=f"{user_id}/{document_id}",
+            )
+            if not evidence_deleted:
+                raise SealedStorageError(
+                    "evidence_cleanup_failed", "Could not remove derived page renders"
+                )
         # Found live (Stage 3.5 adversarial testing): sealing a
         # document whose background ingest pipeline (normalize ->
         # extract -> embed, kicked off by upload-confirm) was still
@@ -174,6 +207,24 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
         # failure here, best-effort revert status back to 'ready' so
         # the caller can simply retry sealing.
         try:
+            if purge_layout:
+                anchors_resp = await client.get(
+                    f"{self._supabase_url}/rest/v1/chunks",
+                    headers=self._headers(user_jwt),
+                    params={"document_id": f"eq.{document_id}", "select": "id"},
+                )
+                if anchors_resp.status_code >= 400:
+                    raise HTTPException(status_code=502, detail="seal_anchor_lookup_failed")
+                anchors = [{"chunk_id": row["id"], "document_id": document_id,
+                            "user_id": user_id} for row in anchors_resp.json()]
+                if anchors:
+                    anchor_insert = await client.post(
+                        f"{self._supabase_url}/rest/v1/sealed_evidence_tombstones",
+                        headers={**self._headers(user_jwt), "Prefer": "resolution=ignore-duplicates"},
+                        json=anchors,
+                    )
+                    if anchor_insert.status_code >= 400:
+                        raise HTTPException(status_code=502, detail="seal_anchor_insert_failed")
             insert_resp = await client.post(
                 f"{self._supabase_url}/rest/v1/sealed_chunks",
                 headers=self._headers(user_jwt),
@@ -194,6 +245,19 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
             )
             if delete_resp.status_code >= 400:
                 raise HTTPException(status_code=502, detail="seal_chunk_delete_failed")
+            if purge_layout:
+                generation_resp = await client.delete(
+                    f"{self._supabase_url}/rest/v1/layout_generations",
+                    headers=self._headers(user_jwt),
+                    params={"document_id": f"eq.{document_id}"},
+                )
+                if generation_resp.status_code >= 400:
+                    raise HTTPException(status_code=502, detail="seal_layout_delete_failed")
+                await client.delete(
+                    f"{self._supabase_url}/rest/v1/document_surfaces",
+                    headers=self._headers(user_jwt),
+                    params={"document_id": f"eq.{document_id}"},
+                )
         except Exception:
             # Best-effort — if this itself fails (network error), the
             # caller must still see the ORIGINAL failure, not this

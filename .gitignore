@@ -8,3 +8,6 @@ __pycache__/
 !.env.example
 .DS_Store
 .claude/
+.worktrees/
+test-results/
+playwright-report/
