@@ -12,5 +12,12 @@ def test_health_returns_200():
     assert response.json()["stage_0_4_probe"] == "render-deploy-check"
 
 
+def test_health_reports_render_commit(monkeypatch):
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "release-sha")
+    monkeypatch.setenv("BUILD_SHA", "dev")
+    response = TestClient(app).get("/health")
+    assert response.json()["build_sha"] == "release-sha"
+
+
 def test_types_package_imports_cleanly():
     assert SCHEMA_VERSION == "0.0.1"

@@ -59,7 +59,11 @@ app.add_middleware(AuthMiddleware)
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "build_sha": os.environ.get("BUILD_SHA", "dev"), "stage_0_4_probe": "render-deploy-check"}
+    return {
+        "status": "ok",
+        "build_sha": os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("BUILD_SHA", "dev"),
+        "stage_0_4_probe": "render-deploy-check",
+    }
 
 
 @app.get("/api/v1/_probe")
