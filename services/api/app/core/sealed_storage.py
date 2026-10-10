@@ -66,12 +66,12 @@ def is_claim_expired(expires_at: datetime, *, now: datetime | None = None) -> bo
 def _decrypt(
     key_b64: str, nonce_b64: str, ciphertext_b64: str
 ) -> bytes:
-    key = base64.b64decode(key_b64)
     nonce = base64.b64decode(nonce_b64)
     ciphertext = base64.b64decode(ciphertext_b64)
     try:
+        key = base64.b64decode(key_b64, validate=True)
         return AESGCM(key).decrypt(nonce, ciphertext, None)
-    except InvalidTag as exc:
+    except (InvalidTag, ValueError) as exc:
         raise SealedStorageError("invalid_key", "Key failed to decrypt sealed content") from exc
 
 

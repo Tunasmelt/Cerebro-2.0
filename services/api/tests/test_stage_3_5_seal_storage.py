@@ -285,6 +285,53 @@ async def test_create_unlock_claim_no_sealed_content_raises_not_found(monkeypatc
     assert exc_info.value.code == "not_found"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_input", ["", "%%%", "A", "YQ==", "valid_with_garbage"])
+async def test_malformed_unlock_key_never_issues_a_claim(monkeypatch, key_input):
+    key = AESGCM.generate_key(bit_length=256)
+    nonce, ciphertext = _seal(b"private test content", key)
+    transport = _FakeTransport(
+        sealed_chunks=[{"ordinal": 0, "nonce": nonce, "content_ciphertext": ciphertext}],
+        claim_insert_response={"id": "claim-1", "expires_at": "2026-01-01T12:15:00+00:00"},
+    )
+    _patch_client(monkeypatch, transport)
+    storage = SupabaseSealedStorage()
+    malformed = _b64(key) + "%%%" if key_input == "valid_with_garbage" else key_input
+
+    with pytest.raises(SealedStorageError) as error:
+        await storage.create_unlock_claim(
+            user_jwt="t", user_id="user-1", document_id="doc-1", key_b64=malformed
+        )
+
+    assert error.value.code == "invalid_key"
+    assert transport.claim_insert_calls == []
+
+
+@pytest.mark.asyncio
+async def test_malformed_unseal_key_with_active_claim_returns_no_content(monkeypatch):
+    key = AESGCM.generate_key(bit_length=256)
+    nonce, ciphertext = _seal(b"private test content", key)
+    transport = _FakeTransport(
+        sealed_chunks=[
+            {"id": "sealed-1", "ordinal": 0, "nonce": nonce, "content_ciphertext": ciphertext}
+        ],
+        claim={
+            "id": "claim-1", "document_id": "doc-1",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        },
+    )
+    _patch_client(monkeypatch, transport)
+    storage = SupabaseSealedStorage()
+
+    with pytest.raises(SealedStorageError) as error:
+        await storage.unseal_document(
+            user_jwt="t", user_id="user-1", document_id="doc-1",
+            claim_id="claim-1", key_b64="%%%",
+        )
+
+    assert error.value.code == "invalid_key"
+
+
 # --- unseal_document ------------------------------------------------------------
 
 
