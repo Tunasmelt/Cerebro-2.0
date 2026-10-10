@@ -171,8 +171,9 @@ No migration is needed. The public unseal response stays ordinal/content;
 chat replay resolves sealed UUIDs with an owner-scoped metadata-only query,
 without fetching ciphertext or decrypting content. Regression coverage:
 `test_stage_3_4_metadata_only_search.py`, `test_stage_3_5_seal_storage.py`,
-and `test_stage_2_4_replay.py`. Mobile 5.3 still requires a deployed-backend
-successful chat and uninterrupted real-expiry run before completion.
+and `test_stage_2_4_replay.py`. Mobile 5.3 subsequently completed its deployed-backend successful chat
+and uninterrupted real-expiry run; its device evidence is recorded in
+the mobile repository.
 
 
 Multi-chunk sealed chat also requires graph reinforcement to ignore sealed
@@ -181,3 +182,14 @@ performs one caller-scoped indexed-ID lookup before constructing pairs.
 Sixty sealed results produce zero pairwise edge writes; mixed results
 still reinforce indexed pairs. Previously rejected insert responses did
 not stop the pair loop, delaying retrieval long enough to drop the chat.
+
+
+### Malformed sealed-key handling (2026-10-11)
+
+Mobile 5.4's live adversarial check found malformed base64 keys returning
+HTTP 500 before authentication-tag validation. The shared decrypt helper
+now validates key base64 strictly and maps decoding/key-length failures
+to the existing generic invalid_key response, used by both unlock and
+unseal. Valid keys keep their existing format and behavior. Storage
+regressions prove malformed keys mint no claim and return no content,
+including garbage appended to an otherwise valid key.
