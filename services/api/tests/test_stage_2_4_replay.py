@@ -47,6 +47,8 @@ class _FakeTransport(httpx.AsyncBaseTransport):
         # pulses for the same node); c3 belongs to d2. c-missing (never
         # requested here) would represent a deleted chunk.
         self.chunk_to_doc = {C1: D1, C2: D1, C3: D2}
+        self.sealed_to_doc = {}
+        self.sealed_status = 200
         self.doc_titles = {D1: "raft-paper.pdf", D2: "note.md"}
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -67,6 +69,14 @@ class _FakeTransport(httpx.AsyncBaseTransport):
                 if cid in self.chunk_to_doc
             ]
             return httpx.Response(200, json=rows)
+        if path == "/rest/v1/sealed_chunks":
+            assert request.url.params["select"] == "id,document_id"
+            assert request.headers["Authorization"] == "Bearer t"
+            ids = request.url.params["id"].removeprefix("in.(").removesuffix(")").split(",")
+            return httpx.Response(self.sealed_status, json=[
+                {"id": cid, "document_id": self.sealed_to_doc[cid]}
+                for cid in ids if cid in self.sealed_to_doc
+            ])
         if path == "/rest/v1/documents":
             query = str(request.url.params.get("id", ""))
             ids = query.removeprefix("in.(").removesuffix(")").split(",")
@@ -157,3 +167,26 @@ async def test_get_messages_drops_a_marker_for_a_chunk_that_was_never_retrieved(
 
     assistant_msg = messages[1]
     assert [c["chunk_id"] for c in assistant_msg["citations"]] == [C1]
+
+
+@pytest.mark.asyncio
+async def test_replay_resolves_sealed_uuid_without_loading_content(_patch_httpx_client):
+    transport = _patch_httpx_client
+    transport.chunk_to_doc.pop(C3)
+    transport.sealed_to_doc[C3] = D2
+    messages = await SupabaseChatStorage().get_messages(user_jwt="t", session_id="session-1")
+    assistant = messages[1]
+    assert assistant["retrieved_document_ids"] == sorted([D1, D2])
+    assert [c["chunk_id"] for c in assistant["citations"]] == [C1, C3]
+    assert assistant["citations"][1]["document_title"] == "note.md"
+
+
+@pytest.mark.asyncio
+async def test_replay_sealed_lookup_failure_is_not_silently_dropped(_patch_httpx_client):
+    from app.chat.storage import ChatStorageError
+    transport = _patch_httpx_client
+    transport.chunk_to_doc.pop(C3)
+    transport.sealed_status = 503
+    with pytest.raises(ChatStorageError) as error:
+        await SupabaseChatStorage().get_messages(user_jwt="t", session_id="session-1")
+    assert error.value.code == "resolve_sealed_chunk_documents_failed"

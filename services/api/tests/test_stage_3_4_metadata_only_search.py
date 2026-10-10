@@ -126,7 +126,7 @@ async def test_exact_sealed_phrase_returns_it_post_unlock():
         _FakeSealedStorage(
             chunks_by_document={
                 "doc-1": [
-                    {"ordinal": 0, "content": "the secret merger closes in march"}
+                    {"id": "c1111111-1111-1111-1111-111111111111", "ordinal": 0, "content": "the secret merger closes in march"}
                 ]
             }
         )
@@ -140,6 +140,7 @@ async def test_exact_sealed_phrase_returns_it_post_unlock():
     )
 
     assert len(results) == 1
+    assert results[0].chunk_id == "c1111111-1111-1111-1111-111111111111"
     assert results[0].document_id == "doc-1"
     assert results[0].content == "the secret merger closes in march"
 
@@ -150,7 +151,7 @@ async def test_unlocked_document_with_no_matching_phrase_yields_nothing():
     retrieve_module.set_retrieve_storage(_EmptyRetrieveStorage())
     sealed_storage_module.set_sealed_storage(
         _FakeSealedStorage(
-            chunks_by_document={"doc-1": [{"ordinal": 0, "content": "unrelated content"}]}
+            chunks_by_document={"doc-1": [{"id": "c1111111-1111-1111-1111-111111111111", "ordinal": 0, "content": "unrelated content"}]}
         )
     )
 
@@ -189,7 +190,7 @@ async def test_case_insensitive_exact_phrase_match():
     sealed_storage_module.set_sealed_storage(
         _FakeSealedStorage(
             chunks_by_document={
-                "doc-1": [{"ordinal": 0, "content": "The Secret Merger Closes In March"}]
+                "doc-1": [{"id": "c1111111-1111-1111-1111-111111111111", "ordinal": 0, "content": "The Secret Merger Closes In March"}]
             }
         )
     )
@@ -202,3 +203,4 @@ async def test_case_insensitive_exact_phrase_match():
     )
 
     assert len(results) == 1
+    assert results[0].chunk_id == "c1111111-1111-1111-1111-111111111111"

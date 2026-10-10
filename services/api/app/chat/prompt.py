@@ -12,12 +12,14 @@ ID that wasn't actually retrieved."
 
 Retrieval quality pass: `_CITATION_RE` originally only matched a bare
 36-char UUID, which is what every real chunk id looks like *except* a
-sealed-document match — `retrieve.py`'s `_sealed_exact_matches` mints
+sealed-document match — the original `_sealed_exact_matches` minted
 ids shaped `<document_id>:<ordinal>`, so a citation for sealed content
 could never actually match and was always silently dropped. Widened to
 accept anything up to the closing `]]`; `extract_citations`'s existing
 `chunk_id not in by_id` check is still what actually gates trust, not
 the regex shape, so this doesn't loosen what gets accepted as real.
+Sealed retrieval now uses real sealed_chunks UUIDs for chat persistence;
+the tolerant citation parser remains compatible with older markers.
 
 Also: `build_system_instruction` originally handed the model anonymous
 chunk blobs with no document name attached anywhere — a real, reported

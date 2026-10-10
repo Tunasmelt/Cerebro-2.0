@@ -282,7 +282,7 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
             headers=self._headers(user_jwt),
             params={
                 "document_id": f"eq.{document_id}",
-                "select": "ordinal,content_ciphertext,salt,nonce",
+                "select": "id,ordinal,content_ciphertext,salt,nonce",
                 "order": "ordinal.asc",
                 "limit": 1,
             },
@@ -385,7 +385,7 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
             headers=self._headers(user_jwt),
             params={
                 "document_id": f"eq.{document_id}",
-                "select": "ordinal,content_ciphertext,salt,nonce",
+                "select": "id,ordinal,content_ciphertext,salt,nonce",
                 "order": "ordinal.asc",
             },
         )
@@ -400,7 +400,7 @@ class SupabaseSealedStorage(CachedHttpClientMixin):
         decrypted = []
         for row in sealed_rows:
             plaintext = _decrypt(key_b64, row["nonce"], row["content_ciphertext"])
-            decrypted.append({"ordinal": row["ordinal"], "content": plaintext.decode("utf-8")})
+            decrypted.append({"id": row["id"], "ordinal": row["ordinal"], "content": plaintext.decode("utf-8")})
         return decrypted
 
 

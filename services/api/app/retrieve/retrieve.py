@@ -443,7 +443,7 @@ async def _sealed_exact_matches(
             if query_lower in chunk["content"].lower():
                 matches.append(
                     RetrievedChunk(
-                        chunk_id=f"{doc.document_id}:{chunk['ordinal']}",
+                        chunk_id=chunk["id"],
                         document_id=doc.document_id,
                         ordinal=chunk["ordinal"],
                         content=chunk["content"],
