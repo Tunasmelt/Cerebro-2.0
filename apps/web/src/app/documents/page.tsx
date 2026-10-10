@@ -602,8 +602,8 @@ export default function DocumentsPage() {
       setUnsealedContent((prev) => ({ ...prev, [documentId]: unsealBody.chunks ?? [] }));
       setUnlockPromptFor(null);
       setUnlockPassphrase("");
-    } catch (err) {
-      setUnlockError(err instanceof Error ? err.message : "Could not unlock this document");
+    } catch {
+      setUnlockError("Couldn't unlock this document. Try again.");
     } finally {
       setUnlocking(false);
     }
