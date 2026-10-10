@@ -211,6 +211,18 @@ class SupabaseChatStorage(CachedHttpClientMixin):
                 raise ChatStorageError("resolve_chunk_documents_failed", chunks_resp.text)
             chunk_to_document = {c["id"]: c["document_id"] for c in chunks_resp.json()}
             chunk_meta = {c["id"]: c.get("meta") or {} for c in chunks_resp.json()}
+            # Sealed rows have real UUIDs too. Resolve metadata only under the
+            # caller's RLS; never fetch ciphertext or decrypt during replay.
+            missing_ids = sorted(set(all_chunk_ids) - chunk_to_document.keys())
+            if missing_ids:
+                sealed_resp = await client.get(
+                    f"{self._supabase_url}/rest/v1/sealed_chunks",
+                    headers=self._headers(user_jwt),
+                    params={"id": f"in.({','.join(missing_ids)})", "select": "id,document_id"},
+                )
+                if sealed_resp.status_code >= 400:
+                    raise ChatStorageError("resolve_sealed_chunk_documents_failed", sealed_resp.text)
+                chunk_to_document.update({c["id"]: c["document_id"] for c in sealed_resp.json()})
         else:
             chunk_meta = {}
 

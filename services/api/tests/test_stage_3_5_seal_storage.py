@@ -306,7 +306,7 @@ async def test_unseal_document_decrypts_every_chunk_with_one_shared_key(monkeypa
     for ordinal, text in enumerate(chunk_texts):
         nonce_b64, ciphertext_b64 = _seal(text, key)
         sealed_rows.append(
-            {"ordinal": ordinal, "content_ciphertext": ciphertext_b64, "salt": "c2FsdA==", "nonce": nonce_b64}
+            {"id": f"00000000-0000-0000-0000-{ordinal + 1:012d}", "ordinal": ordinal, "content_ciphertext": ciphertext_b64, "salt": "c2FsdA==", "nonce": nonce_b64}
         )
     not_expired = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
     transport = _FakeTransport(
@@ -321,8 +321,8 @@ async def test_unseal_document_decrypts_every_chunk_with_one_shared_key(monkeypa
     )
 
     assert result == [
-        {"ordinal": 0, "content": chunk_texts[0].decode()},
-        {"ordinal": 1, "content": chunk_texts[1].decode()},
+        {"id": "00000000-0000-0000-0000-000000000001", "ordinal": 0, "content": chunk_texts[0].decode()},
+        {"id": "00000000-0000-0000-0000-000000000002", "ordinal": 1, "content": chunk_texts[1].decode()},
     ]
 
 

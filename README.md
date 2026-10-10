@@ -159,3 +159,17 @@ Apply Supabase migration `0022_layout_aware_retrieval.sql` before deploying the
 matching API/web builds. Install API dependencies again to add `pypdfium2`.
 Existing documents remain searchable during lazy reindexing, and failed
 upgrades leave the prior generation active.
+
+
+### Sealed chat persistence fix (2026-10-11)
+
+Unlocked sealed retrieval now cites the real `sealed_chunks.id` UUID,
+so completed chat turns fit `chat_messages.retrieved_chunk_ids uuid[]`.
+Previously synthetic `document_id:ordinal` IDs caused PostgreSQL to reject
+the completed assistant message after the answer had already streamed.
+No migration is needed. The public unseal response stays ordinal/content;
+chat replay resolves sealed UUIDs with an owner-scoped metadata-only query,
+without fetching ciphertext or decrypting content. Regression coverage:
+`test_stage_3_4_metadata_only_search.py`, `test_stage_3_5_seal_storage.py`,
+and `test_stage_2_4_replay.py`. Mobile 5.3 still requires a deployed-backend
+successful chat and uninterrupted real-expiry run before completion.

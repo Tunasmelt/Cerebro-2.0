@@ -112,4 +112,7 @@ async def unseal_document(request: Request, document_id: str, body: UnsealBody):
         if exc.code == "invalid_key":
             return _error(exc.code, exc.message, 401)
         raise
-    return JSONResponse({"chunks": chunks}, status_code=200)
+    return JSONResponse(
+        {"chunks": [{"ordinal": chunk["ordinal"], "content": chunk["content"]} for chunk in chunks]},
+        status_code=200,
+    )
