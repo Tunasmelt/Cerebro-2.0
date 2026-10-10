@@ -75,7 +75,7 @@ def test_non_explicit_edge_effective_weight_decays():
 class _FakeChunkEdgesTransport(httpx.AsyncBaseTransport):
     def __init__(self, *, existing_edges=None, chunks=None):
         self.edges: list[dict] = list(existing_edges or [])
-        self.chunks = chunks or []
+        self.chunks = chunks if chunks is not None else [{"id": cid} for cid in ("c1", "c2", "c3")]
         self._next_id = 1
         self.requests: list[tuple[str, str, dict]] = []
 
@@ -294,3 +294,23 @@ async def test_list_edges_for_chunks_returns_edges_touching_any_given_chunk(monk
     edges = await storage.list_edges_for_chunks(user_jwt="t", chunk_ids=["c1"])
 
     assert [e.id for e in edges] == ["edge-1"]
+
+
+@pytest.mark.asyncio
+async def test_reinforcement_skips_sealed_uuids_in_one_owner_scoped_lookup(monkeypatch):
+    transport = _FakeChunkEdgesTransport(chunks=[])
+    _patch_client(monkeypatch, transport)
+    ids = [f"00000000-0000-0000-0000-{i:012d}" for i in range(1, 61)]
+    await SupabaseChunkEdgesStorage().reinforce_co_retrieval(user_jwt="t", user_id="u1", chunk_ids=ids)
+    assert transport.edges == []
+    assert len(transport.requests) == 1
+    method, path, params = transport.requests[0]
+    assert (method, path, params["select"]) == ("GET", "/rest/v1/chunks", "id")
+
+
+@pytest.mark.asyncio
+async def test_reinforcement_keeps_indexed_pairs_in_mixed_retrieval(monkeypatch):
+    transport = _FakeChunkEdgesTransport(chunks=[{"id": "c1"}, {"id": "c2"}])
+    _patch_client(monkeypatch, transport)
+    await SupabaseChunkEdgesStorage().reinforce_co_retrieval(user_jwt="t", user_id="u1", chunk_ids=["c1", "c2", "sealed-uuid"])
+    assert [(e["source_chunk_id"], e["target_chunk_id"]) for e in transport.edges] == [("c1", "c2")]

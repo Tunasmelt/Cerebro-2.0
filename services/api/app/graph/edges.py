@@ -233,8 +233,20 @@ class SupabaseChunkEdgesStorage(CachedHttpClientMixin):
         if len(distinct_ids) < 2:
             return
 
-        now = datetime.now(timezone.utc).isoformat()
         client = self._client()
+        # Edges reference indexed chunks only. Sealed UUIDs are legitimate
+        # retrieval/citation IDs, but must not enter this pairwise write loop.
+        owned = await client.get(
+            f"{self._supabase_url}/rest/v1/chunks",
+            headers=self._headers(user_jwt),
+            params={"id": f"in.({','.join(distinct_ids)})", "select": "id"},
+        )
+        if owned.status_code >= 400:
+            raise HTTPException(status_code=502, detail="chunk_lookup_failed")
+        distinct_ids = sorted({row["id"] for row in owned.json()})
+        if len(distinct_ids) < 2:
+            return
+        now = datetime.now(timezone.utc).isoformat()
         for chunk_id_a, chunk_id_b in combinations(distinct_ids, 2):
             source, target = _canonical_pair(chunk_id_a, chunk_id_b)
             existing = await self._get_pair(client, user_jwt, source, target)

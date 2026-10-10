@@ -173,3 +173,11 @@ without fetching ciphertext or decrypting content. Regression coverage:
 `test_stage_3_4_metadata_only_search.py`, `test_stage_3_5_seal_storage.py`,
 and `test_stage_2_4_replay.py`. Mobile 5.3 still requires a deployed-backend
 successful chat and uninterrupted real-expiry run before completion.
+
+
+Multi-chunk sealed chat also requires graph reinforcement to ignore sealed
+UUIDs: `chunk_edges` references indexed chunks only. Reinforcement now
+performs one caller-scoped indexed-ID lookup before constructing pairs.
+Sixty sealed results produce zero pairwise edge writes; mixed results
+still reinforce indexed pairs. Previously rejected insert responses did
+not stop the pair loop, delaying retrieval long enough to drop the chat.
