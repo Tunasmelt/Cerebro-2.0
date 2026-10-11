@@ -110,6 +110,23 @@ async def upload_init(request: Request, body: UploadInitBody):
     )
 
 
+@router.post("/api/v1/documents/{document_id}/upload-resume")
+async def upload_resume(request: Request, document_id: str):
+    try:
+        signed = await get_documents_storage().resume_upload(
+            user_jwt=request.state.user_jwt,
+            user_id=request.state.user["sub"],
+            document_id=document_id,
+        )
+    except HTTPException as exc:
+        if exc.detail == "document_not_found":
+            return _error("not_found", "Document not found", 404)
+        if exc.detail == "upload_not_resumable":
+            return _error("upload_not_resumable", "This upload cannot be resumed", 409)
+        raise
+    return {"id": signed.document_id, "upload_url": signed.upload_url}
+
+
 @router.post("/api/v1/documents/{document_id}/upload-confirm")
 async def upload_confirm(request: Request, document_id: str, background_tasks: BackgroundTasks):
     storage = get_documents_storage()
@@ -128,6 +145,8 @@ async def upload_confirm(request: Request, document_id: str, background_tasks: B
                 "No uploaded object found for this document yet",
                 422,
             )
+        if exc.detail == "upload_not_resumable":
+            return _error("upload_not_resumable", "This upload cannot be resumed", 409)
         if exc.detail == "file_too_large":
             return _error("file_too_large", "File exceeds the 50MB upload limit", 413)
         raise
@@ -137,12 +156,13 @@ async def upload_confirm(request: Request, document_id: str, background_tasks: B
     # service"). Stage 1.2's normalize concurrency=1 lock means a second
     # confirm's background task queues behind this one rather than
     # running in parallel.
-    background_tasks.add_task(
-        _run_ingest_pipeline,
-        user_jwt=request.state.user_jwt,
-        user_id=request.state.user["sub"],
-        document_id=document_id,
-    )
+    if confirmed.started:
+        background_tasks.add_task(
+            _run_ingest_pipeline,
+            user_jwt=request.state.user_jwt,
+            user_id=request.state.user["sub"],
+            document_id=document_id,
+        )
 
     return JSONResponse(
         {
@@ -202,10 +222,14 @@ async def list_documents(request: Request, background_tasks: BackgroundTasks):
     claim_jobs = getattr(storage, "claim_recoverable_jobs", None)
     if claim_jobs is not None:
         for job in await claim_jobs(user_jwt=request.state.user_jwt):
-            task = _embed_then_place if job["state"] == "embedding" else (
-                _run_capture_pipeline
-                if job["state"] == "extracting" and job.get("source") == "capture"
-                else _run_ingest_pipeline
+            task = (
+                _embed_then_place
+                if job["state"] == "embedding"
+                else (
+                    _run_capture_pipeline
+                    if job["state"] == "extracting" and job.get("source") == "capture"
+                    else _run_ingest_pipeline
+                )
             )
             background_tasks.add_task(
                 task,

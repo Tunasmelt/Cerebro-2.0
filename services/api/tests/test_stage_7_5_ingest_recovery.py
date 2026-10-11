@@ -38,7 +38,8 @@ class _SweepTransport(httpx.AsyncBaseTransport):
             return httpx.Response(200, json=self.stale_jobs)
         if path == "/rest/v1/ingest_jobs" and request.method == "PATCH":
             self.ingest_jobs_patch_calls.append(params)
-            return httpx.Response(204)
+            assert request.headers["prefer"] == "return=representation"
+            return httpx.Response(200, json=self.stale_jobs)
         if path == "/rest/v1/documents" and request.method == "PATCH":
             self.documents_patch_calls.append(
                 {"params": params, "body": _json.loads(request.content)}
