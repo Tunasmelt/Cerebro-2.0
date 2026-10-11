@@ -16,6 +16,7 @@ live against the real project — see the Stage 1.1 conversation record:
 a direct 51MB PUT got a real EntityTooLarge/413, a disallowed mime got a
 real InvalidMimeType/415, both from Supabase itself.
 """
+
 import time
 from types import SimpleNamespace
 
@@ -74,6 +75,16 @@ class _FakeDocumentsStorage:
             raise HTTPException(status_code=413, detail="file_too_large")
         return ConfirmedUpload(
             document_id=document_id, state="normalizing", size_bytes=doc["size"]
+        )
+
+    async def resume_upload(self, *, user_jwt, user_id, document_id):
+        doc = self.documents.get(document_id)
+        if doc is None or doc["user_id"] != user_id:
+            raise HTTPException(status_code=404, detail="document_not_found")
+        if doc["size"] is not None:
+            raise HTTPException(status_code=409, detail="upload_not_resumable")
+        return SignedUpload(
+            document_id, f"https://fake.supabase.co/upload/{document_id}?fresh"
         )
 
 
@@ -136,7 +147,11 @@ class _NoOpEmbedStorage:
     actually embed."""
 
     async def get_document(self, *, user_jwt, document_id):
-        return {"user_id": TEST_SUB, "mime": "text/plain", "original_storage_path": "unused"}
+        return {
+            "user_id": TEST_SUB,
+            "mime": "text/plain",
+            "original_storage_path": "unused",
+        }
 
     async def get_chunks(self, *, user_jwt, document_id):
         return []
@@ -221,7 +236,41 @@ def test_upload_init_under_cap_returns_signed_url(client, keypair, fake_storage)
     assert fake_storage.authorized == [(TEST_SUB, "hello.txt", "text/plain")]
 
 
-def test_disallowed_mime_type_rejected_before_signed_url_issued(client, keypair, fake_storage):
+def test_resume_requires_authentication(client):
+    assert client.post("/api/v1/documents/doc-1/upload-resume").status_code == 401
+
+
+def test_resume_preserves_document_and_rejects_other_user(
+    client, keypair, fake_storage
+):
+    private_key, _ = keypair
+    headers = auth_headers(private_key)
+    original = client.post(
+        "/api/v1/documents/upload-init", headers=headers, json=init_body()
+    ).json()
+    response = client.post(
+        f"/api/v1/documents/{original['id']}/upload-resume", headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json()["id"] == original["id"]
+    assert len(fake_storage.documents) == 1
+    other = client.post(
+        f"/api/v1/documents/{original['id']}/upload-resume",
+        headers=auth_headers(private_key, sub=OTHER_SUB),
+    )
+    assert other.status_code == 404
+    assert other.json()["error"]["code"] == "not_found"
+    fake_storage.documents[original["id"]]["size"] = 42
+    response = client.post(
+        f"/api/v1/documents/{original['id']}/upload-resume", headers=headers
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "upload_not_resumable"
+
+
+def test_disallowed_mime_type_rejected_before_signed_url_issued(
+    client, keypair, fake_storage
+):
     private_key, _ = keypair
     headers = auth_headers(private_key)
     response = client.post(
@@ -308,9 +357,7 @@ def test_upload_endpoints_require_auth(client):
         client.post("/api/v1/documents/upload-init", json=init_body()).status_code
         == 401
     )
-    assert (
-        client.post("/api/v1/documents/doc-1/upload-confirm").status_code == 401
-    )
+    assert client.post("/api/v1/documents/doc-1/upload-confirm").status_code == 401
 
 
 def test_max_upload_bytes_is_binary_mib_not_decimal_mb():

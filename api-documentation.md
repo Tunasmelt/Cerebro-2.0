@@ -49,7 +49,8 @@ table.
 ```
 POST   /documents/upload-init      Body: filename, mime, size_bytes.
                                     Creates the documents row (status=
-                                    uploading) and ingest_jobs row BEFORE
+                                    processing) and ingest_jobs row
+                                    (state=uploading) BEFORE
                                     any signed URL exists — never the
                                     reverse, or a failed upload orphans a
                                     row with nothing behind it. Returns
@@ -64,10 +65,21 @@ POST   /documents/upload-init      Body: filename, mime, size_bytes.
                                     50MB cap — itself Supabase Free's
                                     platform ceiling, not a design choice
                                     — so this can't be a proxy).
+POST   /documents/{id}/upload-resume  No body. Renews the signed Storage
+                                    upload URL for the SAME owned document;
+                                    creates no document or job rows. Only
+                                    unfinished uploads and jobs expired at
+                                    the upload stage are eligible. Restores
+                                    an expired upload's processing status
+                                    and starts a new one-hour activity window.
+                                    404 for missing/other-owner documents;
+                                    409 for sealed, already-ingesting, ready,
+                                    and other failed jobs. Never overwrites
+                                    existing Storage objects.
 POST   /documents/{id}/upload-confirm  No body. Server verifies the
                                     object actually exists in storage
-                                    (existence + size via Supabase admin
-                                    API) before advancing the job past
+                                    (existence + size via Supabase with the
+                                    caller's verified JWT) before advancing the job past
                                     uploading — the client's claim of
                                     completion is never trusted alone. A
                                     successful embed at the end of this
@@ -77,6 +89,11 @@ POST   /documents/{id}/upload-confirm  No body. Server verifies the
                                     call needed) — see
                                     architecture-and-security.md's
                                     "Incremental clustering" section.
+                                    Repeating a successful confirmation
+                                    returns the current ingest state without
+                                    resetting the job or enqueueing another
+                                    pipeline. Concurrent confirmations claim
+                                    the upload-stage transition once.
 POST   /documents/{id}/retry-ingest  No body. Resumes a failed job from
                                     normalizing, extracting, or embedding
                                     using persisted state/checkpoints.
@@ -457,3 +474,9 @@ from missing evidence (`404`); sealed evidence returns `423`.
 
 Chat citation events retain `chunk_id` and `document_id` and may additionally
 include `page_number`, `region_type`, and `bbox`.
+
+Upload expiry, URL renewal, and confirmation are serialized by a shared lock
+under the API's enforced one-process/one-instance deployment. This prevents
+interleaving their job and document writes. Database transactions are required
+before scaling these operations across processes; the lock does not make
+upstream network failures transactional.

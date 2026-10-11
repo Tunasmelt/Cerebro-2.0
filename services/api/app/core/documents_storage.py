@@ -23,7 +23,10 @@ Real size/mime enforcement is Supabase Storage's bucket-level config
 current docs and live-tested — not the checks in this module, which are
 fast-feedback only (a doomed upload shouldn't get as far as a signed URL).
 """
+
 import os
+import asyncio
+from functools import wraps
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,6 +37,25 @@ from fastapi import HTTPException
 
 from app.core.http_client import CachedHttpClientMixin
 from app.core.evidence_assets import delete_evidence_objects
+
+# ponytail: one shared lock matches the enforced single-process deployment.
+# Move these transitions into database transactions before horizontal scaling.
+_upload_lock: asyncio.Lock | None = None
+_upload_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _serialized_upload_transition(method):
+    @wraps(method)
+    async def run(*args, **kwargs):
+        global _upload_lock, _upload_lock_loop
+        loop = asyncio.get_running_loop()
+        if _upload_lock is None or _upload_lock_loop is not loop:
+            _upload_lock = asyncio.Lock()
+            _upload_lock_loop = loop
+        async with _upload_lock:
+            return await method(*args, **kwargs)
+    return run
+
 
 UPLOAD_STALL_EXPIRY_SECONDS = 60 * 60  # 1 hour — Stage 7.5. A job stuck
 # at ingest_jobs.state='uploading' this long means authorize() issued a
@@ -93,6 +115,7 @@ class ConfirmedUpload:
     document_id: str
     state: str
     size_bytes: int
+    started: bool = True
 
 
 class DocumentsStorageError(Exception):
@@ -103,6 +126,10 @@ class DocumentsStorageError(Exception):
 
 
 class DocumentsStorage(Protocol):
+    async def resume_upload(
+        self, *, user_jwt: str, user_id: str, document_id: str
+    ) -> SignedUpload: ...
+
     async def authorize(
         self, *, user_jwt: str, user_id: str, title: str, mime: str
     ) -> SignedUpload: ...
@@ -221,13 +248,104 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
         upload_url = f"{self._supabase_url}/storage/v1{sign_body['url']}"
         return SignedUpload(document_id=document_id, upload_url=upload_url)
 
+    @_serialized_upload_transition
+    async def resume_upload(
+        self, *, user_jwt: str, user_id: str, document_id: str
+    ) -> SignedUpload:
+        """Renew only an owned, unfinished original; never create a new row."""
+        client = self._client()
+        document = await self._get_document(client, user_jwt, document_id)
+        if document is None or document.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="document_not_found")
+        if document.get("status") not in {"processing", "failed"}:
+            raise HTTPException(status_code=409, detail="upload_not_resumable")
+        job_response = await client.get(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{document_id}", "select": "state,last_error"},
+        )
+        if job_response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="document_lookup_failed")
+        jobs = job_response.json()
+        if not jobs or not (
+            jobs[0]["state"] == "uploading"
+            or (
+                jobs[0]["state"] == "failed"
+                and jobs[0].get("last_error") == "upload_expired"
+            )
+        ):
+            raise HTTPException(status_code=409, detail="upload_not_resumable")
+        path = document.get("original_storage_path", "")
+        if not path.startswith(f"{user_id}/{document_id}/") or ".." in path.split("/"):
+            raise HTTPException(status_code=409, detail="upload_not_resumable")
+        signed = await client.post(
+            f"{self._supabase_url}/storage/v1/object/upload/sign/originals/{path}",
+            headers=self._headers(user_jwt),
+            json={},
+        )
+        if signed.status_code >= 400:
+            raise HTTPException(status_code=502, detail="signed_url_failed")
+        # A resumed attempt has a new activity window for the lazy expiry sweep.
+        renewed = await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={**self._headers(user_jwt), "Prefer": "return=representation"},
+            params={
+                "document_id": f"eq.{document_id}",
+                "state": f"eq.{jobs[0]['state']}",
+                **({"last_error": "eq.upload_expired"} if jobs[0]["state"] == "failed" else {}),
+            },
+            json={
+                "state": "uploading",
+                "last_error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if renewed.status_code >= 400:
+            raise HTTPException(status_code=502, detail="upload_resume_failed")
+        if not renewed.json():
+            raise HTTPException(status_code=409, detail="upload_not_resumable")
+        restored = await client.patch(
+            f"{self._supabase_url}/rest/v1/documents",
+            headers=self._headers(user_jwt),
+            params={"id": f"eq.{document_id}", "status": "in.(processing,failed)"},
+            json={"status": "processing"},
+        )
+        if restored.status_code >= 400:
+            raise HTTPException(status_code=502, detail="upload_resume_failed")
+        return SignedUpload(
+            document_id=document_id,
+            upload_url=f"{self._supabase_url}/storage/v1{signed.json()['url']}",
+        )
+
+    @_serialized_upload_transition
     async def confirm(
         self, *, user_jwt: str, user_id: str, document_id: str
     ) -> ConfirmedUpload:
         client = self._client()
         document = await self._get_document(client, user_jwt, document_id)
-        if document is None:
+        if document is None or document.get("user_id") != user_id:
             raise HTTPException(status_code=404, detail="document_not_found")
+
+        jobs = await client.get(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers=self._headers(user_jwt),
+            params={"document_id": f"eq.{document_id}", "select": "state,last_error"},
+        )
+        if jobs.status_code >= 400:
+            raise HTTPException(status_code=502, detail="document_lookup_failed")
+        rows = jobs.json()
+        if not rows:
+            raise HTTPException(status_code=409, detail="upload_not_resumable")
+        job = rows[0]
+        if job["state"] in {"normalizing", "extracting", "embedding", "ready"}:
+            return ConfirmedUpload(
+                document_id, job["state"], document.get("size_bytes", 0), started=False
+            )
+        if document.get("status") not in {"processing", "failed"} or not (
+            job["state"] == "uploading"
+            or (job["state"] == "failed" and job.get("last_error") == "upload_expired")
+        ):
+            raise HTTPException(status_code=409, detail="upload_not_resumable")
 
         path = document["original_storage_path"]
         prefix = "/".join(path.split("/")[:-1])
@@ -251,30 +369,50 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
         if size_bytes > MAX_UPLOAD_BYTES:
             await client.patch(
                 f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                headers={**self._headers(user_jwt), "Content-Type": "application/json", "Prefer": "return=representation"},
                 params={"document_id": f"eq.{document_id}"},
                 json={"state": "failed", "last_error": "file_too_large"},
             )
             raise HTTPException(status_code=413, detail="file_too_large")
 
         new_state = "normalizing"
-        await client.patch(
-            f"{self._supabase_url}/rest/v1/ingest_jobs",
-            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-            params={"document_id": f"eq.{document_id}"},
-            json={"state": new_state},
-        )
-        await client.patch(
+        updated = await client.patch(
             f"{self._supabase_url}/rest/v1/documents",
-            headers={**self._headers(user_jwt), "Content-Type": "application/json"},
-            params={"id": f"eq.{document_id}"},
-            json={"size_bytes": size_bytes, "original_size_bytes": size_bytes},
+            headers={**self._headers(user_jwt), "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{document_id}", "status": "in.(processing,failed)"},
+            json={
+                "size_bytes": size_bytes,
+                "original_size_bytes": size_bytes,
+                "status": "processing",
+            },
         )
+        if updated.status_code >= 400:
+            raise HTTPException(status_code=502, detail="upload_confirm_failed")
+        transitioned = await client.patch(
+            f"{self._supabase_url}/rest/v1/ingest_jobs",
+            headers={
+                **self._headers(user_jwt),
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            params={"document_id": f"eq.{document_id}", "state": f"eq.{job['state']}",
+                    **({"last_error": "eq.upload_expired"} if job["state"] == "failed" else {})},
+            json={"state": new_state, "last_error": None},
+        )
+        if transitioned.status_code >= 400:
+            raise HTTPException(status_code=502, detail="upload_confirm_failed")
+        if not transitioned.json():
+            # Another request already owns starting this ingest. Never enqueue twice.
+            current = await self.get_document(user_jwt=user_jwt, document_id=document_id)
+            if current and current.get("ingest_state") in {"normalizing", "extracting", "embedding", "ready"}:
+                return ConfirmedUpload(document_id, current["ingest_state"], current.get("size_bytes", size_bytes), started=False)
+            raise HTTPException(status_code=409, detail="upload_not_resumable")
 
         return ConfirmedUpload(
             document_id=document_id, state=new_state, size_bytes=size_bytes
         )
 
+    @_serialized_upload_transition
     async def sweep_stalled_uploads(self, *, user_jwt: str, user_id: str) -> None:
         """Best-effort: any failure here (a transient PostgREST hiccup)
         must never break the actual document listing this is called
@@ -301,9 +439,9 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
             if not stale_ids:
                 return
 
-            await client.patch(
+            expired = await client.patch(
                 f"{self._supabase_url}/rest/v1/ingest_jobs",
-                headers={**self._headers(user_jwt), "Content-Type": "application/json"},
+                headers={**self._headers(user_jwt), "Content-Type": "application/json", "Prefer": "return=representation"},
                 params={
                     "user_id": f"eq.{user_id}",
                     "state": "eq.uploading",
@@ -311,6 +449,11 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
                 },
                 json={"state": "failed", "last_error": "upload_expired"},
             )
+            if expired.status_code >= 400:
+                return
+            stale_ids = [row["document_id"] for row in expired.json()]
+            if not stale_ids:
+                return
             await client.patch(
                 f"{self._supabase_url}/rest/v1/documents",
                 headers={**self._headers(user_jwt), "Content-Type": "application/json"},
@@ -392,7 +535,9 @@ class SupabaseDocumentsStorage(CachedHttpClientMixin):
             return None
         document = doc_rows[0]
         generation = document.pop("active_generation", None)
-        document["layout_completeness"] = generation.get("completeness") if generation else None
+        document["layout_completeness"] = (
+            generation.get("completeness") if generation else None
+        )
 
         job_resp = await client.get(
             f"{self._supabase_url}/rest/v1/ingest_jobs",
