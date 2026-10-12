@@ -73,3 +73,41 @@ test("citation opens owned evidence at the highlighted page and restores focus",
   await expect(drawer).toBeHidden();
   await expect(citation).toBeFocused();
 });
+
+
+test("legacy citation opens the supporting excerpt without claiming a precise region", async ({ page }) => {
+  await page.route(`**/api/chunks/${chunkId}/evidence*`, (route) => route.fulfill({json: {
+    chunk_id: chunkId, document: {id: documentId, title: "Quarterly report"},
+    legacy: true, region: null, render_url: null, content: "Exact legacy supporting excerpt",
+  }}));
+  await page.goto("/chat?session=session-1");
+  await page.getByTitle("Quarterly report").click();
+  const drawer = page.getByRole("dialog", {name: "Citation evidence"});
+  await expect(drawer.getByText("Exact legacy supporting excerpt")).toBeVisible();
+  await expect(drawer.getByText(/no region coordinates/)).toBeVisible();
+});
+
+test("Chat about this sends the selected document scope and opens citation evidence", async ({ page }) => {
+  await page.route("**/api/graph/nodes", (route) => route.fulfill({json: {nodes: [{
+    id: documentId, title: "Quarterly report", status: "ready", mime: "text/plain", cluster_id: null, x: null, y: null, z: null,
+  }]}}));
+  await page.route("**/api/graph/edges**", (route) => route.fulfill({json: {edges: [], associative_edges: []}}));
+  await page.route(`**/api/graph/nodes/${documentId}/chunks`, (route) => route.fulfill({json: {chunks: [{id: chunkId, ordinal: 0, content: "Source contents", meta: {}}]}}));
+  await page.route("**/api/chat/sessions", (route) => route.fulfill({json: {id: "scoped-session", sessions: []}}));
+  await page.route("**/api/chat/sessions/scoped-session/stream", (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.document_id).toBe(documentId);
+    expect(body.query).toBe("Summarize this document.");
+    return route.fulfill({contentType: "text/event-stream", body:
+      `event: retrieval\ndata: ${JSON.stringify({chunk_ids: [chunkId], document_ids: [documentId], scope_document_id: documentId})}\n\n` +
+      `event: token\ndata: ${JSON.stringify({text: `Grounded answer [[chunk:${chunkId}]].`})}\n\n` +
+      `event: citation\ndata: ${JSON.stringify({chunk_id: chunkId, document_id: documentId})}\n\n` +
+      'event: done\ndata: {}\n\n'});
+  });
+  await page.goto(`/graph?focus=${documentId}`);
+  await page.getByRole("button", {name: "Chat about this", exact: true}).click();
+  await expect(page.getByText(/Chatting about Quarterly report/)).toBeVisible();
+  await expect(page.getByText(/Grounded answer/)).toBeVisible();
+  await page.locator("button[title]").filter({hasText: "1"}).click();
+  await expect(page.getByRole("dialog", {name: "Citation evidence"})).toBeVisible();
+});

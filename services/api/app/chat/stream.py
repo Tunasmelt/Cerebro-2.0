@@ -52,6 +52,7 @@ import json
 import logging
 from typing import AsyncIterator
 
+from app.chat.query_scope import CLARIFICATION, needs_clarification, retrieve_document
 from app.chat.generate import get_generate_client
 from app.chat.prompt import build_system_instruction, extract_citations
 from app.chat.storage import get_chat_storage
@@ -84,6 +85,7 @@ async def stream_chat(
     user_id: str,
     session_id: str,
     query: str,
+    document_id: str | None = None,
     unlocked: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     storage = get_chat_storage()
@@ -122,6 +124,15 @@ async def stream_chat(
                 retrieved_chunk_ids=[],
             )
 
+            if needs_clarification(query, has_context=bool(document_id or any(m.get("role") == "assistant" and "[[chunk:" in m.get("content", "") for m in recent_messages))):
+                yield _sse("retrieval", {"chunk_ids": [], "document_ids": []})
+                yield _sse("token", {"text": CLARIFICATION})
+                await storage.save_message(user_jwt=user_jwt, session_id=session_id,
+                    user_id=user_id, role="assistant", content=CLARIFICATION,
+                    retrieved_chunk_ids=[], trace_id=trace_id)
+                yield _sse("done", {})
+                return
+
             # Retrieval quality pass — Stage 5.2's HyDE was fully built
             # and tested but never actually turned on here (its own exit
             # criteria wanted an A/B-able flag, not a silent default). A
@@ -144,7 +155,8 @@ async def stream_chat(
             # token. See this module's own docstring for why context
             # propagation into retrieve()'s Langfuse spans is unaffected.
             retrieve_task = asyncio.ensure_future(
-                retrieve(
+                retrieve_document(user_jwt=user_jwt, document_id=document_id, query=query)
+                if document_id else retrieve(
                     user_jwt=user_jwt,
                     query=query,
                     user_id=user_id,
@@ -158,6 +170,7 @@ async def stream_chat(
                     ],
                     recent_messages=recent_messages,
                     use_hyde=should_use_hyde(query),
+                    require_relevance=True,
                 )
             )
             while True:
@@ -215,12 +228,33 @@ async def stream_chat(
             yield _sse(
                 "retrieval",
                 {
+                    **({"scope_document_id": document_id} if document_id else {}),
                     "chunk_ids": [c.chunk_id for c in chunks],
                     "document_ids": list({c.document_id for c in chunks}),
                 },
             )
 
+            if not chunks:
+                answer = "I couldn't find supporting evidence for that question. Choose a document or add more detail about the topic."
+                yield _sse("token", {"text": answer})
+                await storage.save_message(user_jwt=user_jwt, session_id=session_id,
+                    user_id=user_id, role="assistant", content=answer,
+                    retrieved_chunk_ids=[], trace_id=trace_id)
+                root_span.update(output={"answer": answer, "citation_count": 0})
+                yield _sse("done", {})
+                return
+
             system_instruction = build_system_instruction(chunks, document_titles)
+            if document_id:
+                system_instruction += "\n\nThe application has explicitly selected this source: " + json.dumps({
+                    "document_id": document_id,
+                    "title": document_titles.get(document_id, "Selected document"),
+                }) + ". The user's 'this document' or 'this image' refers to that selected source. It is not an unspecified question. Summarize or answer from its supplied chunks and cite their exact chunk IDs."
+            if recent_messages:
+                system_instruction += "\n\nRecent conversation (resolve references only; claims still require current source evidence):\n" + json.dumps([
+                    {"role": m["role"], "content": m["content"][:3000]}
+                    for m in recent_messages[-HISTORY_MESSAGE_LIMIT:]
+                ])
             generation_input: str | list[dict] = query
             load_region = getattr(get_retrieve_storage(), "load_region_render", None)
             if load_region:

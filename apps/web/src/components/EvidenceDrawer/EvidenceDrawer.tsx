@@ -35,6 +35,7 @@ export type EvidenceDrawerProps = {
 export default function EvidenceDrawer({ citation, onClose }: EvidenceDrawerProps) {
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "missing" | "locked" | "error">("loading");
+  const [retry, setRetry] = useState(0);
   const [zoom, setZoom] = useState(100);
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -56,7 +57,9 @@ export default function EvidenceDrawer({ citation, onClose }: EvidenceDrawerProp
         if (response.status === 423) return setState("locked");
         if (response.status === 404) return setState("missing");
         if (!response.ok) return setState("error");
-        setEvidence((await response.json()) as Evidence);
+        const payload = (await response.json()) as Evidence;
+        if (controller.signal.aborted) return;
+        setEvidence(payload);
         setState("ready");
       })
       .catch((error: unknown) => {
@@ -64,7 +67,7 @@ export default function EvidenceDrawer({ citation, onClose }: EvidenceDrawerProp
       });
     requestAnimationFrame(() => closeRef.current?.focus());
     return () => controller.abort();
-  }, [citation, selectedPage]);
+  }, [citation, selectedPage, retry]);
 
   useEffect(() => setSelectedPage(null), [citation?.chunk_id]);
 
@@ -122,10 +125,11 @@ export default function EvidenceDrawer({ citation, onClose }: EvidenceDrawerProp
         {state === "loading" && <div className={styles.state}>Loading exact evidence…</div>}
         {state === "locked" && <div className={styles.state}>This document is sealed. Exact evidence stays unavailable until it is unsealed.</div>}
         {state === "missing" && <div className={styles.state}>This is a legacy citation. Open the document in Brain to inspect its available context.</div>}
-        {state === "error" && <div className={styles.state}>Evidence could not be loaded. Try again.</div>}
+        {state === "error" && <div className={styles.state}>Evidence could not be loaded. <button onClick={() => setRetry((value) => value + 1)}>Retry</button></div>}
 
         {state === "ready" && evidence && (
           <div className={styles.body}>
+            {evidence.legacy && <p>This older source has no region coordinates. The citation identifies the excerpt or whole image.</p>}
             <div className={styles.meta}>
               {evidence.surface?.page_number && <span>Page {evidence.surface.page_number}</span>}
               {evidence.region?.region_type && <span>{evidence.region.region_type}</span>}
@@ -153,7 +157,7 @@ export default function EvidenceDrawer({ citation, onClose }: EvidenceDrawerProp
                   <div className={styles.page} style={{ width: `${zoom}%` }}>
                     {/* Signed evidence URLs are short-lived and cannot be configured as a static Next image host. */}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={evidence.render_url} alt={`Evidence page ${evidence.surface?.page_number ?? ""}`} />
+                    <img src={evidence.render_url} alt={evidence.legacy ? "Cited source image" : `Evidence page ${evidence.surface?.page_number ?? ""}`} />
                     {bbox && <span className={styles.highlight} style={{ left: `${bbox[0] * 100}%`, top: `${bbox[1] * 100}%`, width: `${(bbox[2] - bbox[0]) * 100}%`, height: `${(bbox[3] - bbox[1]) * 100}%` }} />}
                   </div>
                 </div>
@@ -164,6 +168,7 @@ export default function EvidenceDrawer({ citation, onClose }: EvidenceDrawerProp
               <div className={styles.state}>{evidence.content || "No exact region is available for this legacy citation."}</div>
             )}
 
+            {evidence.render_url && evidence.content && <pre className={styles.textEvidence}>{evidence.content}</pre>}
             {evidence.region?.semantic_summary && <p className={styles.summary}>{evidence.region.semantic_summary}</p>}
             {evidence.nearby && evidence.nearby.length > 0 && (
               <section className={styles.nearby}>

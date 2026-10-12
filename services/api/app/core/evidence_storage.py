@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from app.core.documents_storage import DocumentsStorageError, get_documents_storage
 from app.core.http_client import CachedHttpClientMixin
 
 
@@ -31,12 +32,22 @@ class SupabaseEvidenceStorage(CachedHttpClientMixin):
             f"{self._url}/rest/v1/chunks", headers=self._headers(user_jwt),
             params={"id": f"eq.{chunk_id}", "select": (
                 "id,document_id,content,meta,region_id,representation_type,"
-                "documents!inner(id,title,status,layout_status),"
+                "documents!inner(id,title,status,mime,layout_status),"
                 "document_regions(id,region_type,bbox,text_start,text_end,content,"
                 "semantic_summary,reading_order,parent_region_id,extraction_source,"
                 "document_surfaces!inner(id,surface_index,page_number,kind,width,height,render_path))"
             )},
         )
+        if response.status_code >= 400:
+            # Old schema deployments still have real legacy chunks. Read their
+            # stable columns only for a missing layout column/relationship.
+            if response.json().get("code") not in {"PGRST200", "PGRST204", "42703", "42P01"}:
+                raise EvidenceError("evidence_unavailable", "Could not load source evidence")
+            response = await client.get(f"{self._url}/rest/v1/chunks",
+                headers=self._headers(user_jwt), params={"id": f"eq.{chunk_id}",
+                    "select": "id,document_id,content,meta,documents!inner(id,title,status,mime)"})
+            if response.status_code >= 400:
+                raise EvidenceError("evidence_unavailable", "Could not load source evidence")
         rows = response.json()
         if not rows:
             tombstone_response = await client.get(
@@ -55,8 +66,15 @@ class SupabaseEvidenceStorage(CachedHttpClientMixin):
             raise EvidenceError("document_sealed", "Exact evidence is unavailable while sealed")
         region = chunk.get("document_regions")
         if not region:
+            render_url = None
+            if document.get("mime", "").startswith("image/"):
+                try:
+                    render_url = await get_documents_storage().get_signed_url(
+                        user_jwt=user_jwt, document_id=chunk["document_id"], variant="original")
+                except DocumentsStorageError:
+                    pass
             return {"chunk_id": chunk_id, "document": document, "legacy": True,
-                    "content": chunk["content"], "region": None, "render_url": None}
+                    "content": chunk["content"], "region": None, "render_url": render_url}
 
         context_response = await client.post(
             f"{self._url}/rest/v1/rpc/expand_region_context", headers=self._headers(user_jwt),

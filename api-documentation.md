@@ -302,8 +302,9 @@ POST   /chunks/{id}/link           Stage 5.3. Body: { target_chunk_id }.
                                     never decayed, reads as meaningfully
                                     stronger on the graph than any
                                     number of coincidental co-retrievals.
-POST   /chat/sessions/{id}/stream  Body: { query, unlocked?: [{
-                                    document_id, claim_id, key }] }. Unlock
+POST   /chat/sessions/{id}/stream  Body: { query, document_id?: UUID,
+                                    unlocked?: [{ document_id, claim_id,
+                                    key }] }. Unlock
                                     credentials live in browser memory only
                                     and are revalidated server-side. SSE
                                     emits, in order:
@@ -339,6 +340,15 @@ POST   /chat/sessions/{id}/stream  Body: { query, unlocked?: [{
                                     real retrieved set is dropped, never
                                     forwarded. 404 if the session doesn't
                                     exist or isn't the caller's own.
+
+                                    A selected document must be owned and
+                                    unsealed (missing/foreign: 404; sealed:
+                                    423). Selected chat searches only that
+                                    document and the retrieval event includes
+                                    scope_document_id. An unspecified first
+                                    turn asks for a source or topic; no
+                                    relevant evidence yields an explicit
+                                    uncertainty response without generation.
 ```
 
 ### Graph
@@ -471,6 +481,9 @@ text offsets, heading path, nearby/related regions, and a five-minute signed
 render URL when one exists. An optional `?page=N` selects another rendered page
 without changing the citation anchor. Foreign evidence is indistinguishable
 from missing evidence (`404`); sealed evidence returns `423`.
+Legacy chunks without layout coordinates return their stored excerpt and,
+for an owned image, a signed URL for the whole original image. Clients label
+that image as unlocated evidence rather than inventing a highlight box.
 
 Chat citation events retain `chunk_id` and `document_id` and may additionally
 include `page_number`, `region_type`, and `bbox`.
