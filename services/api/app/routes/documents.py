@@ -329,7 +329,7 @@ async def get_chunk_evidence(request: Request, chunk_id: str, page: int | None =
             user_jwt=request.state.user_jwt, chunk_id=chunk_id, page_number=page
         )
     except EvidenceError as exc:
-        return _error(exc.code, exc.message, 423 if exc.code == "document_sealed" else 404)
+        return _error(exc.code, exc.message, 423 if exc.code == "document_sealed" else 502 if exc.code == "evidence_unavailable" else 404)
     return JSONResponse(evidence, status_code=200)
 
 
@@ -344,7 +344,7 @@ async def reindex_layout(
             document_id=document_id,
         )
     except EvidenceError as exc:
-        return _error(exc.code, exc.message, 423 if exc.code == "document_sealed" else 404)
+        return _error(exc.code, exc.message, 423 if exc.code == "document_sealed" else 502 if exc.code == "evidence_unavailable" else 404)
     if state == "queued":
         background_tasks.add_task(
             _run_layout_reindex,

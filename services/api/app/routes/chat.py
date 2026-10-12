@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -118,6 +120,7 @@ class UnlockedDocumentBody(BaseModel):
 
 class StreamBody(BaseModel):
     query: str
+    document_id: UUID | None = None
     unlocked: list[UnlockedDocumentBody] = Field(default_factory=list)
 
 
@@ -133,12 +136,23 @@ async def stream(request: Request, session_id: str, body: StreamBody):
     if session is None:
         return _error("not_found", "Chat session not found", 404)
 
+    if body.document_id is not None:
+        from app.core.documents_storage import get_documents_storage
+        document = await get_documents_storage().get_document(
+            user_jwt=request.state.user_jwt, document_id=str(body.document_id)
+        )
+        if document is None:
+            return _error("not_found", "Document not found", 404)
+        if document["status"] == "sealed":
+            return _error("document_sealed", "Open and unlock this document before chatting about it", 423)
+
     return StreamingResponse(
         stream_chat(
             user_jwt=request.state.user_jwt,
             user_id=request.state.user["sub"],
             session_id=session_id,
             query=body.query,
+            document_id=str(body.document_id) if body.document_id else None,
             unlocked=[item.model_dump() for item in body.unlocked],
         ),
         media_type="text/event-stream",

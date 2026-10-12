@@ -259,7 +259,7 @@ async def test_slow_retrieval_emits_at_least_one_heartbeat_before_retrieval_even
 
     events = await _collect_events(
         stream_module.stream_chat(
-            user_jwt="t", user_id="u1", session_id="session-1", query="anything"
+            user_jwt="t", user_id="u1", session_id="session-1", query="Explain the architecture pipeline"
         )
     )
 
@@ -279,7 +279,7 @@ async def test_fast_retrieval_emits_no_heartbeat_events():
 
     events = await _collect_events(
         stream_module.stream_chat(
-            user_jwt="t", user_id="u1", session_id="session-1", query="anything"
+            user_jwt="t", user_id="u1", session_id="session-1", query="Explain the architecture pipeline"
         )
     )
 

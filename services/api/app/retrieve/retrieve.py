@@ -462,6 +462,7 @@ async def retrieve(
     unlocked: list[UnlockedDocument] | None = None,
     recent_messages: list[dict[str, str]] | None = None,
     use_hyde: bool = False,
+    require_relevance: bool = False,
 ) -> list[RetrievedChunk]:
     """Five of Stage 1.8's six expected spans live here — embed_query,
     vector_search, fts_search, rrf_fuse, rerank — one per real step in
@@ -727,6 +728,8 @@ async def retrieve(
             # applied to a placeholder.
             logger.exception("rerank failed, degrading to un-reranked RRF order")
             span.update(output={"result_count": None, "degraded": True})
+            if require_relevance:
+                raise
             rerank_results = None
 
     if rerank_results is None:

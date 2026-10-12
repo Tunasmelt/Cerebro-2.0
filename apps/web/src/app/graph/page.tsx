@@ -48,6 +48,7 @@ function GraphPageInner() {
   const [graphSearch, setGraphSearch] = useState("");
 
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [chatDocumentId, setChatDocumentId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<Citation[]>([]);
@@ -211,15 +212,15 @@ function GraphPageInner() {
     setPulse({ nodeIds: documentIds, key: pulseKeyRef.current });
   }
 
-  async function ensureSession(): Promise<string> {
-    if (sessionId) return sessionId;
+  async function ensureSession(fresh = false): Promise<string> {
+    if (sessionId && !fresh) return sessionId;
     const res = await authedFetch("/api/chat/sessions", { method: "POST" });
     const body = await res.json();
     setSessionId(body.id);
     return body.id;
   }
 
-  async function sendQuery(trimmed: string) {
+  async function sendQuery(trimmed: string, documentId: string | null = chatDocumentId, fresh = false) {
     if (!trimmed || streaming) return;
 
     setChatError(null);
@@ -231,13 +232,13 @@ function GraphPageInner() {
     setQuery("");
 
     try {
-      const activeSessionId = await ensureSession();
+      const activeSessionId = await ensureSession(fresh);
       const res = await authedFetch(
         `/api/chat/sessions/${activeSessionId}/stream`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ query: trimmed, unlocked: getActiveUnlocks() }),
+          body: JSON.stringify({ query: trimmed, ...(documentId ? { document_id: documentId } : {}), unlocked: getActiveUnlocks() }),
         }
       );
       if (!res.body) throw new Error("no response body");
@@ -246,7 +247,12 @@ function GraphPageInner() {
         if (evt.event === "heartbeat") {
           setHeartbeatCount((prev) => prev + 1);
         } else if (evt.event === "retrieval") {
-          const data = evt.data as { chunk_ids: string[]; document_ids: string[] };
+          const data = evt.data as { chunk_ids: string[]; document_ids: string[]; scope_document_id?: string };
+          if (documentId && (data.scope_document_id !== documentId || data.document_ids.some((id) => id !== documentId))) {
+            setChatError("Selected-document chat is unavailable. Please retry after the server update.");
+            setAnswerFailed(true);
+            break;
+          }
           // The real retrieval event's document_ids, verbatim — this is
           // the exit criteria's "pulses exactly the returned document
           // nodes", not a derived or re-computed set.
@@ -284,7 +290,12 @@ function GraphPageInner() {
   function handleChatAboutNode(node: GraphNode) {
     setSelectedNodeId(null);
     setSatellites([]);
-    sendQuery(`Tell me about "${node.title}".`);
+    if (node.status === "sealed") {
+      setChatError("Open and unlock this document before chatting about it.");
+      return;
+    }
+    setChatDocumentId(node.id);
+    sendQuery("Summarize this document.", node.id, true);
   }
 
   async function openSessionList() {
@@ -488,6 +499,12 @@ function GraphPageInner() {
                 ⚠ Response interrupted — this answer may be incomplete.
               </div>
             )}
+          </div>
+        )}
+        {chatDocumentId && (
+          <div className={styles.chunkItem}>
+            Chatting about {nodes.find((node) => node.id === chatDocumentId)?.title ?? "selected document"}
+            <button type="button" onClick={() => setChatDocumentId(null)}>Search all documents</button>
           </div>
         )}
         <form className={styles.chatForm} onSubmit={handleSend}>
