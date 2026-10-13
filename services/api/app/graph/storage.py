@@ -29,6 +29,7 @@ import json
 import os
 from typing import Any
 
+import httpx
 
 from app.core.http_client import CachedHttpClientMixin
 from app.graph.cluster import ClusterAssignment, Edge
@@ -49,7 +50,20 @@ class GraphStorageError(Exception):
         super().__init__(message)
 
 
+# How many documents' chunk embeddings one request carries. Each chunk is a
+# 1024-dim halfvec sent as text (~10 KB), so a single request for a whole vault
+# is tens of megabytes: it must be paged, and the client needs a read timeout
+# that fits a page, not httpx's 5-second default.
+DOCUMENTS_PER_EMBEDDING_PAGE = 5
+
+
 class SupabaseGraphStorage(CachedHttpClientMixin):
+    # Caught live (2026-10-13, Render free tier): POST /graph/recluster returned
+    # 202 and the job then died within 5 seconds on `httpx.ReadTimeout` while
+    # reading every document's embeddings in one request - logged as
+    # "run_clustering_job failed" and nothing else, so no graph was ever built.
+    _HTTP_CLIENT_KWARGS = {"timeout": httpx.Timeout(60.0, connect=10.0)}
+
     def __init__(self) -> None:
         self._supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -61,25 +75,40 @@ class SupabaseGraphStorage(CachedHttpClientMixin):
         self, *, user_jwt: str
     ) -> list[dict[str, Any]]:
         client = self._client()
-        response = await client.get(
-            f"{self._supabase_url}/rest/v1/documents",
-            headers=self._headers(user_jwt),
-            params={"status": "eq.ready", "select": "id,chunks(embedding)"},
-        )
-        if response.status_code >= 400:
-            raise GraphStorageError("fetch_documents_failed", response.text)
-        rows = response.json()
-        return [
-            {
-                "id": row["id"],
-                "chunk_embeddings": [
-                    parsed
-                    for c in row.get("chunks", []) or []
-                    if (parsed := _parse_embedding(c.get("embedding"))) is not None
-                ],
-            }
-            for row in rows
-        ]
+        documents: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            response = await client.get(
+                f"{self._supabase_url}/rest/v1/documents",
+                headers=self._headers(user_jwt),
+                params={
+                    "status": "eq.ready",
+                    "select": "id,chunks(embedding)",
+                    # A stable order, so paging by offset never skips or
+                    # repeats a document.
+                    "order": "id.asc",
+                    "limit": str(DOCUMENTS_PER_EMBEDDING_PAGE),
+                    "offset": str(offset),
+                },
+            )
+            if response.status_code >= 400:
+                raise GraphStorageError("fetch_documents_failed", response.text)
+            rows = response.json()
+            documents.extend(
+                {
+                    "id": row["id"],
+                    "chunk_embeddings": [
+                        parsed
+                        for c in row.get("chunks", []) or []
+                        if (parsed := _parse_embedding(c.get("embedding")))
+                        is not None
+                    ],
+                }
+                for row in rows
+            )
+            if len(rows) < DOCUMENTS_PER_EMBEDDING_PAGE:
+                return documents
+            offset += DOCUMENTS_PER_EMBEDDING_PAGE
 
     async def replace_graph(
         self,
