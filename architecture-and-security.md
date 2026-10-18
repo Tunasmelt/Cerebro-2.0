@@ -237,6 +237,38 @@ from this side without patching ragas's own source or a fragile
 upstream rather than build around a broken package — see
 phases-and-gates.md's Stage 1.8 entry.
 
+### Error tracking (Sentry, backend only)
+
+`core/error_tracking.py`'s `init_error_tracking()` wires Sentry into
+the FastAPI backend — a separate concern from Langfuse above:
+Langfuse traces pipeline *timing*, Sentry catches *unhandled
+exceptions*. Same fails-open shape as `core/tracing.py`: with
+`SENTRY_DSN` unset (checked explicitly, not left to `sentry_sdk`'s own
+definition of "unset"), `init_error_tracking()` is a no-op, so the
+existing test suite needs no Sentry env vars either. No
+`FastApiIntegration`/`StarletteIntegration` import is needed —
+`sentry_sdk.init()` auto-enables both once `fastapi` is an installed
+dependency (confirmed against Sentry's current docs, not assumed).
+
+`release` reuses the exact same `RENDER_GIT_COMMIT`/`BUILD_SHA`
+fallback `/health` already reports, so a Sentry issue and a health
+check describe the same build.
+
+`traces_sample_rate=0` — performance tracing is deliberately off.
+Langfuse already owns pipeline-span timing; enabling Sentry's own
+tracing on top would duplicate that instrumentation for no added
+visibility, plus cost/overhead on the 512MB Render instance.
+
+**What this does not catch yet:** a pipeline failure that's already
+caught and soft-degraded (Stage 7.7's retrieval resilience, Stage
+7.12's generation retry) or surfaced as an SSE `error` event (Stage
+7.12/7.14) never reaches Sentry — none of those propagate as
+unhandled exceptions to the ASGI layer, which is the only thing this
+integration currently observes. Converting those into explicit
+`sentry_sdk.capture_exception()` calls, and adding frontend
+(`@sentry/nextjs`) coverage, are both deliberate follow-ups, not gaps
+accidentally left open by this pass.
+
 ### Clustering pipeline (detail, Stage 2.1)
 
 k-means and the 2D projection (PCA via SVD) are hand-rolled directly on

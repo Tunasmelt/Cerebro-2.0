@@ -59,7 +59,9 @@ architecture-and-security.md's "Embedding provider fallback" for the
 whole-job-before-first-chunk design that keeps a document's vectors in
 one provider's vector space) — plus Cohere for reranking
 (`rerank-v4.0-pro`, adopted Stage 1.5), Gemini for generation. Observability: Langfuse
-tracing on every retrieval span (live since Stage 1.8), RAGAS as a CI
+tracing on every retrieval span (live since Stage 1.8), Sentry for backend
+unhandled-exception tracking (errors only, no performance tracing — see
+architecture-and-security.md's "Error tracking" entry), RAGAS as a CI
 regression gate (**blocked** since Stage 1.8 — the current `ragas` PyPI
 release crashes on import, a confirmed open upstream bug; see
 phases-and-gates.md's Stage 1.8 entry).
