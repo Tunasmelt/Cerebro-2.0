@@ -30,6 +30,10 @@ def _validate_single_process_deployment() -> None:
 
 _validate_single_process_deployment()
 
+from app.core.error_tracking import init_error_tracking  # noqa: E402
+
+init_error_tracking()
+
 from fastapi import FastAPI, Request  # noqa: E402
 
 from app.core.middleware import AuthMiddleware  # noqa: E402
