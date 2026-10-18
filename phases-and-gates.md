@@ -2776,22 +2776,29 @@ test, flagged honestly rather than claimed as browser-verified.
 Existing 19-test frontend suite unaffected (no logic outside
 `/graph/page.tsx` touched).
 
-### Phase 7 Gate *(open — all 14 stages closed, gate itself not yet passed)*
+### Phase 7 Gate ✅ *(closed by explicit override — not by a live pass)*
 All 14 stages (7.1–7.14) are individually closed, each with its own
 merged PR, its own passing tests, and CI green throughout. No single
 "big bang" PR — same incremental, one-stage-at-a-time posture as every
-other phase in this document. The gate itself stays open rather than
-marked passed, per this doc's own cross-phase rule below ("a phase
-gate is never marked passed from a chat description of behavior — it
-requires you to have actually driven the live system"): several
-frontend stages in this phase (7.10's markdown rendering, 7.11's
-heartbeat UI, 7.14's incomplete-answer marker) were verified via
-`tsc`/`eslint`/`npm run build`/code review only, not a live browser
-session against a real backend — this repo also has no frontend
-component-test infrastructure to substitute for one. Closing the gate
-needs an actual live pass through `/chat` and `/graph` (a real
-document ingested, a real cross-document question, a deliberately
-slow/failing turn) before this line changes.
+other phase in this document.
+
+This gate was marked passed on 2026-10-18 by the repo owner's explicit
+instruction to override this doc's own cross-phase rule ("a phase gate
+is never marked passed from a chat description of behavior — it
+requires you to have actually driven the live system"). The live pass
+the rule calls for was attempted and did not succeed: a throwaway test
+account hit Supabase's free-tier email-confirmation rate limit before
+it could be confirmed, and a second account the owner supplied
+(`tonyudonta!2@gmail.com`) failed sign-in twice with "Invalid login
+credentials" against this project. No one has actually driven `/chat`
+or `/graph` against a live backend since Phase 7's stages landed.
+Several frontend stages in particular (7.10's markdown rendering,
+7.11's heartbeat UI, 7.14's incomplete-answer marker) remain verified
+only via `tsc`/`eslint`/`npm run build`/code review — this repo has no
+frontend component-test infrastructure to substitute for a real
+browser pass. If a regression ever surfaces in this phase's
+frontend-only stages, start here: this is the gap a live pass would
+have caught.
 
 Post-review automated hardening: standalone TypeScript checking is now a CI
 step; sealed unlock credentials flow from a memory-only browser registry into
